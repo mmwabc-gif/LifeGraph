@@ -1,0 +1,344 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --panel: rgba(255, 255, 255, 0.86);
+  --ink: #24251f;
+  --muted: #74766d;
+  --line: rgba(36, 37, 31, 0.12);
+  --accent: #315c4d;
+  --accent-soft: #dce9e2;
+  --future: #e7e4dc;
+  --today: #c06b3e;
+  --shadow: 0 18px 50px rgba(54, 48, 36, 0.08);
+}
+
+* { box-sizing: border-box; }
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scroll-padding-top: 238px;
+}
+body {
+  margin: 0;
+  overflow-x: hidden;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(255,255,255,.8), transparent 32rem),
+    linear-gradient(145deg, #f7f4ed, var(--bg));
+  color: var(--ink);
+  font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+button, input, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+
+.app-shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 54px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 0; font-size: clamp(2rem, 5vw, 3.35rem); letter-spacing: -.06em; }
+h2 { margin-bottom: 10px; letter-spacing: -.035em; }
+.eyebrow { margin-bottom: 8px; color: var(--accent); font-size: .74rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.panel { border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(14px); }
+.centered-panel { display: grid; place-items: center; min-height: 340px; color: var(--muted); }
+.section-heading { max-width: 680px; margin-bottom: 24px; }
+#initView, #unlockView { padding: clamp(24px, 5vw, 52px); }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.compact-form { max-width: 620px; }
+label { display: grid; gap: 8px; color: var(--muted); font-size: .9rem; font-weight: 700; }
+input, select { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px; background: rgba(255,255,255,.9); color: var(--ink); outline: none; }
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(49,92,77,.11); }
+.full-width { grid-column: 1 / -1; }
+.form-note, .subtle { color: var(--muted); font-size: .88rem; line-height: 1.65; }
+.primary-button, .secondary-button, .ghost-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 14px; padding: 0 18px; border: 1px solid transparent; cursor: pointer; text-decoration: none; font-weight: 800; }
+.primary-button { background: var(--accent); color: white; }
+.secondary-button { background: var(--accent-soft); color: var(--accent); }
+.ghost-button { background: transparent; border-color: var(--line); color: var(--ink); }
+.primary-button:hover, .secondary-button:hover, .ghost-button:hover { transform: translateY(-1px); }
+.top-actions, .button-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.status-badge { padding: 8px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .82rem; font-weight: 800; }
+.hero { display: flex; justify-content: space-between; align-items: center; gap: 28px; padding: clamp(24px, 5vw, 48px); }
+.hero-sentence { max-width: 680px; margin-bottom: 0; color: var(--muted); font-size: clamp(1rem, 2vw, 1.2rem); line-height: 1.7; }
+.life-percent { display: grid; place-items: center; width: 156px; aspect-ratio: 1; flex: 0 0 auto; border-radius: 50%; background: conic-gradient(var(--accent) var(--progress, 0%), var(--accent-soft) 0); position: relative; }
+.life-percent::after { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: #fbfaf6; }
+.life-percent strong, .life-percent span { position: relative; z-index: 1; }
+.life-percent strong { font-size: 1.65rem; }
+.life-percent span { color: var(--muted); font-size: .78rem; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 16px 0; }
+.metric-card { display: grid; align-content: center; min-height: 150px; padding: 24px; }
+.metric-card span, .metric-card small { color: var(--muted); }
+.metric-card strong { margin: 4px 0; font-size: clamp(1.75rem, 4vw, 2.8rem); letter-spacing: -.05em; }
+.life-map-panel, .next-panel { padding: clamp(20px, 4vw, 36px); margin-top: 16px; }
+.section-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: .8rem; }
+.legend span { display: flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.past-dot { background: var(--accent); }.today-dot { background: var(--today); }.future-dot { background: var(--future); }
+.canvas-wrap { position: relative; overflow: auto; overscroll-behavior: contain; margin-top: 22px; padding-bottom: 8px; }
+#lifeCanvas { display: block; contain: layout paint; width: 100%; min-width: 780px; height: 430px; border-radius: 16px; background: rgba(255,255,255,.48); }
+
+.spinner { width: 34px; height: 34px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.modal { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: rgba(21,23,20,.56); }
+.modal-card { width: min(640px, 100%); border-radius: 24px; padding: 32px; background: #fffdf8; box-shadow: 0 30px 90px rgba(0,0,0,.22); }
+.modal-card code { display: block; overflow-wrap: anywhere; margin: 22px 0; border-radius: 14px; padding: 16px; background: #eeece5; color: #29382f; }
+.toast { position: fixed; right: 24px; bottom: 24px; z-index: 40; max-width: 380px; border-radius: 14px; padding: 13px 16px; background: #242820; color: white; box-shadow: 0 14px 40px rgba(0,0,0,.2); }
+.hidden { display: none !important; }
+
+@media (max-width: 760px) {
+  .app-shell { width: min(100% - 20px, 1180px); padding-top: 18px; }
+  .topbar, .hero, .section-row { align-items: flex-start; }
+  .hero, .section-row { flex-direction: column; }
+  .form-grid, .metric-grid { grid-template-columns: 1fr; }
+  .life-percent { width: 128px; }
+  .top-actions { justify-content: flex-end; }
+}
+
+
+/* LifeGraph build 0.0.1.8：结构级 UI 修复 */
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scroll-padding-top: 260px;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 96px 0 54px;
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  transform: none;
+  z-index: 100;
+  width: 100%;
+  min-height: 74px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(36,37,31,.10);
+  border-radius: 0;
+  background: rgba(247,244,237,.97);
+  box-shadow: 0 10px 30px rgba(54,48,36,.08);
+  backdrop-filter: blur(18px);
+}
+
+.topbar-inner {
+  width: min(1180px, calc(100% - 32px));
+  min-height: 74px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.topbar h1 {
+  font-size: clamp(1.55rem, 2.4vw, 2.15rem);
+  letter-spacing: -.045em;
+}
+
+.topbar .eyebrow {
+  margin-bottom: 2px;
+  font-size: .68rem;
+}
+
+.build-badge {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(36,37,31,.07);
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+/* 登录页：表单在模块区域真正居中 */
+#unlockView.auth-panel {
+  min-height: calc(100vh - 150px);
+  padding: clamp(24px, 5vw, 56px);
+}
+
+#unlockView.auth-panel:not(.hidden) {
+  display: grid;
+  place-items: center;
+}
+
+.auth-card {
+  width: min(620px, 100%);
+  margin: 0 auto;
+}
+
+.auth-card .section-heading {
+  max-width: none;
+  margin: 0 0 24px;
+  text-align: center;
+}
+
+.auth-card .compact-form {
+  width: 100%;
+  max-width: none;
+  margin: 0 auto;
+}
+
+/* 首页信息固定：不是卡片悬浮，而是在顶部栏下方稳定吸附 */
+#homeView:not(.hidden) .home-sticky {
+  position: sticky;
+  top: 88px;
+  z-index: 70;
+  display: grid;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 0 0 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(244,241,234,.99) 0%,
+    rgba(244,241,234,.96) 88%,
+    rgba(244,241,234,0) 100%
+  );
+  backdrop-filter: blur(10px);
+}
+
+#homeView:not(.hidden) .home-sticky .hero,
+#homeView:not(.hidden) .home-sticky .metric-grid {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.life-map-head {
+  align-items: flex-start;
+}
+
+.life-map-title-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.life-map-title-line h2 {
+  margin-bottom: 0;
+}
+
+.grid-hover-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 11px;
+  background: rgba(255,255,255,.78);
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.grid-hover-badge.is-active {
+  border-color: rgba(49,92,77,.28);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.life-map-tools {
+  display: contents;
+}
+
+.canvas-wrap {
+  position: relative;
+}
+
+.toast {
+  z-index: 120;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    width: min(100% - 20px, 1180px);
+    padding-top: 92px;
+  }
+
+  .topbar-inner {
+    width: calc(100% - 20px);
+    min-height: 68px;
+    gap: 10px;
+  }
+
+  .topbar h1 {
+    font-size: 1.45rem;
+  }
+
+  .top-actions {
+    gap: 8px;
+  }
+
+  #homeView:not(.hidden) .home-sticky {
+    top: 78px;
+  }
+
+  .auth-card .section-heading {
+    text-align: left;
+  }
+}
+
+
+/* LifeGraph build 0.0.1.9：生命格岁数标签右侧对齐 */
+.life-map-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.life-map-title {
+  min-width: 0;
+}
+
+.life-map-title h2 {
+  margin-bottom: 0;
+}
+
+.life-map-title-line {
+  display: block;
+}
+
+.life-map-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.life-map-side .legend {
+  justify-content: flex-end;
+}
+
+.life-map-side .grid-hover-badge {
+  align-self: flex-end;
+}
+
+@media (max-width: 760px) {
+  .life-map-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .life-map-side {
+    align-items: flex-start;
+    margin-left: 0;
+  }
+
+  .life-map-side .legend {
+    justify-content: flex-start;
+  }
+
+  .life-map-side .grid-hover-badge {
+    align-self: flex-start;
+  }
+}

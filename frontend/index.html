@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>人生图谱 · Stage 0</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.1.10">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+      <div>
+        <p class="eyebrow">LIFEGRAPH · STAGE 0</p>
+        <h1>人生图谱</h1>
+      </div>
+      <div class="top-actions">
+        <span class="build-badge">v0.0.1.10</span>
+        <span id="statusBadge" class="status-badge">正在连接</span>
+        <button id="lockButton" class="ghost-button hidden" type="button">锁定仓库</button>
+      </div>
+      </div>
+    </header>
+
+    <section id="loadingView" class="panel centered-panel">
+      <div class="spinner"></div>
+      <p>正在检查本地加密仓库……</p>
+    </section>
+
+    <section id="initView" class="panel hidden">
+      <div class="section-heading">
+        <p class="eyebrow">首次初始化</p>
+        <h2>创建你的加密人生仓库</h2>
+        <p>个人信息会在写入 SQLite 前使用随机主密钥加密。PIN 只用于快速解锁主密钥。</p>
+      </div>
+      <form id="initForm" class="form-grid">
+        <label>档案名称
+          <input name="display_name" required maxlength="80" placeholder="例如：我的人生图谱">
+        </label>
+        <label>出生日期
+          <input name="birth_date" type="date" required>
+        </label>
+        <label>目标年龄
+          <input name="target_age" type="number" min="1" max="150" value="100" required>
+        </label>
+        <label>本机解锁 PIN
+          <input name="pin" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required placeholder="6—12 位数字">
+        </label>
+        <label class="full-width">恢复密码（可留空，由系统生成高强度恢复密钥）
+          <input name="recovery_secret" type="password" minlength="12" placeholder="留空则自动生成">
+        </label>
+        <input name="timezone" type="hidden">
+        <div class="full-width form-note">
+          恢复凭据用于更换电脑、重设 PIN 和恢复迁移包。自动生成时只显示一次。
+        </div>
+        <button class="primary-button full-width" type="submit">创建加密仓库</button>
+      </form>
+    </section>
+
+    <section id="unlockView" class="panel auth-panel hidden">
+      <div class="auth-card">
+        <div class="section-heading">
+          <p class="eyebrow">仓库已锁定</p>
+          <h2>欢迎回来</h2>
+          <p>输入 PIN 解锁；迁移或忘记 PIN 时可以改用恢复凭据。</p>
+        </div>
+        <form id="unlockForm" class="form-grid compact-form">
+          <label>解锁方式
+            <select name="method">
+              <option value="pin">本机 PIN</option>
+              <option value="recovery">恢复凭据</option>
+            </select>
+          </label>
+          <label>凭据
+            <input name="secret" type="password" required autocomplete="current-password">
+          </label>
+          <button class="primary-button full-width" type="submit">解锁人生图谱</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="homeView" class="hidden">
+      <div class="home-sticky">
+      <section class="hero panel">
+        <div>
+          <p id="todayText" class="eyebrow"></p>
+          <h2 id="welcomeTitle">人生图谱</h2>
+          <p id="lifeSentence" class="hero-sentence"></p>
+        </div>
+        <div class="life-percent">
+          <strong id="lifePercent">0%</strong>
+          <span>生命进度</span>
+        </div>
+      </section>
+
+      <section class="metric-grid">
+        <article class="metric-card panel">
+          <span>人生第</span><strong id="lifeDay">—</strong><small>天</small>
+        </article>
+        <article class="metric-card panel">
+          <span>今年进度</span><strong id="yearPercent">—</strong><small id="yearRemaining">—</small>
+        </article>
+        <article class="metric-card panel">
+          <span>本月进度</span><strong id="monthPercent">—</strong><small id="monthRemaining">—</small>
+        </article>
+      </section>
+
+      </div>
+
+      <section class="panel life-map-panel">
+        <div class="section-row life-map-head">
+          <div class="life-map-title">
+            <p class="eyebrow">100 年生命格</p>
+            <h2>已经走过的日子</h2>
+          </div>
+          <div class="life-map-side">
+            <span id="canvasTooltip" class="grid-hover-badge">指向：—</span>
+            <div class="legend">
+              <span><i class="past-dot"></i>已走过</span>
+              <span><i class="today-dot"></i>今天</span>
+              <span><i class="future-dot"></i>未来</span>
+            </div>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="lifeCanvas" aria-label="100 年生命日期格"></canvas>
+        </div>
+        <p class="subtle">当前原型每行代表一岁，每一小格代表该生命年中的一天。</p>
+      </section>
+
+      <section class="panel next-panel">
+        <p class="eyebrow">v0.0.1 当前闭环</p>
+        <h2>加密仓库已经运行</h2>
+        <p>下一轮将接入事件、记忆和未来计划，并逐步完善年/月/日视图。</p>
+        <div class="button-row">
+          <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
+          <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
+        </div>
+      </section>
+    </section>
+
+    <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
+      <div class="modal-card">
+        <p class="eyebrow">仅显示一次</p>
+        <h2 id="recoveryTitle">保存你的恢复密钥</h2>
+        <p>请离线保存。它可以在忘记 PIN 或迁移设备时解锁仓库。</p>
+        <code id="recoveryValue"></code>
+        <div class="button-row">
+          <button id="copyRecovery" class="secondary-button" type="button">复制恢复密钥</button>
+          <button id="closeRecovery" class="primary-button" type="button">我已妥善保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+  </main>
+  <script src="/assets/app.js?v=0.0.1.10"></script>
+</body>
+</html>
