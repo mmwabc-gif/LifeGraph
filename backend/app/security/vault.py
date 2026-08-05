@@ -41,6 +41,8 @@ class VaultManager:
         self.sessions = SessionManager(session_ttl_seconds)
         self._master_key: bytes | None = None
         self._mutex = threading.RLock()
+        if self.database.path.exists():
+            self.database.initialize_schema()
 
     @property
     def is_initialized(self) -> bool:
@@ -121,7 +123,9 @@ class VaultManager:
                         "display_name": display_name.strip(),
                         "birth_date": birth_date,
                         "target_age": target_age,
-                        "timezone": "UTC" if timezone in {"timezone.utc", "dt_timezone.utc"} else timezone,
+                        "timezone": "UTC"
+                        if timezone in {"timezone.utc", "dt_timezone.utc"}
+                        else timezone,
                         "calendar_mode": "dual",
                         "show_remaining_life": True,
                     },
@@ -145,6 +149,7 @@ class VaultManager:
         with self._mutex:
             if not self.is_initialized:
                 raise VaultError("仓库尚未初始化")
+            self.database.initialize_schema()
             metadata = self._read_metadata()
             try:
                 if method == "pin":
@@ -188,3 +193,81 @@ class VaultManager:
         if profile is None:
             raise VaultError("个人档案不存在")
         return profile
+
+    def create_event(self, *, event_date: str, title: str, content: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            return self.database.create_event(
+                master_key,
+                event_id=str(uuid.uuid4()),
+                profile_id=profile["id"],
+                event_date=event_date,
+                payload={"title": title, "content": content},
+                timestamp=now,
+            )
+
+    def list_events_for_date(self, event_date: str) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.list_events_for_date(
+            master_key,
+            profile_id=profile["id"],
+            event_date=event_date,
+        )
+
+    def create_memory(self, *, memory_date: str, title: str, content: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            return self.database.create_memory(
+                master_key,
+                memory_id=str(uuid.uuid4()),
+                profile_id=profile["id"],
+                memory_date=memory_date,
+                payload={"title": title, "content": content},
+                timestamp=now,
+            )
+
+    def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.list_memories_for_date(
+            master_key,
+            profile_id=profile["id"],
+            memory_date=memory_date,
+        )
+
+    def create_plan(self, *, plan_date: str, title: str, content: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            return self.database.create_plan(
+                master_key,
+                plan_id=str(uuid.uuid4()),
+                profile_id=profile["id"],
+                plan_date=plan_date,
+                payload={"title": title, "content": content},
+                timestamp=now,
+            )
+
+    def list_plans_for_date(self, plan_date: str) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.list_plans_for_date(
+            master_key,
+            profile_id=profile["id"],
+            plan_date=plan_date,
+        )
+
+    def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, bool]]:
+        self.require_master_key()
+        profile = self.get_profile()
+        return self.database.get_content_status(
+            profile_id=profile["id"],
+            start_date=start_date,
+            end_date=end_date,
+        )

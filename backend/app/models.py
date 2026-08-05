@@ -33,3 +33,60 @@ class InitializeRequest(BaseModel):
 class UnlockRequest(BaseModel):
     method: Literal["pin", "recovery"] = "pin"
     secret: str = Field(min_length=1, max_length=256)
+
+
+class EventCreateRequest(BaseModel):
+    event_date: date
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(default="", max_length=20_000)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("事件标题不能为空")
+        return cleaned
+
+    @field_validator("content")
+    @classmethod
+    def clean_content(cls, value: str) -> str:
+        return value.strip()
+
+
+class MemoryCreateRequest(BaseModel):
+    memory_date: date
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(default="", max_length=20_000)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("记忆标题不能为空")
+        return cleaned
+
+    @field_validator("content")
+    @classmethod
+    def clean_content(cls, value: str) -> str:
+        return value.strip()
+
+
+class PlanCreateRequest(BaseModel):
+    plan_date: date
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(default="", max_length=20_000)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("计划标题不能为空")
+        return cleaned
+
+    @field_validator("content")
+    @classmethod
+    def clean_content(cls, value: str) -> str:
+        return value.strip()

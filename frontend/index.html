@@ -3,22 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · Stage 0</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.1.10">
+  <title>人生图谱 · v0.0.2</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.2.4">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
-      <div>
-        <p class="eyebrow">LIFEGRAPH · STAGE 0</p>
-        <h1>人生图谱</h1>
-      </div>
-      <div class="top-actions">
-        <span class="build-badge">v0.0.1.10</span>
-        <span id="statusBadge" class="status-badge">正在连接</span>
-        <button id="lockButton" class="ghost-button hidden" type="button">锁定仓库</button>
-      </div>
+        <div>
+          <p class="eyebrow">LIFEGRAPH · v0.0.2</p>
+          <h1>人生图谱</h1>
+        </div>
+        <div class="top-actions">
+          <span class="build-badge">v0.0.2.4</span>
+          <span id="statusBadge" class="status-badge">正在连接</span>
+          <button id="lockButton" class="ghost-button hidden" type="button">锁定仓库</button>
+        </div>
       </div>
     </header>
 
@@ -81,30 +81,29 @@
 
     <section id="homeView" class="hidden">
       <div class="home-sticky">
-      <section class="hero panel">
-        <div>
-          <p id="todayText" class="eyebrow"></p>
-          <h2 id="welcomeTitle">人生图谱</h2>
-          <p id="lifeSentence" class="hero-sentence"></p>
-        </div>
-        <div class="life-percent">
-          <strong id="lifePercent">0%</strong>
-          <span>生命进度</span>
-        </div>
-      </section>
+        <section class="hero panel">
+          <div>
+            <p id="todayText" class="eyebrow"></p>
+            <h2 id="welcomeTitle">人生图谱</h2>
+            <p id="lifeSentence" class="hero-sentence"></p>
+          </div>
+          <div class="life-percent">
+            <strong id="lifePercent">0%</strong>
+            <span>生命进度</span>
+          </div>
+        </section>
 
-      <section class="metric-grid">
-        <article class="metric-card panel">
-          <span>人生第</span><strong id="lifeDay">—</strong><small>天</small>
-        </article>
-        <article class="metric-card panel">
-          <span>今年进度</span><strong id="yearPercent">—</strong><small id="yearRemaining">—</small>
-        </article>
-        <article class="metric-card panel">
-          <span>本月进度</span><strong id="monthPercent">—</strong><small id="monthRemaining">—</small>
-        </article>
-      </section>
-
+        <section class="metric-grid">
+          <article class="metric-card panel">
+            <span>人生第</span><strong id="lifeDay">—</strong><small>天</small>
+          </article>
+          <article class="metric-card panel">
+            <span>今年进度</span><strong id="yearPercent">—</strong><small id="yearRemaining">—</small>
+          </article>
+          <article class="metric-card panel">
+            <span>本月进度</span><strong id="monthPercent">—</strong><small id="monthRemaining">—</small>
+          </article>
+        </section>
       </div>
 
       <section class="panel life-map-panel">
@@ -119,25 +118,133 @@
               <span><i class="past-dot"></i>已走过</span>
               <span><i class="today-dot"></i>今天</span>
               <span><i class="future-dot"></i>未来</span>
+              <span><i class="event-dot"></i>有事件</span>
+              <span><i class="memory-border"></i>有记忆</span>
+              <span><i class="plan-ring"></i>有计划</span>
             </div>
           </div>
         </div>
         <div class="canvas-wrap">
-          <canvas id="lifeCanvas" aria-label="100 年生命日期格"></canvas>
+          <canvas id="lifeCanvas" aria-label="100 年生命日期格" tabindex="0"></canvas>
         </div>
-        <p class="subtle">当前原型每行代表一岁，每一小格代表该生命年中的一天。</p>
+        <p class="subtle">每行代表一岁，每一小格代表该生命年中的一天。点击任意日期格可打开当天详情。</p>
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.1 当前闭环</p>
-        <h2>加密仓库已经运行</h2>
-        <p>下一轮将接入事件、记忆和未来计划，并逐步完善年/月/日视图。</p>
+        <p class="eyebrow">v0.0.2.4 当前闭环</p>
+        <h2>事件、记忆与未来计划已接入</h2>
+        <p>点击任意生命日期格，可以添加加密事件、个人记忆；今天及未来日期还可以安排未来计划。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
         </div>
       </section>
     </section>
+
+    <div id="gridMagnifier" class="grid-magnifier hidden" aria-hidden="true">
+      <div class="grid-magnifier-heading">
+        <strong id="gridMagnifierDate">—</strong>
+        <span id="gridMagnifierMeta">—</span>
+      </div>
+      <canvas id="gridMagnifierCanvas" aria-hidden="true"></canvas>
+      <small>白色双框为当前日期格 · 点击即可打开</small>
+    </div>
+
+    <div id="dateDrawerBackdrop" class="drawer-backdrop hidden" aria-hidden="true"></div>
+    <aside id="dateDrawer" class="date-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="dateDrawerTitle" aria-hidden="true">
+      <header class="date-drawer-header">
+        <div>
+          <p id="dateDrawerEyebrow" class="eyebrow">日期详情</p>
+          <h2 id="dateDrawerTitle">—</h2>
+          <p id="dateDrawerMeta" class="drawer-meta">—</p>
+        </div>
+        <button id="closeDateDrawer" class="icon-button" type="button" aria-label="关闭日期详情">×</button>
+      </header>
+
+      <div id="dateDrawerLoading" class="drawer-loading hidden">
+        <div class="spinner"></div>
+        <p>正在读取加密内容……</p>
+      </div>
+
+      <div id="dateDrawerContent" class="date-drawer-content hidden">
+        <section class="drawer-section">
+          <div class="drawer-section-title">
+            <div>
+              <p class="eyebrow">正式事件</p>
+              <h3>这一天发生了什么</h3>
+            </div>
+            <button id="toggleEventForm" class="secondary-button compact-button" type="button">＋ 添加事件</button>
+          </div>
+
+          <form id="eventForm" class="event-form hidden">
+            <label>事件标题
+              <input name="title" required maxlength="120" placeholder="例如：完成 LifeGraph v0.0.1">
+            </label>
+            <label>事件内容
+              <textarea name="content" maxlength="20000" rows="5" placeholder="记录这件事的经过、意义或结果（可留空）"></textarea>
+            </label>
+            <div class="event-form-actions">
+              <button id="cancelEventForm" class="ghost-button" type="button">取消</button>
+              <button class="primary-button" type="submit">保存事件</button>
+            </div>
+          </form>
+
+          <div id="eventList" class="content-list"></div>
+        </section>
+
+        <section class="drawer-section memory-section">
+          <div class="drawer-section-title">
+            <div>
+              <p class="eyebrow">个人记忆</p>
+              <h3>我如何记得这一天</h3>
+            </div>
+            <button id="toggleMemoryForm" class="secondary-button compact-button" type="button">＋ 添加记忆</button>
+          </div>
+
+          <form id="memoryForm" class="memory-form hidden">
+            <label>记忆标题
+              <input name="title" required maxlength="120" placeholder="例如：第一次真正感到项目成形">
+            </label>
+            <label>记忆内容
+              <textarea name="content" maxlength="20000" rows="5" placeholder="记录当时的感受、细节或后来形成的理解（可留空）"></textarea>
+            </label>
+            <div class="event-form-actions">
+              <button id="cancelMemoryForm" class="ghost-button" type="button">取消</button>
+              <button class="primary-button" type="submit">保存记忆</button>
+            </div>
+          </form>
+
+          <div id="memoryList" class="content-list memory-list"></div>
+        </section>
+
+        <section class="drawer-section plan-section">
+          <div class="drawer-section-title">
+            <div>
+              <p class="eyebrow">未来计划</p>
+              <h3>我准备在这一天做什么</h3>
+            </div>
+            <button id="togglePlanForm" class="secondary-button compact-button" type="button">＋ 添加计划</button>
+          </div>
+
+          <p id="planAvailability" class="section-note hidden">过去日期不能新增未来计划，但此前保存的计划仍会显示。</p>
+
+          <form id="planForm" class="plan-form hidden">
+            <label>计划标题
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.2">
+            </label>
+            <label>计划内容
+              <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
+            </label>
+            <div class="event-form-actions">
+              <button id="cancelPlanForm" class="ghost-button" type="button">取消</button>
+              <button class="primary-button" type="submit">保存计划</button>
+            </div>
+          </form>
+
+          <div id="planList" class="content-list plan-list"></div>
+        </section>
+      </div>
+    </aside>
 
     <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
       <div class="modal-card">
@@ -154,6 +261,6 @@
 
     <div id="toast" class="toast hidden"></div>
   </main>
-  <script src="/assets/app.js?v=0.0.1.10"></script>
+  <script src="/assets/app.js?v=0.0.2.4"></script>
 </body>
 </html>
