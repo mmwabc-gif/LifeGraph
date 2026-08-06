@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse
 
 from app.models import (
+    AutoBackupHistoryClearRequest,
+    AutoBackupPolicyUpdateRequest,
     ContentDeleteRequest,
     ContentUpdateRequest,
     EventCreateRequest,
@@ -16,6 +19,7 @@ from app.models import (
     PlanCreateRequest,
     ProfileImpactRequest,
     ProfileUpdateRequest,
+    RecoveryCredentialChangeRequest,
     TrashClearRequest,
     UnlockRequest,
 )
@@ -26,6 +30,7 @@ from app.security.vault import (
     VaultError,
     VaultManager,
 )
+from app.services.backup import LIFEVAULT_MEDIA_TYPE, MAX_LIFEVAULT_BYTES
 from app.services.date_detail import DateOutOfLifeRange
 from app.services.periods import child_periods, resolve_period
 from app.services.progress import calculate_progress
@@ -127,7 +132,7 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
 def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     return envelope(
         {
-            "version": "0.0.3",
+            "version": "0.0.4",
             "initialized": vault.is_initialized,
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
@@ -217,6 +222,41 @@ def change_pin(
         ) from exc
 
 
+@router.get("/security/summary", dependencies=[Depends(require_session)])
+def security_summary(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.get_security_summary())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/auth/change-recovery", dependencies=[Depends(require_session)])
+def change_recovery_credential(
+    payload: RecoveryCredentialChangeRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.change_recovery_credential(
+                current_pin=payload.current_pin,
+                new_recovery_secret=payload.new_recovery_secret,
+                generate=payload.generate,
+            )
+        )
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_CURRENT_PIN") from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "RECOVERY_CREDENTIAL_CHANGE_FAILED",
+                "message": str(exc),
+            },
+        ) from exc
+
+
 @router.post("/auth/lock")
 def lock(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     vault.lock()
@@ -229,6 +269,228 @@ def profile(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
         return envelope(vault.get_profile())
     except VaultError as exc:
         raise locked_error(exc) from exc
+
+
+@router.get("/backup/auto", dependencies=[Depends(require_session)])
+def auto_backup_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.get_auto_backup_status())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/backup/auto", dependencies=[Depends(require_session)])
+def update_auto_backup(
+    payload: AutoBackupPolicyUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_auto_backup_policy(
+                enabled=payload.enabled,
+                frequency=payload.frequency,
+                retention_count=payload.retention_count,
+                create_initial_backup=payload.create_initial_backup,
+            )
+        )
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "AUTO_BACKUP_POLICY_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/auto/run", dependencies=[Depends(require_session)])
+def run_auto_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(
+            vault.create_automatic_backup(force=True, reason="manual-run")
+        )
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "AUTO_BACKUP_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/auto/verify-latest", dependencies=[Depends(require_session)])
+def verify_latest_auto_backup(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.verify_latest_auto_backup())
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "AUTO_BACKUP_VERIFY_FAILED",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+@router.get("/backup/auto/history", dependencies=[Depends(require_session)])
+def auto_backup_history(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope({"items": vault.list_auto_backup_history()})
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/backup/auto/history/clear", dependencies=[Depends(require_session)])
+def clear_auto_backup_history(
+    payload: AutoBackupHistoryClearRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.clear_auto_backup_history())
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "AUTO_BACKUP_CLEAR_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/backup/auto/history/{filename}", dependencies=[Depends(require_session)])
+def download_auto_backup(
+    filename: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> FileResponse:
+    try:
+        path = vault.auto_backup_path(filename)
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "AUTO_BACKUP_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    return FileResponse(
+        path,
+        media_type=LIFEVAULT_MEDIA_TYPE,
+        filename=path.name,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.delete("/backup/auto/history/{filename}", dependencies=[Depends(require_session)])
+def delete_auto_backup(
+    filename: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_auto_backup(filename=filename))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "AUTO_BACKUP_NOT_FOUND", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/backup/check", dependencies=[Depends(require_session)])
+def check_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.check_backup_integrity())
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "BACKUP_CHECK_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/backup/export", dependencies=[Depends(require_session)])
+def export_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> Response:
+    try:
+        artifact = vault.export_lifevault(app_version="0.0.4")
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "BACKUP_EXPORT_FAILED", "message": str(exc)},
+        ) from exc
+    return Response(
+        content=artifact.content,
+        media_type=LIFEVAULT_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+            "X-LifeGraph-Backup-Format": "lifegraph-lifevault-v1",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+async def read_lifevault_upload(upload: UploadFile) -> bytes:
+    filename = upload.filename or ""
+    if filename and not filename.lower().endswith(".lifevault"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_BACKUP_FILE", "message": "请选择 .lifevault 备份文件"},
+        )
+    value = bytearray()
+    while chunk := await upload.read(1024 * 1024):
+        value.extend(chunk)
+        if len(value) > MAX_LIFEVAULT_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"code": "BACKUP_TOO_LARGE", "message": "备份文件超过 512 MB 限制"},
+            )
+    await upload.close()
+    if not value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_BACKUP_FILE", "message": "备份文件为空"},
+        )
+    return bytes(value)
+
+
+@router.post("/backup/import/check", dependencies=[Depends(require_session)])
+async def check_backup_import(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    backup_file: Annotated[UploadFile, File()],
+    credential_method: Annotated[Literal["pin", "recovery"], Form()] = "pin",
+    credential_secret: Annotated[str, Form(min_length=1, max_length=256)] = "",
+) -> dict:
+    content = await read_lifevault_upload(backup_file)
+    try:
+        return envelope(
+            vault.inspect_lifevault_import(
+                content=content,
+                credential_method=credential_method,
+                credential_secret=credential_secret,
+            )
+        )
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_BACKUP_CREDENTIAL") from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "BACKUP_IMPORT_CHECK_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/import", dependencies=[Depends(require_session)])
+async def import_backup(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    backup_file: Annotated[UploadFile, File()],
+    credential_method: Annotated[Literal["pin", "recovery"], Form()] = "pin",
+    credential_secret: Annotated[str, Form(min_length=1, max_length=256)] = "",
+    confirm: Annotated[str, Form()] = "",
+) -> dict:
+    content = await read_lifevault_upload(backup_file)
+    try:
+        return envelope(
+            vault.restore_lifevault(
+                content=content,
+                credential_method=credential_method,
+                credential_secret=credential_secret,
+                confirm=confirm,
+                app_version="0.0.4",
+            )
+        )
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_BACKUP_CREDENTIAL") from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "BACKUP_RESTORE_FAILED", "message": str(exc)},
+        ) from exc
 
 
 @router.post("/profile/change-impact", dependencies=[Depends(require_session)])

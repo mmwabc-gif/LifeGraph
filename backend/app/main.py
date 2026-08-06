@@ -10,7 +10,7 @@ from app.security.vault import VaultManager
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-BUILD_VERSION = "0.0.3"
+BUILD_VERSION = "0.0.4"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -22,16 +22,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = settings
-    app.state.vault = VaultManager(settings.data_dir, settings.session_ttl_seconds)
+    app.state.vault = VaultManager(
+        settings.data_dir,
+        settings.session_ttl_seconds,
+        app_version=BUILD_VERSION,
+    )
 
     @app.middleware("http")
-    async def disable_frontend_cache(request: Request, call_next):
+    async def frontend_cache_and_auto_backup(request: Request, call_next):
         response = await call_next(request)
         if request.url.path == "/" or request.url.path.startswith("/assets/"):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
             response.headers["X-LifeGraph-Build"] = BUILD_VERSION
+        # Once enabled, a due backup is created after ordinary successful API
+        # activity. Backup endpoints are excluded so listing or deleting history
+        # never immediately creates another file. Failures are recorded in the
+        # backup policy but do not turn a successful user operation into an error.
+        if (
+            response.status_code < 400
+            and request.url.path.startswith("/api/v1/")
+            and not request.url.path.startswith("/api/v1/backup/")
+            and request.url.path != "/api/v1/auth/lock"
+        ):
+            app.state.vault.maybe_create_automatic_backup(
+                reason=f"api:{request.method.lower()}"
+            )
         return response
 
     @app.exception_handler(HTTPException)

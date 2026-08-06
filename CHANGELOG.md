@@ -1,5 +1,227 @@
 # CHANGELOG
 
+## v0.0.4 - 2026-08-07
+
+### Added
+
+- 完成 `.lifevault` 一致性加密备份导出、导入演练、正式恢复与失败自动回滚；
+- 完成每天／每周本地自动备份、保留数量、历史下载、删除和清空；
+- 完成备份健康、超期、失败、损坏与待验证状态，以及最近备份一键完整验证；
+- 完成恢复密钥轮换、密钥槽状态和不含敏感内容的安全审计摘要；
+- 完成个人设置的个人档案／安全设置／备份与迁移三组结构与默认只读档案。
+
+### Changed
+
+- 用户界面统一使用“恢复密钥”，并将其明确归入安全设置；
+- 个人设置弹窗限制在浏览器可视高度内，标题固定、内容可滚动且隐藏滚动条轨道；
+- 前端、后端、API、备份清单生产者和 Python 包版本统一为 `0.0.4`；
+- 数据库 schema 保持 v3，无需新增迁移。
+
+### Security
+
+- 备份导出前验证 SQLite、外键和全部加密记录，落盘后再次验证包结构、SHA-256 和可恢复性；
+- 正式恢复前自动保存当前仓库，替换失败时回滚原文件；
+- 修改 PIN 或恢复密钥只重新包装同一主密钥，不重写业务密文；
+- 发布包排除数据库、`vault.json`、自动备份、恢复包、日志、缓存、虚拟环境和个人数据。
+
+### Verification
+
+```text
+91 passed
+JavaScript syntax check passed
+Python compile check passed
+.lifevault export/import/rollback passed
+Automatic backup, health and verification passed
+Recovery-key rotation and settings structure passed
+```
+
+## v0.0.4.7 - 2026-08-06
+
+### Changed
+
+- 个人设置窗口重构为“个人档案／安全设置／备份与迁移”三个清晰分组；
+- 三个分组新增通栏标题、线性图标、独立边框与留白，提升长设置页的扫描效率；
+- “修改恢复凭据”归入安全设置，用户界面统一改称“修改恢复密钥”；
+- 姓名和出生日期默认以只读摘要展示，只有点击“编辑个人档案”后才进入表单状态；
+- 取消档案编辑只退出编辑态，不再关闭整个个人设置窗口。
+
+### Safety
+
+- 档案只读态不会要求或缓存 PIN；
+- 进入编辑态时重新以当前档案填充表单，取消编辑会清除输入的确认 PIN；
+- 关闭设置时，仅在实际存在未保存输入的区域触发放弃确认；
+- 本次不改变密钥槽、主密钥、业务密文、备份格式或数据库 schema。
+
+### Verification
+
+```text
+91 passed
+JavaScript syntax check passed
+Python compile check passed
+Settings grouping and read-only profile flow passed
+Recovery-key terminology and security placement passed
+```
+
+## v0.0.4.6 - 2026-08-06
+
+### Added
+
+- 自动备份区域新增健康状态卡，区分健康、待验证、已超期、失败、异常、未启用和无备份；
+- 新增 `POST /api/v1/backup/auto/verify-latest`，对最近自动备份的落盘文件执行完整恢复验证；
+- 首页和全页视图的“个人设置”按钮新增备份警示点，提示超期、失败、异常或待验证状态；
+- 备份策略新增最近验证时间、验证文件名和非敏感错误摘要，旧版 `vault.json` 自动使用安全默认值。
+
+### Safety
+
+- 新生成的自动备份在记录成功前，会重新读取实际落盘字节并验证 ZIP、SHA-256、SQLite、外键和全部加密记录；
+- 最近备份快速验证只读取自动备份目录中的最新 `.lifevault`，不会替换或改写当前仓库；
+- ZIP 压缩数据损坏、CRC 或解压异常会转换为可控的备份校验错误，不再导致未处理异常；
+- 健康摘要不包含姓名、出生日期、标题、正文、PIN、恢复凭据或主密钥。
+
+### Verification
+
+```text
+90 passed
+JavaScript syntax check passed
+Python compile check passed
+Healthy/missing/overdue backup states passed
+Exact disk backup recovery verification passed
+Tampered ZIP detection and controlled failure passed
+Backup reminder UI hooks passed
+```
+
+## v0.0.4.5 - 2026-08-06
+
+### Added
+
+- 个人设置新增“修改恢复凭据”，支持自动生成高强度凭据或填写自定义凭据；
+- 新增 `POST /api/v1/auth/change-recovery`，使用当前 PIN 验证后重新包装同一主密钥的恢复密钥槽；
+- 新增 `GET /api/v1/security/summary`，展示 PIN／恢复密钥槽算法与最近更新时间；
+- 新增本地安全审计摘要，记录仓库初始化、PIN 修改、恢复凭据重置 PIN、恢复凭据轮换和仓库恢复等操作类型与时间；
+- 自动生成的新恢复凭据沿用一次性展示窗口，关闭后不再从系统中读取明文。
+
+### Security
+
+- 恢复凭据轮换不重写 SQLite 中的档案、事件、记忆和计划密文；
+- 新恢复凭据与当前 PIN 均不写入 `vault.json`、SQLite、审计记录或浏览器存储；
+- 原恢复凭据在轮换完成后立即失效，PIN 密钥槽保持不变；
+- 审计摘要最多保留 50 条，只包含动作代码、结果和 UTC 时间戳；
+- 对旧版 `vault.json` 自动合成只读初始化／旧安全更新时间摘要，不要求迁移数据库。
+
+### Verification
+
+```text
+84 passed
+JavaScript syntax check passed
+Python compile check passed
+Generated and custom recovery rotation passed
+Old recovery invalidation and PIN continuity passed
+Legacy security metadata compatibility passed
+```
+
+## v0.0.4.4 - 2026-08-06
+
+### Added
+
+- 个人设置新增“本地自动备份”，支持每天或每周周期；
+- 支持设置保留 3—50 个自动备份，生成成功后自动清理超额旧版本；
+- 启用策略时可立即创建首个一致性 `.lifevault`；
+- 新增自动备份历史列表、单项下载、单项删除和清空历史；
+- 新增 `GET|PUT /api/v1/backup/auto`、`POST /api/v1/backup/auto/run` 及历史管理接口；
+- 普通 API 活动完成后检查备份周期，到期时以尽力而为方式生成本地备份。
+
+### Safety
+
+- 自动备份继续使用 SQLite Backup API、SHA-256 清单和逐条密文验证；
+- 自动备份只写入 `data/backups/auto/`，不会覆盖当前仓库；
+- 保留清理只删除自动备份目录中的旧 `.lifevault`，不触碰 `data/recovery/`；
+- 自动备份失败会记录状态并至少等待一小时后重试，不影响已成功的业务请求；
+- 文件下载和删除均要求有效解锁会话，并限制为自动备份目录内的 `.lifevault` 文件。
+
+### Verification
+
+```text
+78 passed
+JavaScript syntax check passed
+Python compile check passed
+Automatic due backup and retention cleanup passed
+Backup history download/delete/clear passed
+```
+
+## v0.0.4.3 - 2026-08-06
+
+### Fixed
+
+- 修复新增备份恢复功能后个人设置弹窗超出浏览器底部、无法访问下方内容的问题；
+- 个人设置卡片限制在当前可视高度内，标题与关闭按钮保持固定；
+- 档案、安全和备份内容改为独立内部滚动区；
+- 首页与全页视图共用同一修复；
+- 隐藏滚动条轨道，同时保留滚轮、触控板和触摸滚动。
+
+### Verification
+
+```text
+70 passed
+JavaScript syntax check passed
+Python compile check passed
+Viewport-constrained settings modal check passed
+```
+
+## v0.0.4.2 - 2026-08-06
+
+### Added
+
+- 个人设置新增 `.lifevault` 文件选择、备份凭据验证、恢复演练与正式恢复入口；
+- 新增 `POST /api/v1/backup/import/check`，在临时目录完整验证备份而不改动当前仓库；
+- 新增 `POST /api/v1/backup/import`，自动导入并替换当前加密仓库；
+- 正式恢复前自动生成 `data/recovery/lifegraph-before-restore-*.lifevault` 安全备份；
+- 恢复成功后强制锁定，要求使用导入备份对应的 PIN 或恢复凭据重新解锁；
+- 新增恢复失败自动回滚机制和恢复前安全备份可恢复测试。
+
+### Security
+
+- 导入检查验证固定 ZIP 结构、格式版本、schema 上限、文件大小和 SHA-256；
+- 使用备份自身 PIN 或恢复凭据解开主密钥，并逐条验证全部加密档案和内容；
+- 正式替换前再次验证候选数据库，替换后再次执行 SQLite、外键和密文验证；
+- 备份凭据仅随本次 multipart 请求传输，不写入数据库、清单或浏览器存储；
+- 恢复成功后撤销所有旧会话，防止旧令牌继续访问已替换仓库。
+
+### Verification
+
+```text
+69 passed
+JavaScript syntax check passed
+Python compile check passed
+.lifevault import rehearsal passed
+Automatic rescue backup restore passed
+```
+
+## v0.0.4.1 - 2026-08-06
+
+### Added
+
+- 个人设置新增“备份与迁移”区域；
+- 新增仓库完整性检查，验证 SQLite `quick_check`、外键和全部加密记录；
+- 新增 `.lifevault` 一致性加密备份导出；
+- 备份包包含 `manifest.json`、`repository/vault.json` 和一致性 `repository/lifegraph.db` 快照；
+- 清单记录文件大小与 SHA-256，且不写入个人档案或业务正文；
+- 新增 `.lifevault` 格式说明和验收测试。
+
+### Security
+
+- 备份导出需要有效解锁会话；
+- 导出包不包含 PIN、恢复凭据或任何解密后的姓名、日期、标题和正文；
+- 导出前逐条验证档案、事件、记忆、计划及回收站密文可被当前主密钥解密。
+
+### Verification
+
+```text
+65 passed
+JavaScript syntax check passed
+Python compile check passed
+.lifevault restore simulation passed
+```
+
 ## v0.0.3 - 2026-08-06
 
 ### Added

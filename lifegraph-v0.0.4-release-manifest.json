@@ -1,0 +1,19 @@
+{
+  "project": "LifeGraph",
+  "version": "0.0.4",
+  "release_date": "2026-08-07",
+  "database_schema": 3,
+  "tests": 91,
+  "default_view": "full_page_day_grid",
+  "lifevault_export_import": true,
+  "automatic_backup": true,
+  "backup_health_check": true,
+  "contains_personal_data": false,
+  "artifacts": [
+    "lifegraph-v0.0.4-stable-final-files.zip",
+    "lifegraph-v0.0.4-stable-full-source.zip",
+    "lifegraph-v0.0.4-stable-docs.zip",
+    "人生图谱_v0.0.4_收口归档.md",
+    "GIT_COMMIT_v0.0.4.md"
+  ]
+}

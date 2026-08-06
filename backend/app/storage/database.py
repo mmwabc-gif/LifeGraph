@@ -28,6 +28,10 @@ class DatabaseRevisionConflict(RuntimeError):
     pass
 
 
+class DatabaseIntegrityError(RuntimeError):
+    pass
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -159,6 +163,84 @@ class Database:
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()
         return int(row["value"]) if row else 0
+
+    def create_consistent_snapshot(self, destination: Path) -> None:
+        """Copy one committed SQLite state to a standalone database file."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+        with self.connect() as source, sqlite3.connect(destination) as target:
+            # PASSIVE checkpoint reduces stale WAL pages without blocking writers.
+            source.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            source.backup(target)
+            target.commit()
+
+    @staticmethod
+    def _readonly_connection(path: Path) -> sqlite3.Connection:
+        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        return connection
+
+    def verify_encrypted_snapshot(
+        self, snapshot_path: Path, master_key: bytes
+    ) -> dict[str, Any]:
+        """Verify SQLite structure and decrypt every encrypted repository row."""
+        if not snapshot_path.exists():
+            raise DatabaseIntegrityError("数据库快照不存在")
+        with self._readonly_connection(snapshot_path) as connection:
+            quick_rows = [row[0] for row in connection.execute("PRAGMA quick_check")]
+            if quick_rows != ["ok"]:
+                raise DatabaseIntegrityError(
+                    "SQLite 完整性检查失败：" + "；".join(map(str, quick_rows))
+                )
+            foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if foreign_key_rows:
+                raise DatabaseIntegrityError(
+                    f"SQLite 外键检查发现 {len(foreign_key_rows)} 个问题"
+                )
+
+            schema_row = connection.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()
+            if schema_row is None:
+                raise DatabaseIntegrityError("数据库缺少 schema_version")
+            schema_version = int(schema_row["value"])
+
+            profile_rows = connection.execute(
+                "SELECT id, nonce, ciphertext FROM profiles"
+            ).fetchall()
+            if len(profile_rows) != 1:
+                raise DatabaseIntegrityError(
+                    f"个人档案数量异常：应为 1，实际为 {len(profile_rows)}"
+                )
+            for row in profile_rows:
+                decrypt_json(
+                    master_key, row["nonce"], row["ciphertext"], aad=PROFILE_AAD
+                )
+
+            verified_records = len(profile_rows)
+            counts: dict[str, int] = {"profile": len(profile_rows)}
+            for kind, (table, _date_column, aad_prefix) in _CONTENT_TABLES.items():
+                rows = connection.execute(
+                    f"SELECT id, nonce, ciphertext FROM {table}"
+                ).fetchall()
+                for row in rows:
+                    decrypt_json(
+                        master_key,
+                        row["nonce"],
+                        row["ciphertext"],
+                        aad=self._aad(aad_prefix, row["id"]),
+                    )
+                counts[kind] = len(rows)
+                verified_records += len(rows)
+
+        return {
+            "sqlite_quick_check": "ok",
+            "foreign_key_errors": 0,
+            "schema_version": schema_version,
+            "encrypted_records_verified": verified_records,
+            "record_counts": counts,
+        }
 
     def save_profile(
         self,

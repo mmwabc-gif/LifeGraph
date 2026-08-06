@@ -98,6 +98,40 @@ class PinResetRequest(BaseModel):
         return self
 
 
+class RecoveryCredentialChangeRequest(BaseModel):
+    current_pin: str
+    generate: bool = True
+    new_recovery_secret: str | None = Field(default=None, max_length=256)
+    confirm_new_recovery_secret: str | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "RecoveryCredentialChangeRequest":
+        if not self.current_pin.isdigit() or not 6 <= len(self.current_pin) <= 12:
+            raise ValueError("当前 PIN 必须为 6—12 位数字")
+        if self.generate:
+            return self
+        secret = (self.new_recovery_secret or "").strip()
+        confirmation = (self.confirm_new_recovery_secret or "").strip()
+        if len(secret) < 12:
+            raise ValueError("新恢复凭据至少需要 12 个字符")
+        if secret != confirmation:
+            raise ValueError("两次输入的新恢复凭据不一致")
+        self.new_recovery_secret = secret
+        self.confirm_new_recovery_secret = confirmation
+        return self
+
+
+class AutoBackupPolicyUpdateRequest(BaseModel):
+    enabled: bool = False
+    frequency: Literal["daily", "weekly"] = "daily"
+    retention_count: int = Field(default=10, ge=3, le=50)
+    create_initial_backup: bool = True
+
+
+class AutoBackupHistoryClearRequest(BaseModel):
+    confirm: Literal["CLEAR_AUTO_BACKUPS"]
+
+
 class ScopedContentRequest(BaseModel):
     time_scope: TimeScope = "day"
     period_key: str | None = Field(default=None, max_length=10)

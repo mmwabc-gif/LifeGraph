@@ -2707,13 +2707,42 @@ body.settings-open {
 }
 
 .settings-card {
+  display: flex;
+  flex-direction: column;
   width: min(760px, 100%);
-  max-height: none;
-  overflow: visible;
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+}
+
+.settings-scroll-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.settings-scroll-body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .reset-pin-card {
   width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.reset-pin-card::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .settings-header {
@@ -2762,23 +2791,15 @@ body.settings-open {
 
 @media (max-width: 760px), (max-height: 820px) {
   .settings-modal {
-    place-items: start center;
-    overflow-y: auto;
+    place-items: center;
+    overflow: hidden;
     padding: 10px;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .settings-modal::-webkit-scrollbar {
-    display: none;
-    width: 0;
-    height: 0;
   }
 
   .settings-card,
   .reset-pin-card {
-    max-height: none;
-    overflow: visible;
+    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
     border-radius: 20px;
     padding: 22px 18px;
   }
@@ -2807,3 +2828,636 @@ body.settings-open {
 
 
 /* LifeGraph v0.0.3.17：个人设置弹窗自然高度与隐藏式小屏滚动 */
+
+/* LifeGraph v0.0.4.1：一致性备份与 .lifevault 导出 */
+.backup-settings-section {
+  display: grid;
+  gap: 14px;
+}
+
+.backup-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.backup-settings-actions button {
+  min-height: 42px;
+}
+
+.backup-status-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.65;
+}
+
+.backup-status-text[data-tone="success"] {
+  color: #35634f;
+}
+
+.backup-status-text[data-tone="error"] {
+  color: #8a433a;
+}
+
+@media (max-width: 620px) {
+  .backup-settings-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .backup-settings-actions button {
+    width: 100%;
+  }
+}
+
+/* LifeGraph v0.0.4.2：.lifevault 自动导入与恢复演练 */
+.backup-import-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 6px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(56, 62, 53, .12);
+}
+
+.backup-import-heading {
+  margin-bottom: 0;
+}
+
+.backup-import-heading h4 {
+  margin: 0 0 5px;
+  font-size: 1rem;
+}
+
+.backup-import-form {
+  align-items: end;
+}
+
+.backup-import-form input[type="file"] {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, .62);
+}
+
+.backup-import-form input[type="file"]::file-selector-button {
+  margin-right: 10px;
+  border: 1px solid rgba(49, 92, 77, .18);
+  border-radius: 9px;
+  padding: 7px 10px;
+  background: rgba(49, 92, 77, .08);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.backup-import-actions {
+  justify-content: flex-start;
+}
+
+.backup-import-actions .danger-button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+
+/* LifeGraph v0.0.4.3：个人设置限制在可视高度内，固定标题并隐藏式滚动内容 */
+.settings-header {
+  flex: 0 0 auto;
+}
+
+/* LifeGraph v0.0.4.4：本地自动备份与备份历史管理 */
+.auto-backup-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 6px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(56, 62, 53, .12);
+}
+
+.auto-backup-form {
+  align-items: end;
+}
+
+.auto-backup-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(49, 92, 77, .14);
+  border-radius: 12px;
+  background: rgba(49, 92, 77, .045);
+  font-weight: 650;
+}
+
+.auto-backup-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.auto-backup-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.auto-backup-history-heading > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.auto-backup-history-heading strong {
+  font-size: .92rem;
+}
+
+.auto-backup-history-heading span {
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.auto-backup-history-tools,
+.auto-backup-history-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.danger-text-button {
+  color: #8a433a;
+}
+
+.auto-backup-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.auto-backup-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(56, 62, 53, .11);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .48);
+}
+
+.auto-backup-history-item[data-invalid="true"] {
+  border-color: rgba(138, 67, 58, .22);
+  background: rgba(138, 67, 58, .045);
+}
+
+.auto-backup-history-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.auto-backup-history-main strong,
+.auto-backup-history-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auto-backup-history-main strong {
+  font-size: .82rem;
+  font-weight: 680;
+}
+
+.auto-backup-history-main span,
+.auto-backup-history-empty {
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.55;
+}
+
+.auto-backup-history-empty {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed rgba(56, 62, 53, .14);
+  border-radius: 12px;
+  text-align: center;
+}
+
+@media (max-width: 620px) {
+  .auto-backup-history-heading,
+  .auto-backup-history-item {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .auto-backup-history-heading {
+    display: grid;
+  }
+
+  .auto-backup-history-tools,
+  .auto-backup-history-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* LifeGraph v0.0.4.5：恢复凭据轮换、密钥槽信息与安全审计摘要 */
+.recovery-generate-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(49, 92, 77, .14);
+  border-radius: 12px;
+  background: rgba(49, 92, 77, .045);
+  font-weight: 650;
+}
+
+.recovery-generate-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.recovery-custom-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.security-overview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.security-overview-heading > div {
+  min-width: 0;
+}
+
+.security-slot-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.security-slot-card,
+.security-audit-item {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid rgba(56, 62, 53, .11);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .48);
+}
+
+.security-slot-card strong,
+.security-audit-item strong {
+  color: var(--ink);
+  font-size: .86rem;
+}
+
+.security-slot-card span,
+.security-audit-item span,
+.security-summary-empty,
+.security-audit-heading span {
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.55;
+}
+
+.security-audit-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.security-audit-heading strong {
+  font-size: .92rem;
+}
+
+.security-audit-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.security-audit-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.security-summary-empty {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed rgba(56, 62, 53, .14);
+  border-radius: 12px;
+  text-align: center;
+}
+
+@media (max-width: 620px) {
+  .recovery-custom-fields,
+  .security-slot-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .security-overview-heading,
+  .security-audit-heading,
+  .security-audit-item {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .security-overview-heading,
+  .security-audit-heading {
+    display: grid;
+  }
+}
+
+#recoveryModal {
+  z-index: 330;
+}
+
+/* LifeGraph v0.0.4.6：备份健康状态、超期提醒与最近备份快速验证 */
+.backup-health-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 15px;
+  border: 1px solid rgba(56, 62, 53, .12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .5);
+}
+
+.backup-health-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+
+.backup-health-main > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backup-health-main strong {
+  font-size: .9rem;
+}
+
+.backup-health-main p,
+.backup-health-main span:not(.backup-health-badge) {
+  margin: 0;
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.55;
+}
+
+.backup-health-badge {
+  flex: 0 0 auto;
+  min-width: 50px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(56, 62, 53, .08);
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 720;
+  text-align: center;
+}
+
+.backup-health-card[data-level="success"] {
+  border-color: rgba(49, 92, 77, .2);
+  background: rgba(49, 92, 77, .055);
+}
+
+.backup-health-card[data-level="success"] .backup-health-badge {
+  background: rgba(49, 92, 77, .13);
+  color: #315c4d;
+}
+
+.backup-health-card[data-level="warning"] {
+  border-color: rgba(151, 103, 39, .23);
+  background: rgba(151, 103, 39, .055);
+}
+
+.backup-health-card[data-level="warning"] .backup-health-badge {
+  background: rgba(151, 103, 39, .13);
+  color: #80551f;
+}
+
+.backup-health-card[data-level="error"] {
+  border-color: rgba(138, 67, 58, .24);
+  background: rgba(138, 67, 58, .055);
+}
+
+.backup-health-card[data-level="error"] .backup-health-badge {
+  background: rgba(138, 67, 58, .13);
+  color: #8a433a;
+}
+
+#settingsButton,
+#fullPageSettingsButton {
+  position: relative;
+}
+
+#settingsButton[data-backup-alert="warning"]::after,
+#settingsButton[data-backup-alert="error"]::after,
+#fullPageSettingsButton[data-backup-alert="warning"]::after,
+#fullPageSettingsButton[data-backup-alert="error"]::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid rgba(255, 255, 255, .9);
+  border-radius: 50%;
+  background: #a36b25;
+}
+
+#settingsButton[data-backup-alert="error"]::after,
+#fullPageSettingsButton[data-backup-alert="error"]::after {
+  background: #9a443a;
+}
+
+@media (max-width: 620px) {
+  .backup-health-card {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .backup-health-card > button {
+    justify-self: start;
+  }
+}
+
+/* LifeGraph v0.0.4：个人设置分区重构、恢复密钥归位与档案默认只读 */
+.settings-scroll-body {
+  padding: 2px 4px 4px 0;
+}
+
+.settings-group {
+  overflow: hidden;
+  border: 1px solid rgba(56, 62, 53, .13);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .32);
+  box-shadow: 0 8px 24px rgba(45, 48, 41, .035);
+}
+
+.settings-group + .settings-group {
+  margin-top: 18px;
+}
+
+.settings-group-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 17px;
+  border-bottom: 1px solid rgba(56, 62, 53, .11);
+  background: linear-gradient(90deg, rgba(49, 92, 77, .105), rgba(49, 92, 77, .035));
+}
+
+.settings-group-icon {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .58);
+  color: var(--accent);
+}
+
+.settings-group-icon svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-group-header > div {
+  min-width: 0;
+}
+
+.settings-group-header h3 {
+  margin: 0 0 3px;
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.settings-group-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.5;
+}
+
+.settings-group-content {
+  padding: 18px;
+}
+
+.settings-group-content > .settings-section:first-child,
+.settings-group-content > .settings-section:first-child .settings-section-heading:first-child {
+  margin-top: 0;
+}
+
+.settings-group-content .settings-section + .settings-section {
+  margin-top: 22px;
+  padding-top: 22px;
+}
+
+.settings-section-heading h4 {
+  margin: 0 0 5px;
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.profile-settings-summary {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-summary-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.profile-summary-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(56, 62, 53, .11);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .5);
+}
+
+.profile-summary-item dt {
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 650;
+}
+
+.profile-summary-item dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: .95rem;
+  font-weight: 680;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-summary-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.profile-settings-form {
+  animation: settings-profile-edit-in .18s ease-out;
+}
+
+@keyframes settings-profile-edit-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 620px) {
+  .settings-group-header {
+    align-items: flex-start;
+    padding: 13px 14px;
+  }
+
+  .settings-group-content {
+    padding: 15px 14px;
+  }
+
+  .profile-summary-list {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-summary-actions,
+  .profile-summary-actions button {
+    width: 100%;
+  }
+}

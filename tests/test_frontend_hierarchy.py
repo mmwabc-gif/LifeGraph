@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.3"' in javascript
+    assert 'const frontendBuildVersion = "0.0.4"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -283,7 +283,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.3"' in javascript
+    assert 'const frontendBuildVersion = "0.0.4"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -383,25 +383,133 @@ def test_profile_and_security_settings_ui_is_available() -> None:
     assert 'id="settingsButton"' in html
     assert 'id="fullPageSettingsButton"' in html
     assert 'id="settingsModal"' in html
+    assert 'id="profileSettingsSummary"' in html
+    assert 'id="profileDisplayNameValue"' in html
+    assert 'id="profileBirthDateValue"' in html
+    assert 'id="editProfileSettings"' in html
     assert 'id="profileSettingsForm"' in html
     assert 'id="changePinForm"' in html
+    assert 'id="recoveryCredentialForm"' in html
+    assert 'id="securitySlotSummary"' in html
+    assert 'id="securityAuditList"' in html
     assert 'id="resetPinModal"' in html
     assert 'id="resetPinForm"' in html
     assert 'id="openResetPin"' in html
     assert 'api("/api/v1/profile/change-impact"' in javascript
     assert 'api("/api/v1/profile"' in javascript
     assert 'api("/api/v1/auth/change-pin"' in javascript
+    assert 'api("/api/v1/auth/change-recovery"' in javascript
+    assert 'api("/api/v1/security/summary"' in javascript
     assert 'api("/api/v1/auth/reset-pin"' in javascript
     assert '.settings-modal' in css
     assert 'z-index: 270' in css
 
 
-def test_settings_modal_uses_natural_height_without_visible_scrollbars() -> None:
+def test_settings_modal_stays_inside_viewport_and_scrolls_its_content() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert "LifeGraph v0.0.3.17：个人设置弹窗自然高度与隐藏式小屏滚动" in stylesheet
-    assert ".settings-card {\n  width: min(760px, 100%);\n  max-height: none;\n  overflow: visible;" in stylesheet
-    assert ".settings-modal {\n  z-index: 270;\n  overflow: hidden;" in stylesheet
-    assert "@media (max-width: 760px), (max-height: 820px)" in stylesheet
-    assert ".settings-modal::-webkit-scrollbar" in stylesheet
+    assert 'class="settings-scroll-body"' in html
+    assert "LifeGraph v0.0.4.3：个人设置限制在可视高度内，固定标题并隐藏式滚动内容" in stylesheet
+    assert "display: flex;\n  flex-direction: column;\n  width: min(760px, 100%);" in stylesheet
+    assert "max-height: calc(100vh - 40px);" in stylesheet
+    assert "max-height: calc(100dvh - 40px);" in stylesheet
+    assert "overflow: hidden;" in stylesheet
+    assert ".settings-scroll-body {\n  min-height: 0;\n  overflow-y: auto;" in stylesheet
+    assert ".settings-scroll-body::-webkit-scrollbar" in stylesheet
+    assert "max-height: calc(100dvh - 20px);" in stylesheet
+    assert ".settings-header {\n  flex: 0 0 auto;" in stylesheet
     assert "scrollbar-width: none;" in stylesheet
+
+
+def test_settings_scroll_region_contains_all_long_form_sections() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    header_position = html.index('<header class="settings-header">', html.index('id="settingsModal"'))
+    scroll_position = html.index('<div class="settings-scroll-body">')
+    profile_position = html.index('id="profileSettingsForm"')
+    security_position = html.index('id="changePinForm"')
+    recovery_position = html.index('id="recoveryCredentialForm"')
+    overview_position = html.index('id="securitySlotSummary"')
+    backup_position = html.index('id="checkBackupButton"')
+    restore_position = html.index('id="restoreImportBackupButton"')
+    reset_modal_position = html.index('id="resetPinModal"')
+
+    assert header_position < scroll_position
+    assert scroll_position < profile_position < security_position < recovery_position < overview_position < backup_position < restore_position
+    assert restore_position < reset_modal_position
+
+
+def test_settings_groups_are_visually_separated_and_profile_starts_read_only() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert html.count('class="settings-group ') == 3
+    assert 'id="profileSettingsGroupTitle">个人档案</h3>' in html
+    assert 'id="securitySettingsGroupTitle">安全设置</h3>' in html
+    assert 'id="backupSettingsGroupTitle">备份与迁移</h3>' in html
+    assert '<h4>修改恢复密钥</h4>' in html
+    assert 'class="settings-group-icon"' in html
+    assert 'id="profileSettingsSummary" class="profile-settings-summary"' in html
+    assert 'id="profileSettingsForm" class="form-grid compact-form profile-settings-form hidden"' in html
+    assert 'function setProfileSettingsEditMode(editing, { focus = true } = {})' in javascript
+    assert 'setProfileSettingsEditMode(false, { focus: false });' in javascript
+    assert 'editProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(true));' in javascript
+    assert 'cancelProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(false));' in javascript
+    assert 'LifeGraph v0.0.4：个人设置分区重构、恢复密钥归位与档案默认只读' in stylesheet
+    assert '.settings-group-header {' in stylesheet
+    assert '.profile-summary-list {' in stylesheet
+
+
+def test_auto_backup_settings_and_history_ui_is_available() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "autoBackupForm",
+        "saveAutoBackupButton",
+        "runAutoBackupButton",
+        "autoBackupStatusText",
+        "autoBackupHistorySummary",
+        "autoBackupHistoryList",
+        "refreshAutoBackupHistoryButton",
+        "clearAutoBackupHistoryButton",
+    ):
+        assert f'id="{element_id}"' in html
+    assert 'async function loadAutoBackupPanel()' in javascript
+    assert 'api("/api/v1/backup/auto"' in javascript
+    assert 'api("/api/v1/backup/auto/run"' in javascript
+    assert 'api("/api/v1/backup/auto/history/clear"' in javascript
+    assert 'downloadAutoBackup(item, downloadButton)' in javascript
+    assert 'deleteAutoBackupHistoryItem(item, deleteButton)' in javascript
+    assert "LifeGraph v0.0.4.4：本地自动备份与备份历史管理" in stylesheet
+    assert '.auto-backup-history-item {' in stylesheet
+
+
+def test_recovery_rotation_and_security_summary_ui_is_available() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "recoveryCredentialForm",
+        "customRecoveryFields",
+        "refreshSecuritySummaryButton",
+        "securitySlotSummary",
+        "securityAuditSummary",
+        "securityAuditList",
+        "recoveryDescription",
+    ):
+        assert f'id="{element_id}"' in html
+    assert 'function syncRecoveryCredentialMode()' in javascript
+    assert 'async function loadSecuritySummary()' in javascript
+    assert 'function renderSecuritySummary(summary)' in javascript
+    assert 'showRecoverySecret(result.generated_recovery_secret' in javascript
+    assert 'recoveryCredentialForm?.addEventListener("submit"' in javascript
+    assert "LifeGraph v0.0.4.5：恢复凭据轮换、密钥槽信息与安全审计摘要" in stylesheet
+    assert '.security-slot-summary {' in stylesheet
+    assert '.security-audit-item {' in stylesheet
+    assert '#recoveryModal {' in stylesheet
+    assert 'z-index: 330;' in stylesheet

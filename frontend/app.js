@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.3";
+const frontendBuildVersion = "0.0.4";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -101,10 +101,19 @@ function friendlyErrorMessage(error) {
     VAULT_LOCKED: "加密仓库已锁定，请重新解锁。",
     PLAN_DATE_IN_PAST: "过去的时间范围不能新增未来计划。",
     INVALID_CURRENT_PIN: "当前 PIN 不正确。",
-    INVALID_RECOVERY_CREDENTIAL: "恢复凭据不正确。",
+    INVALID_RECOVERY_CREDENTIAL: "恢复密钥不正确。",
     PROFILE_UPDATE_FAILED: "个人档案保存失败。",
     PIN_CHANGE_FAILED: "PIN 修改失败。",
     PIN_RESET_FAILED: "PIN 重置失败。",
+    RECOVERY_CREDENTIAL_CHANGE_FAILED: "恢复密钥修改失败。",
+    BACKUP_CHECK_FAILED: "仓库完整性检查失败。",
+    BACKUP_EXPORT_FAILED: "备份导出失败。",
+    INVALID_BACKUP_FILE: "请选择有效的 .lifevault 备份文件。",
+    INVALID_BACKUP_CREDENTIAL: "备份 PIN 或恢复密钥不正确。",
+    BACKUP_IMPORT_CHECK_FAILED: "备份包验证或恢复演练失败。",
+    BACKUP_RESTORE_FAILED: "备份恢复失败，当前仓库未被替换。",
+    BACKUP_TOO_LARGE: "备份文件超过 512 MB 限制。",
+    AUTO_BACKUP_VERIFY_FAILED: "最近备份验证失败。",
   };
   return messages[error?.code] || error?.message || "操作失败，请稍后重试。";
 }
@@ -206,14 +215,57 @@ async function api(path, options = {}, requireAuth = false) {
 const settingsModal = document.getElementById("settingsModal");
 const closeSettingsButton = document.getElementById("closeSettings");
 const profileSettingsForm = document.getElementById("profileSettingsForm");
+const profileSettingsSummary = document.getElementById("profileSettingsSummary");
+const profileDisplayNameValue = document.getElementById("profileDisplayNameValue");
+const profileBirthDateValue = document.getElementById("profileBirthDateValue");
+const editProfileSettingsButton = document.getElementById("editProfileSettings");
+const cancelProfileSettingsButton = document.getElementById("cancelProfileSettings");
 const changePinForm = document.getElementById("changePinForm");
+const recoveryCredentialForm = document.getElementById("recoveryCredentialForm");
+const customRecoveryFields = document.getElementById("customRecoveryFields");
+const refreshSecuritySummaryButton = document.getElementById("refreshSecuritySummaryButton");
+const securitySlotSummary = document.getElementById("securitySlotSummary");
+const securityAuditSummary = document.getElementById("securityAuditSummary");
+const securityAuditList = document.getElementById("securityAuditList");
+const recoveryModal = document.getElementById("recoveryModal");
+const recoveryTitle = document.getElementById("recoveryTitle");
+const recoveryDescription = document.getElementById("recoveryDescription");
+const recoveryValue = document.getElementById("recoveryValue");
 const resetPinModal = document.getElementById("resetPinModal");
 const resetPinForm = document.getElementById("resetPinForm");
 const openResetPinButton = document.getElementById("openResetPin");
 const closeResetPinButton = document.getElementById("closeResetPin");
 const cancelResetPinButton = document.getElementById("cancelResetPin");
+const checkBackupButton = document.getElementById("checkBackupButton");
+const exportBackupButton = document.getElementById("exportBackupButton");
+const backupStatusText = document.getElementById("backupStatusText");
+const autoBackupForm = document.getElementById("autoBackupForm");
+const saveAutoBackupButton = document.getElementById("saveAutoBackupButton");
+const runAutoBackupButton = document.getElementById("runAutoBackupButton");
+const autoBackupStatusText = document.getElementById("autoBackupStatusText");
+const autoBackupHealthCard = document.getElementById("autoBackupHealthCard");
+const autoBackupHealthBadge = document.getElementById("autoBackupHealthBadge");
+const autoBackupHealthTitle = document.getElementById("autoBackupHealthTitle");
+const autoBackupHealthMessage = document.getElementById("autoBackupHealthMessage");
+const autoBackupHealthMeta = document.getElementById("autoBackupHealthMeta");
+const verifyLatestAutoBackupButton = document.getElementById("verifyLatestAutoBackupButton");
+const autoBackupHistorySummary = document.getElementById("autoBackupHistorySummary");
+const autoBackupHistoryList = document.getElementById("autoBackupHistoryList");
+const refreshAutoBackupHistoryButton = document.getElementById("refreshAutoBackupHistoryButton");
+const clearAutoBackupHistoryButton = document.getElementById("clearAutoBackupHistoryButton");
+const importBackupFile = document.getElementById("importBackupFile");
+const importCredentialMethod = document.getElementById("importCredentialMethod");
+const importCredentialSecret = document.getElementById("importCredentialSecret");
+const checkImportBackupButton = document.getElementById("checkImportBackupButton");
+const restoreImportBackupButton = document.getElementById("restoreImportBackupButton");
+const importBackupStatusText = document.getElementById("importBackupStatusText");
+let verifiedImportState = null;
 let settingsReturnFocus = null;
 let settingsProfileSnapshot = "";
+let profileSettingsEditing = false;
+let autoBackupSettingsSnapshot = "";
+let recoveryModalContext = "initialize";
+let backupReminderShownCode = "";
 
 function profileSettingsState() {
   if (!profileSettingsForm) return {};
@@ -224,20 +276,119 @@ function profileSettingsState() {
   };
 }
 
+function renderProfileSettingsSummary() {
+  if (!currentProfile) return;
+  if (profileDisplayNameValue) profileDisplayNameValue.textContent = currentProfile.display_name || "—";
+  if (profileBirthDateValue) profileBirthDateValue.textContent = currentProfile.birth_date || "—";
+}
+
+function resetProfileSettingsFormValues() {
+  if (!currentProfile || !profileSettingsForm) return;
+  profileSettingsForm.elements.display_name.value = currentProfile.display_name || "";
+  profileSettingsForm.elements.birth_date.value = currentProfile.birth_date || "";
+  profileSettingsForm.elements.current_pin.value = "";
+  settingsProfileSnapshot = JSON.stringify(profileSettingsState());
+}
+
+function setProfileSettingsEditMode(editing, { focus = true } = {}) {
+  profileSettingsEditing = Boolean(editing);
+  profileSettingsSummary?.classList.toggle("hidden", profileSettingsEditing);
+  profileSettingsForm?.classList.toggle("hidden", !profileSettingsEditing);
+  resetProfileSettingsFormValues();
+  if (!focus) return;
+  requestAnimationFrame(() => {
+    const target = profileSettingsEditing
+      ? profileSettingsForm?.elements.display_name
+      : editProfileSettingsButton;
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function autoBackupFormState() {
+  if (!autoBackupForm) return {};
+  const form = new FormData(autoBackupForm);
+  return {
+    enabled: Boolean(autoBackupForm.elements.enabled?.checked),
+    frequency: String(form.get("frequency") || "daily"),
+    retention_count: Number(form.get("retention_count") || 10),
+  };
+}
+
+function recoveryCredentialFormHasInput() {
+  if (!recoveryCredentialForm) return false;
+  return Array.from(recoveryCredentialForm.querySelectorAll('input[type="password"]'))
+    .some(input => Boolean(input.value));
+}
+
+function syncRecoveryCredentialMode() {
+  if (!recoveryCredentialForm || !customRecoveryFields) return;
+  const generate = Boolean(recoveryCredentialForm.elements.generate?.checked);
+  customRecoveryFields.classList.toggle("hidden", generate);
+  for (const input of customRecoveryFields.querySelectorAll("input")) {
+    input.required = !generate;
+    if (generate) input.value = "";
+  }
+}
+
+function showRecoverySecret(secret, { context = "initialize", title, description } = {}) {
+  recoveryModalContext = context;
+  recoveryTitle.textContent = title || "保存你的恢复密钥";
+  recoveryDescription.textContent = description || "请离线保存。它可以在忘记 PIN 或迁移设备时解锁仓库。";
+  recoveryValue.textContent = secret;
+  recoveryModal.classList.remove("hidden");
+}
+
 function hasUnsavedSettingsChanges() {
   if (settingsModal.classList.contains("hidden")) return false;
-  const profileChanged = JSON.stringify(profileSettingsState()) !== settingsProfileSnapshot;
-  const profilePin = profileSettingsForm.querySelector('[name="current_pin"]')?.value || "";
+  const profileChanged = profileSettingsEditing && JSON.stringify(profileSettingsState()) !== settingsProfileSnapshot;
+  const profilePin = profileSettingsEditing
+    ? profileSettingsForm.querySelector('[name="current_pin"]')?.value || ""
+    : "";
   const pinValues = Array.from(changePinForm.querySelectorAll('input[type="password"]')).some(input => input.value);
-  return profileChanged || Boolean(profilePin) || pinValues;
+  const recoveryValues = recoveryCredentialFormHasInput();
+  const importSelected = Boolean(importBackupFile?.files?.length || importCredentialSecret?.value);
+  const autoBackupChanged = Boolean(
+    autoBackupSettingsSnapshot &&
+    JSON.stringify(autoBackupFormState()) !== autoBackupSettingsSnapshot
+  );
+  return profileChanged || Boolean(profilePin) || pinValues || recoveryValues || importSelected || autoBackupChanged;
 }
 
 function fillProfileSettingsForm() {
   if (!currentProfile) return;
-  profileSettingsForm.elements.display_name.value = currentProfile.display_name || "";
-  profileSettingsForm.elements.birth_date.value = currentProfile.birth_date || "";
-  profileSettingsForm.elements.current_pin.value = "";
+  renderProfileSettingsSummary();
+  resetProfileSettingsFormValues();
+  setProfileSettingsEditMode(false, { focus: false });
   changePinForm.reset();
+  recoveryCredentialForm?.reset();
+  syncRecoveryCredentialMode();
+  if (importBackupFile) importBackupFile.value = "";
+  if (importCredentialMethod) importCredentialMethod.value = "pin";
+  if (importCredentialSecret) {
+    importCredentialSecret.value = "";
+    importCredentialSecret.placeholder = "输入该备份对应的 PIN";
+  }
+  verifiedImportState = null;
+  autoBackupSettingsSnapshot = "";
+  if (autoBackupStatusText) {
+    autoBackupStatusText.textContent = "正在读取自动备份状态…";
+    delete autoBackupStatusText.dataset.tone;
+  }
+  if (autoBackupHealthCard) {
+    autoBackupHealthCard.dataset.level = "neutral";
+    autoBackupHealthBadge.textContent = "检查中";
+    autoBackupHealthTitle.textContent = "正在检查备份健康状态";
+    autoBackupHealthMessage.textContent = "请稍候…";
+    autoBackupHealthMeta.textContent = "";
+    verifyLatestAutoBackupButton.disabled = true;
+  }
+  if (autoBackupHistorySummary) autoBackupHistorySummary.textContent = "尚未读取";
+  if (autoBackupHistoryList) autoBackupHistoryList.replaceChildren();
+  if (restoreImportBackupButton) restoreImportBackupButton.disabled = true;
+  if (importBackupStatusText) {
+    importBackupStatusText.textContent = "尚未选择并验证备份包。";
+    delete importBackupStatusText.dataset.tone;
+  }
   settingsProfileSnapshot = JSON.stringify(profileSettingsState());
 }
 
@@ -252,7 +403,13 @@ async function openSettingsModal() {
   settingsModal.classList.remove("hidden");
   settingsModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  requestAnimationFrame(() => profileSettingsForm.elements.display_name.focus());
+  await Promise.all([loadAutoBackupPanel(), loadSecuritySummary()]);
+  requestAnimationFrame(() => {
+    const target = profileSettingsEditing
+      ? profileSettingsForm?.elements.display_name
+      : editProfileSettingsButton;
+    target?.focus({ preventScroll: true });
+  });
 }
 
 function closeSettingsModalNow() {
@@ -260,9 +417,16 @@ function closeSettingsModalNow() {
   settingsModal.classList.add("hidden");
   settingsModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("settings-open");
+  profileSettingsEditing = false;
+  profileSettingsSummary?.classList.remove("hidden");
+  profileSettingsForm.classList.add("hidden");
   profileSettingsForm.reset();
   changePinForm.reset();
+  recoveryCredentialForm?.reset();
+  syncRecoveryCredentialMode();
+  autoBackupForm?.reset();
   settingsProfileSnapshot = "";
+  autoBackupSettingsSnapshot = "";
   if (settingsReturnFocus instanceof HTMLElement && document.contains(settingsReturnFocus)) {
     settingsReturnFocus.focus({ preventScroll: true });
   }
@@ -275,7 +439,7 @@ async function requestCloseSettingsModal() {
     const confirmed = await askConfirmation({
       eyebrow: "尚未保存",
       title: "放弃设置修改？",
-      message: "当前个人档案或 PIN 表单中还有未保存内容。",
+      message: "当前个人档案、PIN、恢复密钥、自动备份或恢复区域还有未保存的输入。",
       confirmLabel: "放弃修改",
       tone: "warning",
     });
@@ -304,7 +468,8 @@ function closeResetPinModal() {
 settingsButton.addEventListener("click", openSettingsModal);
 fullPageSettingsButton.addEventListener("click", openSettingsModal);
 closeSettingsButton.addEventListener("click", requestCloseSettingsModal);
-document.getElementById("cancelProfileSettings").addEventListener("click", requestCloseSettingsModal);
+editProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(true));
+cancelProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(false));
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal) requestCloseSettingsModal();
 });
@@ -315,9 +480,609 @@ resetPinModal.addEventListener("click", (event) => {
   if (event.target === resetPinModal) closeResetPinModal();
 });
 
+async function confirmBackupUsesSavedState() {
+  if (!hasUnsavedSettingsChanges()) return true;
+  return askConfirmation({
+    eyebrow: "备份提示",
+    title: "导出当前已保存的数据？",
+    message: "设置表单中尚未保存的修改不会进入本次备份。",
+    confirmLabel: "继续备份",
+    tone: "warning",
+  });
+}
+
+async function checkBackupIntegrity() {
+  if (!(await confirmBackupUsesSavedState())) return;
+  setButtonBusy(checkBackupButton, true, "检查中…");
+  try {
+    const report = await api("/api/v1/backup/check", {}, true);
+    backupStatusText.textContent = `检查通过：schema v${report.schema_version}，已验证 ${report.encrypted_records_verified} 条加密记录。`;
+    backupStatusText.dataset.tone = "success";
+    showToast("加密仓库完整性检查通过", "success");
+  } catch (error) {
+    backupStatusText.textContent = friendlyErrorMessage(error);
+    backupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(checkBackupButton, false);
+  }
+}
+
+function backupFilenameFromDisposition(value) {
+  const utf8Match = value?.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) return decodeURIComponent(utf8Match[1]);
+  const plainMatch = value?.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || "lifegraph-backup.lifevault";
+}
+
+async function exportLifevaultBackup() {
+  if (!(await confirmBackupUsesSavedState())) return;
+  setButtonBusy(exportBackupButton, true, "正在生成…");
+  try {
+    const headers = {};
+    if (token()) headers.Authorization = `Bearer ${token()}`;
+    const response = await fetch("/api/v1/backup/export", { headers });
+    if (!response.ok) {
+      let payload = null;
+      try { payload = await response.json(); } catch (_) { /* ignore */ }
+      const error = new Error(payload?.error?.message || `备份导出失败：HTTP ${response.status}`);
+      error.code = payload?.error?.code;
+      throw error;
+    }
+    const blob = await response.blob();
+    const filename = backupFilenameFromDisposition(response.headers.get("Content-Disposition"));
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    backupStatusText.textContent = `已导出 ${filename}，请将它保存到独立磁盘或可信云盘。`;
+    backupStatusText.dataset.tone = "success";
+    showToast(".lifevault 加密备份已导出", "success");
+  } catch (error) {
+    backupStatusText.textContent = friendlyErrorMessage(error);
+    backupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(exportBackupButton, false);
+  }
+}
+
+checkBackupButton?.addEventListener("click", checkBackupIntegrity);
+exportBackupButton?.addEventListener("click", exportLifevaultBackup);
+
+function formatBackupDateTime(value) {
+  if (!value) return "尚无";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "时间未知" : parsed.toLocaleString();
+}
+
+function renderSecuritySummary(summary) {
+  if (!securitySlotSummary || !securityAuditList || !securityAuditSummary) return;
+  securitySlotSummary.replaceChildren();
+  const slotLabels = { pin: "PIN 密钥槽", recovery: "恢复密钥槽" };
+  for (const slotName of ["pin", "recovery"]) {
+    const slot = summary?.key_slots?.[slotName] || {};
+    const card = document.createElement("article");
+    card.className = "security-slot-card";
+    const title = document.createElement("strong");
+    title.textContent = slotLabels[slotName];
+    const meta = document.createElement("span");
+    meta.textContent = slot.configured
+      ? `${String(slot.kdf || "unknown").toUpperCase()} · 最近更新 ${formatBackupDateTime(slot.updated_at)}`
+      : "未配置";
+    card.append(title, meta);
+    securitySlotSummary.appendChild(card);
+  }
+
+  const audit = Array.isArray(summary?.audit) ? summary.audit : [];
+  securityAuditSummary.textContent = `${summary?.audit_count || audit.length} 条记录 · 最近显示 ${audit.length} 条`;
+  securityAuditList.replaceChildren();
+  if (!audit.length) {
+    const empty = document.createElement("p");
+    empty.className = "security-summary-empty";
+    empty.textContent = "尚无安全操作记录。";
+    securityAuditList.appendChild(empty);
+    return;
+  }
+  for (const item of audit) {
+    const row = document.createElement("article");
+    row.className = "security-audit-item";
+    const label = document.createElement("strong");
+    label.textContent = item.label || "安全设置已更新";
+    const time = document.createElement("span");
+    time.textContent = formatBackupDateTime(item.at);
+    row.append(label, time);
+    securityAuditList.appendChild(row);
+  }
+}
+
+async function loadSecuritySummary() {
+  if (!securitySlotSummary || !securityAuditList) return;
+  try {
+    const summary = await api("/api/v1/security/summary", {}, true);
+    renderSecuritySummary(summary);
+  } catch (error) {
+    securitySlotSummary.innerHTML = '<p class="security-summary-empty">安全状态读取失败。</p>';
+    securityAuditList.replaceChildren();
+    securityAuditSummary.textContent = "读取失败";
+    showOperationError(error);
+  }
+}
+
+refreshSecuritySummaryButton?.addEventListener("click", loadSecuritySummary);
+
+function formatBackupSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatBackupDuration(seconds) {
+  const value = Math.max(0, Number(seconds || 0));
+  if (value < 3600) return `${Math.max(1, Math.round(value / 60))} 分钟`;
+  if (value < 86400) return `${Math.round(value / 3600)} 小时`;
+  return `${Math.round(value / 86400)} 天`;
+}
+
+function renderAutoBackupHealth(status) {
+  if (!autoBackupHealthCard || !status?.health) return;
+  const health = status.health;
+  const labels = {
+    healthy: ["健康", "最近备份已验证"],
+    disabled: ["未启用", "自动备份尚未启用"],
+    missing: ["需备份", "尚无可用自动备份"],
+    invalid: ["异常", "最近备份文件异常"],
+    failed: ["失败", "最近自动备份失败"],
+    overdue: ["已超期", "自动备份已经超期"],
+    verification_due: ["待验证", "最近备份等待恢复验证"],
+  };
+  const [badge, title] = labels[health.code] || ["检查", "备份状态需要确认"];
+  autoBackupHealthCard.dataset.level = health.level || "neutral";
+  autoBackupHealthBadge.textContent = badge;
+  autoBackupHealthTitle.textContent = title;
+  autoBackupHealthMessage.textContent = health.message || "";
+  const meta = [];
+  if (health.latest_backup?.created_at) {
+    meta.push(`最近备份 ${formatBackupDateTime(health.latest_backup.created_at)}`);
+  }
+  if (health.overdue) meta.push(`已超期 ${formatBackupDuration(health.overdue_seconds)}`);
+  if (health.verification?.verified_at) {
+    meta.push(`最近验证 ${formatBackupDateTime(health.verification.verified_at)}`);
+  }
+  if (health.verification?.error) meta.push(`验证错误：${health.verification.error}`);
+  autoBackupHealthMeta.textContent = meta.join(" · ") || "尚无备份健康记录";
+  verifyLatestAutoBackupButton.disabled = !health.latest_backup?.filename;
+}
+
+function applyBackupHealthIndicator(status, { notify = false } = {}) {
+  const health = status?.health;
+  const alertLevel = ["missing", "overdue", "verification_due"].includes(health?.code)
+    ? "warning"
+    : (["invalid", "failed"].includes(health?.code) ? "error" : "");
+  for (const button of [settingsButton, fullPageSettingsButton]) {
+    if (!button) continue;
+    if (alertLevel) button.dataset.backupAlert = alertLevel;
+    else delete button.dataset.backupAlert;
+    button.title = alertLevel ? `个人设置 · 备份提醒：${health.message}` : "个人设置";
+  }
+  if (notify && alertLevel && backupReminderShownCode !== health.code) {
+    backupReminderShownCode = health.code;
+    showToast(`备份提醒：${health.message}`, alertLevel === "error" ? "error" : "info");
+  }
+}
+
+async function refreshBackupHealthReminder() {
+  try {
+    const status = await api("/api/v1/backup/auto", {}, true);
+    applyBackupHealthIndicator(status, { notify: true });
+  } catch (_) {
+    // 首页主体已加载时，备份提醒读取失败不应打断用户。
+  }
+}
+
+function fillAutoBackupForm(status) {
+  if (!autoBackupForm || !status) return;
+  autoBackupForm.elements.enabled.checked = Boolean(status.enabled);
+  autoBackupForm.elements.frequency.value = status.frequency || "daily";
+  autoBackupForm.elements.retention_count.value = String(status.retention_count || 10);
+  autoBackupSettingsSnapshot = JSON.stringify(autoBackupFormState());
+  renderAutoBackupHealth(status);
+  applyBackupHealthIndicator(status);
+  const frequencyLabel = status.frequency === "weekly" ? "每周" : "每天";
+  const stateLabel = status.enabled ? `已启用（${frequencyLabel}）` : "未启用";
+  const lastSuccess = status.last_success_at
+    ? `最近成功：${formatBackupDateTime(status.last_success_at)}`
+    : "尚无成功备份";
+  const nextDue = status.enabled && status.next_due_at
+    ? `；下次到期：${formatBackupDateTime(status.next_due_at)}`
+    : "";
+  const errorText = status.last_error ? `；最近失败：${status.last_error}` : "";
+  autoBackupStatusText.textContent = `${stateLabel}；${lastSuccess}${nextDue}；本地保留 ${status.history_count || 0} 个备份${errorText}`;
+  autoBackupStatusText.dataset.tone = status.last_error ? "error" : (status.last_success_at ? "success" : "");
+  if (!autoBackupStatusText.dataset.tone) delete autoBackupStatusText.dataset.tone;
+}
+
+function renderAutoBackupHistory(items) {
+  if (!autoBackupHistoryList || !autoBackupHistorySummary) return;
+  autoBackupHistoryList.replaceChildren();
+  const totalSize = items.reduce((sum, item) => sum + Number(item.size || 0), 0);
+  autoBackupHistorySummary.textContent = `${items.length} 个 · ${formatBackupSize(totalSize)}`;
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "auto-backup-history-empty";
+    empty.textContent = "暂无本地自动备份。启用后会立即生成首个备份，也可以点击“立即备份”。";
+    autoBackupHistoryList.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "auto-backup-history-item";
+    if (!item.valid) card.dataset.invalid = "true";
+
+    const main = document.createElement("div");
+    main.className = "auto-backup-history-main";
+    const title = document.createElement("strong");
+    title.textContent = item.filename;
+    const meta = document.createElement("span");
+    meta.textContent = item.valid
+      ? `${formatBackupDateTime(item.created_at || item.modified_at)} · ${formatBackupSize(item.size)} · schema v${item.schema_version}`
+      : `${formatBackupDateTime(item.modified_at)} · ${formatBackupSize(item.size)} · 文件校验异常`;
+    main.append(title, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "auto-backup-history-actions";
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.className = "text-button";
+    downloadButton.textContent = "下载";
+    downloadButton.addEventListener("click", () => downloadAutoBackup(item, downloadButton));
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "text-button danger-text-button";
+    deleteButton.textContent = "删除";
+    deleteButton.addEventListener("click", () => deleteAutoBackupHistoryItem(item, deleteButton));
+    actions.append(downloadButton, deleteButton);
+    card.append(main, actions);
+    autoBackupHistoryList.appendChild(card);
+  });
+}
+
+async function loadAutoBackupHistory() {
+  const result = await api("/api/v1/backup/auto/history", {}, true);
+  renderAutoBackupHistory(result.items || []);
+  return result.items || [];
+}
+
+async function loadAutoBackupPanel() {
+  try {
+    const [status] = await Promise.all([
+      api("/api/v1/backup/auto", {}, true),
+      loadAutoBackupHistory(),
+    ]);
+    fillAutoBackupForm(status);
+  } catch (error) {
+    if (autoBackupStatusText) {
+      autoBackupStatusText.textContent = friendlyErrorMessage(error);
+      autoBackupStatusText.dataset.tone = "error";
+    }
+    if (autoBackupHistorySummary) autoBackupHistorySummary.textContent = "读取失败";
+  }
+}
+
+async function saveAutoBackupPolicy(event) {
+  event.preventDefault();
+  const state = autoBackupFormState();
+  setButtonBusy(saveAutoBackupButton, true, "保存中…");
+  try {
+    const status = await api("/api/v1/backup/auto", {
+      method: "PUT",
+      body: JSON.stringify({ ...state, create_initial_backup: true }),
+    }, true);
+    fillAutoBackupForm(status);
+    await loadAutoBackupHistory();
+    showToast(status.enabled ? "自动备份已启用" : "自动备份已关闭", "success");
+  } catch (error) {
+    autoBackupStatusText.textContent = friendlyErrorMessage(error);
+    autoBackupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(saveAutoBackupButton, false);
+  }
+}
+
+async function runAutoBackupNow() {
+  if (!(await confirmBackupUsesSavedState())) return;
+  setButtonBusy(runAutoBackupButton, true, "备份中…");
+  try {
+    const status = await api("/api/v1/backup/auto/run", { method: "POST" }, true);
+    fillAutoBackupForm(status);
+    await loadAutoBackupHistory();
+    showToast(`本地备份已生成：${status.filename}`, "success");
+  } catch (error) {
+    autoBackupStatusText.textContent = friendlyErrorMessage(error);
+    autoBackupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(runAutoBackupButton, false);
+  }
+}
+
+async function verifyLatestAutoBackup() {
+  setButtonBusy(verifyLatestAutoBackupButton, true, "验证中…");
+  try {
+    const result = await api("/api/v1/backup/auto/verify-latest", { method: "POST" }, true);
+    fillAutoBackupForm(result.status);
+    await loadAutoBackupHistory();
+    showToast(`最近备份已通过恢复验证，共验证 ${result.encrypted_records_verified} 条加密记录`, "success");
+  } catch (error) {
+    try {
+      const status = await api("/api/v1/backup/auto", {}, true);
+      fillAutoBackupForm(status);
+    } catch (_) { /* 保留原始错误 */ }
+    showOperationError(error);
+  } finally {
+    setButtonBusy(verifyLatestAutoBackupButton, false);
+  }
+}
+
+async function downloadAutoBackup(item, button) {
+  setButtonBusy(button, true, "下载中…");
+  try {
+    const headers = {};
+    if (token()) headers.Authorization = `Bearer ${token()}`;
+    const response = await fetch(`/api/v1/backup/auto/history/${encodeURIComponent(item.filename)}`, { headers });
+    if (!response.ok) {
+      let payload = null;
+      try { payload = await response.json(); } catch (_) { /* ignore */ }
+      throw new Error(payload?.error?.message || `备份下载失败：HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = item.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function deleteAutoBackupHistoryItem(item, button) {
+  const confirmed = await askConfirmation({
+    eyebrow: "备份历史",
+    title: "删除这个本地备份？",
+    message: `${item.filename}\n删除后无法从备份历史中恢复。`,
+    confirmLabel: "删除备份",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+  setButtonBusy(button, true, "删除中…");
+  try {
+    const status = await api(`/api/v1/backup/auto/history/${encodeURIComponent(item.filename)}`, {
+      method: "DELETE",
+    }, true);
+    fillAutoBackupForm(status);
+    await loadAutoBackupHistory();
+    showToast("本地备份已删除", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function clearAutoBackupHistory() {
+  const confirmed = await askConfirmation({
+    eyebrow: "备份历史",
+    title: "清空全部本地自动备份？",
+    message: "只会删除 data/backups/auto 中的自动备份，不影响当前仓库、手动导出的文件和恢复前安全备份。",
+    confirmLabel: "清空备份历史",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+  setButtonBusy(clearAutoBackupHistoryButton, true, "清空中…");
+  try {
+    const status = await api("/api/v1/backup/auto/history/clear", {
+      method: "POST",
+      body: JSON.stringify({ confirm: "CLEAR_AUTO_BACKUPS" }),
+    }, true);
+    fillAutoBackupForm(status);
+    renderAutoBackupHistory([]);
+    showToast(`已清理 ${status.deleted_count} 个本地自动备份`, "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(clearAutoBackupHistoryButton, false);
+  }
+}
+
+autoBackupForm?.addEventListener("submit", saveAutoBackupPolicy);
+runAutoBackupButton?.addEventListener("click", runAutoBackupNow);
+verifyLatestAutoBackupButton?.addEventListener("click", verifyLatestAutoBackup);
+refreshAutoBackupHistoryButton?.addEventListener("click", async () => {
+  setButtonBusy(refreshAutoBackupHistoryButton, true, "刷新中…");
+  try {
+    await loadAutoBackupHistory();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(refreshAutoBackupHistoryButton, false);
+  }
+});
+clearAutoBackupHistoryButton?.addEventListener("click", clearAutoBackupHistory);
+
+function resetImportVerification(message = "备份选择已变化，请重新验证。") {
+  verifiedImportState = null;
+  if (restoreImportBackupButton) restoreImportBackupButton.disabled = true;
+  if (importBackupStatusText) {
+    importBackupStatusText.textContent = message;
+    delete importBackupStatusText.dataset.tone;
+  }
+}
+
+function selectedImportValues() {
+  const file = importBackupFile?.files?.[0] || null;
+  const method = importCredentialMethod?.value || "pin";
+  const secret = importCredentialSecret?.value || "";
+  return { file, method, secret };
+}
+
+function importSelectionMatchesVerification() {
+  const current = selectedImportValues();
+  return Boolean(
+    verifiedImportState &&
+    current.file === verifiedImportState.file &&
+    current.method === verifiedImportState.method &&
+    current.secret === verifiedImportState.secret
+  );
+}
+
+function backupImportFormData({ includeConfirmation = false } = {}) {
+  const { file, method, secret } = selectedImportValues();
+  if (!file) {
+    const error = new Error("请先选择 .lifevault 备份文件");
+    error.code = "INVALID_BACKUP_FILE";
+    throw error;
+  }
+  if (!secret) {
+    const error = new Error(method === "pin" ? "请输入备份 PIN" : "请输入备份恢复密钥");
+    error.code = "INVALID_BACKUP_CREDENTIAL";
+    throw error;
+  }
+  const form = new FormData();
+  form.append("backup_file", file, file.name);
+  form.append("credential_method", method);
+  form.append("credential_secret", secret);
+  if (includeConfirmation) form.append("confirm", "REPLACE_REPOSITORY");
+  return form;
+}
+
+async function apiForm(path, formData) {
+  const headers = {};
+  if (token()) headers.Authorization = `Bearer ${token()}`;
+  const response = await fetch(path, { method: "POST", headers, body: formData });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : { ok: false, error: { message: "响应为空" } };
+  } catch (_) {
+    payload = { ok: false, error: { message: `响应格式错误：HTTP ${response.status}` } };
+  }
+  if (!response.ok || !payload.ok) {
+    const error = new Error(payload.error?.message || `请求失败：${response.status}`);
+    error.code = payload.error?.code;
+    throw error;
+  }
+  return payload.data;
+}
+
+function formatImportReport(report) {
+  const counts = report.record_counts || {};
+  const totalContent = (counts.event || 0) + (counts.memory || 0) + (counts.plan || 0);
+  const createdAt = report.created_at ? new Date(report.created_at).toLocaleString() : "未知时间";
+  return `演练通过：备份创建于 ${createdAt}，schema v${report.schema_version}，包含 ${totalContent} 条内容，已验证 ${report.encrypted_records_verified} 条加密记录。`;
+}
+
+async function checkLifevaultImport() {
+  setButtonBusy(checkImportBackupButton, true, "演练中…");
+  if (restoreImportBackupButton) restoreImportBackupButton.disabled = true;
+  try {
+    const values = selectedImportValues();
+    const report = await apiForm(
+      "/api/v1/backup/import/check",
+      backupImportFormData(),
+    );
+    verifiedImportState = { ...values, report };
+    restoreImportBackupButton.disabled = false;
+    importBackupStatusText.textContent = formatImportReport(report);
+    importBackupStatusText.dataset.tone = "success";
+    showToast("备份包验证与恢复演练通过", "success");
+  } catch (error) {
+    verifiedImportState = null;
+    importBackupStatusText.textContent = friendlyErrorMessage(error);
+    importBackupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(checkImportBackupButton, false);
+  }
+}
+
+async function restoreLifevaultImport() {
+  if (!importSelectionMatchesVerification()) {
+    resetImportVerification("备份文件或凭据已变化，请重新执行恢复演练。");
+    return;
+  }
+  const report = verifiedImportState.report;
+  const confirmed = await askConfirmation({
+    eyebrow: "仓库恢复",
+    title: "用此备份替换当前仓库？",
+    message: `${formatImportReport(report)}
+
+系统会先把当前仓库自动保存到 data/recovery，再执行替换。恢复成功后会立即锁定，请使用该备份对应的凭据重新解锁。`,
+    confirmLabel: "备份当前仓库并恢复",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+
+  setButtonBusy(restoreImportBackupButton, true, "恢复中…");
+  if (checkImportBackupButton) checkImportBackupButton.disabled = true;
+  try {
+    const method = importCredentialMethod.value;
+    const restored = await apiForm(
+      "/api/v1/backup/import",
+      backupImportFormData({ includeConfirmation: true }),
+    );
+    setToken(null);
+    currentProfile = null;
+    currentProgress = null;
+    contentStatus = {};
+    monthContentStatus = {};
+    yearContentStatus = {};
+    closeDateDrawerNow();
+    closeSettingsModalNow();
+    statusBadge.textContent = "仓库已恢复，请重新解锁";
+    showView("unlock");
+    unlockForm.elements.method.value = method;
+    unlockForm.elements.secret.value = "";
+    showToast(`仓库恢复完成；恢复前备份：${restored.rescue_backup_filename}`, "success");
+  } catch (error) {
+    importBackupStatusText.textContent = friendlyErrorMessage(error);
+    importBackupStatusText.dataset.tone = "error";
+    showOperationError(error);
+  } finally {
+    setButtonBusy(restoreImportBackupButton, false);
+    if (checkImportBackupButton) checkImportBackupButton.disabled = false;
+  }
+}
+
+importBackupFile?.addEventListener("change", () => resetImportVerification("已选择备份文件，请输入凭据并执行恢复演练。"));
+importCredentialMethod?.addEventListener("change", () => {
+  if (importCredentialSecret) {
+    importCredentialSecret.value = "";
+    importCredentialSecret.placeholder = importCredentialMethod.value === "pin"
+      ? "输入该备份对应的 PIN"
+      : "输入该备份对应的恢复密钥";
+  }
+  resetImportVerification("验证方式已变化，请重新执行恢复演练。");
+});
+importCredentialSecret?.addEventListener("input", () => resetImportVerification("凭据已变化，请重新执行恢复演练。"));
+checkImportBackupButton?.addEventListener("click", checkLifevaultImport);
+restoreImportBackupButton?.addEventListener("click", restoreLifevaultImport);
+
 profileSettingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!currentProfile) return;
+  if (!currentProfile || !profileSettingsEditing) return;
   const form = new FormData(profileSettingsForm);
   const displayName = String(form.get("display_name") || "").trim();
   const birthDate = String(form.get("birth_date") || "");
@@ -363,6 +1128,52 @@ profileSettingsForm.addEventListener("submit", async (event) => {
       if (fullPageLifeOpen) scrollFullPageToDate(currentProgress.today);
     });
     showToast("个人档案已更新", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+});
+
+recoveryCredentialForm?.elements.generate?.addEventListener("change", syncRecoveryCredentialMode);
+
+recoveryCredentialForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(recoveryCredentialForm);
+  const generate = Boolean(recoveryCredentialForm.elements.generate?.checked);
+  const submit = recoveryCredentialForm.querySelector('button[type="submit"]');
+  const confirmed = await askConfirmation({
+    eyebrow: "安全设置",
+    title: "更换恢复密钥？",
+    message: "更换后原恢复密钥会立即失效。当前 PIN 与加密内容不变；此前导出的旧备份仍需要它们导出当时的恢复密钥。",
+    confirmLabel: "更换恢复密钥",
+    tone: "warning",
+  });
+  if (!confirmed) return;
+
+  try {
+    setButtonBusy(submit, true, "正在更换…");
+    const result = await api("/api/v1/auth/change-recovery", {
+      method: "POST",
+      body: JSON.stringify({
+        current_pin: form.get("current_pin"),
+        generate,
+        new_recovery_secret: generate ? null : form.get("new_recovery_secret"),
+        confirm_new_recovery_secret: generate ? null : form.get("confirm_new_recovery_secret"),
+      }),
+    }, true);
+    recoveryCredentialForm.reset();
+    syncRecoveryCredentialMode();
+    renderSecuritySummary(result.security);
+    if (result.generated_recovery_secret) {
+      showRecoverySecret(result.generated_recovery_secret, {
+        context: "settings",
+        title: "保存新的恢复密钥",
+        description: "这份新恢复密钥只显示一次。请离线保存；原恢复密钥已经失效。",
+      });
+    } else {
+      showToast("恢复密钥已更换，原恢复密钥已失效", "success");
+    }
   } catch (error) {
     showOperationError(error);
   } finally {
@@ -497,6 +1308,7 @@ async function loadHome({ enterFullPage = false } = {}) {
     monthPercentMetric.style.setProperty("--metric-progress", `${Math.max(0, Math.min(100, progress.month.percent))}%`);
     initializeLifeNavigator(progress);
     showView("home");
+    void refreshBackupHealthReminder();
     requestAnimationFrame(() => {
       renderLifeMapView(true);
       if (fullPageLifeOpen) {
@@ -552,8 +1364,7 @@ if (initForm) {
       });
       setToken(data.token);
       if (data.generated_recovery_secret) {
-        document.getElementById("recoveryValue").textContent = data.generated_recovery_secret;
-        document.getElementById("recoveryModal").classList.remove("hidden");
+        showRecoverySecret(data.generated_recovery_secret, { context: "initialize" });
       } else {
         await loadHome({ enterFullPage: true });
       }
@@ -612,11 +1423,17 @@ lockButton.addEventListener("click", async () => {
 
 document.getElementById("refreshButton").addEventListener("click", () => loadHome());
 document.getElementById("closeRecovery").addEventListener("click", async () => {
-  document.getElementById("recoveryModal").classList.add("hidden");
-  await loadHome({ enterFullPage: true });
+  recoveryModal.classList.add("hidden");
+  recoveryValue.textContent = "";
+  if (recoveryModalContext === "initialize") {
+    await loadHome({ enterFullPage: true });
+  } else {
+    showToast("新的恢复密钥已生效", "success");
+    recoveryCredentialForm?.elements.current_pin?.focus({ preventScroll: true });
+  }
 });
 document.getElementById("copyRecovery").addEventListener("click", async () => {
-  await navigator.clipboard.writeText(document.getElementById("recoveryValue").textContent);
+  await navigator.clipboard.writeText(recoveryValue.textContent);
   showToast("恢复密钥已复制");
 });
 

@@ -1,8 +1,18 @@
-# 人生图谱 LifeGraph v0.0.3
+# 人生图谱 LifeGraph v0.0.4
 
-人生图谱是一个以生命时间为骨架、以本地加密仓库保存事件、记忆与计划的个人数字档案系统。v0.0.3 完成内容管理、回收站、全页日图和个人安全设置闭环。
+人生图谱是一个以生命时间为骨架、以本地加密仓库保存事件、记忆与计划的个人数字档案系统。v0.0.4 正式完成加密仓库的一致性备份、`.lifevault` 迁移与恢复、本地自动备份、备份健康验证、恢复密钥轮换和个人设置结构收口。
 
-## v0.0.3 核心能力
+## v0.0.4 正式能力
+
+### 个人设置窗口
+
+- 设置窗口按“个人档案／安全设置／备份与迁移”分成三个通栏分组；
+- 每个分组使用独立图标、浅色标题条、边框和留白，长窗口中也能快速定位；
+- 修改恢复密钥归入安全设置，不再与备份功能混在一起；
+- “恢复凭据”用户界面文案统一为“恢复密钥”，明确它是应急钥匙而不是第二个日常 PIN；
+- 打开个人设置时，姓名与出生日期默认以只读摘要显示；
+- 点击“编辑个人档案”后才显示输入框、PIN 确认和保存按钮；
+- 取消编辑会直接回到只读摘要，不关闭整个设置窗口。
 
 ### 时间图谱
 
@@ -24,13 +34,45 @@
 - revision 乐观并发校验阻止旧页面覆盖或误删新版本内容；
 - 未保存表单关闭、切换、锁定或离开页面前提供保护提示。
 
+
+### 备份、迁移与恢复
+
+- 个人设置弹窗始终限制在浏览器可视高度内；
+- 弹窗标题和关闭按钮固定，档案、安全及备份内容在独立区域内滚动；
+- 滚动条轨道保持隐藏，鼠标滚轮、触控板和触摸滚动仍可使用；
+- 个人设置提供“备份与迁移”区域；
+- 支持启用每天或每周本地自动备份，并设置保留 3—50 个历史版本；
+- 启用时立即生成首个已验证备份，后续在仓库正常使用且周期到期时自动生成；
+- 自动备份写入 `data/backups/auto/`，与 `data/recovery/` 中的恢复前安全备份分离；
+- 支持查看备份历史、下载单个备份、删除单项和清空自动备份历史；
+- 自动备份区域显示健康、待验证、已超期、失败、异常、未启用或尚无备份等状态；
+- 新生成的自动备份会重新读取落盘文件，并完成结构、SHA-256、SQLite、外键与全部密文恢复验证；
+- 支持一键再次验证最近备份，验证结果和时间写入不含秘密的备份策略摘要；
+- 自动备份超期、失败或文件异常时，首页与全页视图的“个人设置”按钮显示非打扰式提醒点；
+- 自动清理只作用于超出保留数量的自动备份，不影响当前仓库、手动导出文件和恢复前安全备份；
+- 自动备份失败会记录错误并延迟重试，不会把已成功的普通内容操作变成失败；
+- 可执行当前仓库完整性检查，验证 SQLite、外键和全部加密记录；
+- 可导出 `.lifevault` 一致性加密备份；
+- 导出时使用 SQLite Backup API 获取一个已提交状态的独立快照，兼容 WAL 模式；
+- 可上传 `.lifevault` 并使用该备份对应的 PIN 或恢复密钥执行完整恢复演练；
+- 演练会验证 ZIP 结构、格式版本、文件大小、SHA-256、SQLite、外键和每条加密记录；
+- 正式恢复前必须再次确认，系统会先把当前仓库自动保存到 `data/recovery/`；
+- 恢复采用候选文件验证、替换后复验和失败自动回滚；
+- 恢复成功后撤销全部会话，必须使用导入备份对应的凭据重新解锁；
+- 清单不包含姓名、出生日期、标题、正文、PIN 或恢复密钥明文。
+
 ### 个人档案与安全
 
 - 姓名、出生日期、事件、记忆和计划正文均在本地加密保存；
 - 支持修改姓名和出生日期，保存前验证当前 PIN；
 - 修改出生日期后重新计算人生进度与图谱范围，原内容的公历时间不移动；
 - 支持修改 PIN，只重新包装同一随机主密钥，不重写业务密文；
-- 忘记 PIN 时可使用恢复凭据重置；
+- 忘记 PIN 时可使用恢复密钥重置；
+- 支持使用当前 PIN 更换恢复密钥，可自动生成高强度凭据或填写自定义凭据；
+- 更换后原恢复密钥立即失效，当前 PIN 和业务密文保持不变；
+- 已导出的旧 `.lifevault` 仍使用导出当时的 PIN 与恢复密钥；
+- 个人设置可查看 PIN／恢复密钥槽的 Argon2id 状态和最近更新时间；
+- 本地安全审计摘要只记录初始化、PIN 变更、恢复密钥轮换和仓库恢复等操作类型与时间，不记录秘密或私人正文；
 - 修改 PIN 后撤销当前会话并要求重新解锁；
 - 锁定仓库后无法读取或修改私人内容。
 
@@ -39,9 +81,9 @@
 项目采用“SQLite 结构索引 + AES-GCM 加密业务正文”：
 
 - 随机 256 位仓库主密钥负责加密档案和内容正文；
-- PIN 与恢复凭据通过 Argon2id 派生包装密钥，用于包装同一主密钥；
+- PIN 与恢复密钥通过 Argon2id 派生包装密钥，用于包装同一主密钥；
 - `vault.json` 只保存 KDF 参数和被包装的主密钥；
-- PIN、恢复凭据、姓名、出生日期、标题和正文不会以明文写入 SQLite；
+- PIN、恢复密钥、姓名、出生日期、标题和正文不会以明文写入 SQLite；
 - 查询所需的时间范围、范围键、ID、版本号和时间戳保留为结构字段；
 - 前端不直接访问 SQLite，也不把正文写入 `localStorage`。
 
@@ -98,13 +140,13 @@ python scripts\run_dev.py
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-v0.0.3 稳定基线：
+v0.0.4 当前基线：
 
 ```text
-62 passed
+91 passed
 ```
 
-测试覆盖初始化与解锁、加密与密钥包装、时区与进度、schema 迁移、年／月／日内容新增编辑删除、回收站、个人档案修改、PIN 修改与恢复凭据重置，以及关键前端结构与交互保护。
+测试覆盖初始化与解锁、加密与密钥包装、时区与进度、schema 迁移、年／月／日内容新增编辑删除、回收站、个人档案修改、PIN 修改与恢复密钥重置、一致性快照、`.lifevault` 清单校验、恢复演练、自动导入、恢复前安全备份、本地自动备份周期、历史保留、下载删除、备份健康状态、超期判定、落盘文件快速验证、损坏识别、恢复密钥轮换、密钥槽摘要、安全审计兼容和异目录恢复。
 
 ## 数据目录
 
@@ -137,7 +179,9 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 - 个人档案：`GET /api/v1/profile`、`PUT /api/v1/profile`
 - 出生日期影响预览：`POST /api/v1/profile/change-impact`
 - 修改 PIN：`POST /api/v1/auth/change-pin`
-- 恢复凭据重置 PIN：`POST /api/v1/auth/reset-pin`
+- 恢复密钥重置 PIN：`POST /api/v1/auth/reset-pin`
+- 更换恢复密钥：`POST /api/v1/auth/change-recovery`
+- 密钥槽与安全审计摘要：`GET /api/v1/security/summary`
 - 日期详情：`GET /api/v1/dates/{date}`
 - 时间范围详情：`GET /api/v1/periods/{scope}/{period_key}`
 - 新增内容：`POST /api/v1/events|memories|plans`
@@ -147,9 +191,29 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 - 恢复内容：`POST /api/v1/trash/{kind}/{content_id}/restore`
 - 彻底删除：`DELETE /api/v1/trash/{kind}/{content_id}`
 - 清空回收站：`DELETE /api/v1/trash`
+- 备份检查：`GET /api/v1/backup/check`
+- 导出备份：`GET /api/v1/backup/export`
+- 导入演练：`POST /api/v1/backup/import/check`
+- 恢复备份：`POST /api/v1/backup/import`
+- 自动备份状态与设置：`GET|PUT /api/v1/backup/auto`
+- 立即自动备份：`POST /api/v1/backup/auto/run`
+- 验证最近自动备份：`POST /api/v1/backup/auto/verify-latest`
+- 自动备份历史：`GET /api/v1/backup/auto/history`
+- 下载／删除历史备份：`GET|DELETE /api/v1/backup/auto/history/{filename}`
+- 清空自动备份历史：`POST /api/v1/backup/auto/history/clear`
 
 ## 版本文档
 
+- `docs/ACCEPTANCE_v0.0.4.md`
+- `docs/STABLE_RELEASE_v0.0.4.md`
+- `docs/GIT_COMMIT_v0.0.4.md`
+- `docs/ACCEPTANCE_v0.0.4.7.md`
+- `docs/ACCEPTANCE_v0.0.4.5.md`
+- `docs/ACCEPTANCE_v0.0.4.4.md`
+- `docs/ACCEPTANCE_v0.0.4.3.md`
+- `docs/ACCEPTANCE_v0.0.4.2.md`
+- `docs/ACCEPTANCE_v0.0.4.1.md`
+- `docs/LIFEVAULT_FORMAT.md`
 - `docs/ACCEPTANCE_v0.0.3.md`
 - `docs/STABLE_RELEASE_v0.0.3.md`
 - `docs/GIT_COMMIT_v0.0.3.md`
@@ -159,4 +223,4 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 
 ## 当前边界
 
-v0.0.3 暂不包含照片和附件、文件扫描、农历、浏览器插件、多设备同步及云端协作。
+v0.0.4 暂不包含照片和附件、文件扫描、农历、浏览器插件、多设备同步及云端协作。
