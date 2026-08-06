@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>人生图谱 · v0.0.2</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.2.4">
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.2">
 </head>
 <body>
   <main class="app-shell">
@@ -15,7 +15,7 @@
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.2.4</span>
+          <span class="build-badge">v0.0.2</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="lockButton" class="ghost-button hidden" type="button">锁定仓库</button>
         </div>
@@ -95,26 +95,36 @@
 
         <section class="metric-grid">
           <article class="metric-card panel">
-            <span>人生第</span><strong id="lifeDay">—</strong><small>天</small>
+            <strong id="lifeDay">—</strong>
+            <p class="metric-note">步履不停，慢慢走，沿途皆是风景。</p>
           </article>
           <article class="metric-card panel">
-            <span>今年进度</span><strong id="yearPercent">—</strong><small id="yearRemaining">—</small>
+            <strong id="yearPercent">—</strong>
+            <p id="yearMetricNote" class="metric-note">途径——，不赶时间，去吹吹风，年度结余——天。</p>
           </article>
           <article class="metric-card panel">
-            <span>本月进度</span><strong id="monthPercent">—</strong><small id="monthRemaining">—</small>
+            <strong id="monthPercent">—</strong>
+            <p id="monthMetricNote" class="metric-note">本月小憩，看一看，走走停停，本月还有——天。</p>
           </article>
         </section>
       </div>
 
       <section class="panel life-map-panel">
-        <div class="section-row life-map-head">
-          <div class="life-map-title">
-            <p class="eyebrow">100 年生命格</p>
-            <h2>已经走过的日子</h2>
+        <div class="life-map-toolbar">
+          <div class="life-map-toolbar-main">
+            <div class="life-map-heading">
+              <p class="eyebrow">人生图谱视图</p>
+              <h2 id="lifeMapViewTitle">人生总览</h2>
+            </div>
+            <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
+              <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">人生</button>
+              <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
+              <button class="life-view-tab" type="button" role="tab" data-life-view="year" aria-selected="false">年</button>
+            </div>
           </div>
-          <div class="life-map-side">
-            <span id="canvasTooltip" class="grid-hover-badge">指向：—</span>
-            <div class="legend">
+          <div class="life-map-description-row">
+            <p id="lifeMapViewSubtitle" class="subtle">保留完整人生日期格，并可切换查看整个目标人生范围的月、年图谱。</p>
+            <div class="legend life-map-legend-items" aria-label="图谱状态图例">
               <span><i class="past-dot"></i>已走过</span>
               <span><i class="today-dot"></i>今天</span>
               <span><i class="future-dot"></i>未来</span>
@@ -124,16 +134,38 @@
             </div>
           </div>
         </div>
-        <div class="canvas-wrap">
-          <canvas id="lifeCanvas" aria-label="100 年生命日期格" tabindex="0"></canvas>
+
+
+        <div id="lifeMapLifeView" class="life-map-view" role="tabpanel">
+          <div class="canvas-wrap">
+            <canvas id="lifeCanvas" aria-label="100 年生命日期格" tabindex="0"></canvas>
+          </div>
+          <p class="subtle">每行代表一岁，每一小格代表该生命年中的一天。悬停放大确认日期，单击可直接打开日期详情。</p>
         </div>
-        <p class="subtle">每行代表一岁，每一小格代表该生命年中的一天。点击任意日期格可打开当天详情。</p>
+
+        <div id="lifeMapYearView" class="life-map-view hidden" role="tabpanel" aria-label="年视图">
+          <div class="hierarchy-stage-wrap">
+            <div class="hierarchy-stage">
+              <div id="yearGrid" class="hierarchy-grid year-grid"></div>
+            </div>
+          </div>
+          <p class="subtle hierarchy-help">整个目标人生范围内的年份同时显示；年格最大，悬停查看年份，点击在右侧展开年度内容和 12 个月。</p>
+        </div>
+
+        <div id="lifeMapMonthView" class="life-map-view hidden" role="tabpanel" aria-label="月视图">
+          <div class="hierarchy-stage-wrap">
+            <div class="hierarchy-stage">
+              <div id="monthGrid" class="hierarchy-grid month-grid"></div>
+            </div>
+          </div>
+          <p class="subtle hierarchy-help">整个目标人生范围内的所有月份同时显示，包含过去与未来；悬停查看具体年月，点击在右侧展开整月内容和月内日期。</p>
+        </div>
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.2.4 当前闭环</p>
-        <h2>事件、记忆与未来计划已接入</h2>
-        <p>点击任意生命日期格，可以添加加密事件、个人记忆；今天及未来日期还可以安排未来计划。</p>
+        <p class="eyebrow">v0.0.2 稳定版</p>
+        <h2>三级全范围图谱与时间范围内容</h2>
+        <p>人生、年、月三个视图覆盖完整目标人生范围；事件、记忆和计划既能挂在具体日期，也能直接挂在整月或整年。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
@@ -141,13 +173,21 @@
       </section>
     </section>
 
+    <div id="hierarchyPointerTooltip" class="hierarchy-pointer-tooltip hidden" aria-hidden="true">
+      <div class="grid-magnifier-heading">
+        <strong id="hierarchyPointerTitle">—</strong>
+        <span id="hierarchyPointerMeta">—</span>
+      </div>
+      <small>点击打开对应时间范围详情</small>
+    </div>
+
     <div id="gridMagnifier" class="grid-magnifier hidden" aria-hidden="true">
       <div class="grid-magnifier-heading">
         <strong id="gridMagnifierDate">—</strong>
         <span id="gridMagnifierMeta">—</span>
       </div>
       <canvas id="gridMagnifierCanvas" aria-hidden="true"></canvas>
-      <small>白色双框为当前日期格 · 点击即可打开</small>
+      <small>白色双框为当前日期格 · 点击打开日期详情</small>
     </div>
 
     <div id="dateDrawerBackdrop" class="drawer-backdrop hidden" aria-hidden="true"></div>
@@ -158,7 +198,7 @@
           <h2 id="dateDrawerTitle">—</h2>
           <p id="dateDrawerMeta" class="drawer-meta">—</p>
         </div>
-        <button id="closeDateDrawer" class="icon-button" type="button" aria-label="关闭日期详情">×</button>
+        <button id="closeDateDrawer" class="icon-button" type="button" aria-label="关闭时间范围详情">×</button>
       </header>
 
       <div id="dateDrawerLoading" class="drawer-loading hidden">
@@ -167,11 +207,23 @@
       </div>
 
       <div id="dateDrawerContent" class="date-drawer-content hidden">
+        <section id="periodNavigator" class="period-navigator hidden" aria-label="时间范围内继续选择">
+          <div class="period-year-navigation" aria-label="按年份切换当前时间范围">
+            <button id="periodPreviousYear" class="period-year-nav-button" type="button">上一年</button>
+            <div id="periodDrawerBreadcrumb" class="period-drawer-breadcrumb"></div>
+            <button id="periodNextYear" class="period-year-nav-button" type="button">下一年</button>
+          </div>
+          <div id="periodWeekdayHeader" class="period-weekday-header hidden" aria-label="星期">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+          </div>
+          <div id="periodChildGrid" class="period-child-grid"></div>
+        </section>
+
         <section class="drawer-section">
           <div class="drawer-section-title">
             <div>
               <p class="eyebrow">正式事件</p>
-              <h3>这一天发生了什么</h3>
+              <h3 id="eventSectionHeading">这一天发生了什么</h3>
             </div>
             <button id="toggleEventForm" class="secondary-button compact-button" type="button">＋ 添加事件</button>
           </div>
@@ -196,7 +248,7 @@
           <div class="drawer-section-title">
             <div>
               <p class="eyebrow">个人记忆</p>
-              <h3>我如何记得这一天</h3>
+              <h3 id="memorySectionHeading">我如何记得这一天</h3>
             </div>
             <button id="toggleMemoryForm" class="secondary-button compact-button" type="button">＋ 添加记忆</button>
           </div>
@@ -221,7 +273,7 @@
           <div class="drawer-section-title">
             <div>
               <p class="eyebrow">未来计划</p>
-              <h3>我准备在这一天做什么</h3>
+              <h3 id="planSectionHeading">我准备在这一天做什么</h3>
             </div>
             <button id="togglePlanForm" class="secondary-button compact-button" type="button">＋ 添加计划</button>
           </div>
@@ -261,6 +313,6 @@
 
     <div id="toast" class="toast hidden"></div>
   </main>
-  <script src="/assets/app.js?v=0.0.2.4"></script>
+  <script src="/assets/app.js?v=0.0.2"></script>
 </body>
 </html>

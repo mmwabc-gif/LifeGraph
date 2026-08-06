@@ -194,7 +194,15 @@ class VaultManager:
             raise VaultError("个人档案不存在")
         return profile
 
-    def create_event(self, *, event_date: str, title: str, content: str) -> dict[str, Any]:
+    def create_event(
+        self,
+        *,
+        event_date: str,
+        title: str,
+        content: str,
+        time_scope: str = "day",
+        period_key: str | None = None,
+    ) -> dict[str, Any]:
         with self._mutex:
             master_key = self.require_master_key()
             profile = self.get_profile()
@@ -204,20 +212,34 @@ class VaultManager:
                 event_id=str(uuid.uuid4()),
                 profile_id=profile["id"],
                 event_date=event_date,
+                time_scope=time_scope,
+                period_key=period_key or event_date,
                 payload={"title": title, "content": content},
                 timestamp=now,
             )
 
-    def list_events_for_date(self, event_date: str) -> list[dict[str, Any]]:
+    def list_events_for_period(self, time_scope: str, period_key: str) -> list[dict[str, Any]]:
         master_key = self.require_master_key()
         profile = self.get_profile()
-        return self.database.list_events_for_date(
+        return self.database.list_events_for_period(
             master_key,
             profile_id=profile["id"],
-            event_date=event_date,
+            time_scope=time_scope,
+            period_key=period_key,
         )
 
-    def create_memory(self, *, memory_date: str, title: str, content: str) -> dict[str, Any]:
+    def list_events_for_date(self, event_date: str) -> list[dict[str, Any]]:
+        return self.list_events_for_period("day", event_date)
+
+    def create_memory(
+        self,
+        *,
+        memory_date: str,
+        title: str,
+        content: str,
+        time_scope: str = "day",
+        period_key: str | None = None,
+    ) -> dict[str, Any]:
         with self._mutex:
             master_key = self.require_master_key()
             profile = self.get_profile()
@@ -227,20 +249,34 @@ class VaultManager:
                 memory_id=str(uuid.uuid4()),
                 profile_id=profile["id"],
                 memory_date=memory_date,
+                time_scope=time_scope,
+                period_key=period_key or memory_date,
                 payload={"title": title, "content": content},
                 timestamp=now,
             )
 
-    def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
+    def list_memories_for_period(self, time_scope: str, period_key: str) -> list[dict[str, Any]]:
         master_key = self.require_master_key()
         profile = self.get_profile()
-        return self.database.list_memories_for_date(
+        return self.database.list_memories_for_period(
             master_key,
             profile_id=profile["id"],
-            memory_date=memory_date,
+            time_scope=time_scope,
+            period_key=period_key,
         )
 
-    def create_plan(self, *, plan_date: str, title: str, content: str) -> dict[str, Any]:
+    def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
+        return self.list_memories_for_period("day", memory_date)
+
+    def create_plan(
+        self,
+        *,
+        plan_date: str,
+        title: str,
+        content: str,
+        time_scope: str = "day",
+        period_key: str | None = None,
+    ) -> dict[str, Any]:
         with self._mutex:
             master_key = self.require_master_key()
             profile = self.get_profile()
@@ -250,20 +286,26 @@ class VaultManager:
                 plan_id=str(uuid.uuid4()),
                 profile_id=profile["id"],
                 plan_date=plan_date,
+                time_scope=time_scope,
+                period_key=period_key or plan_date,
                 payload={"title": title, "content": content},
                 timestamp=now,
             )
 
-    def list_plans_for_date(self, plan_date: str) -> list[dict[str, Any]]:
+    def list_plans_for_period(self, time_scope: str, period_key: str) -> list[dict[str, Any]]:
         master_key = self.require_master_key()
         profile = self.get_profile()
-        return self.database.list_plans_for_date(
+        return self.database.list_plans_for_period(
             master_key,
             profile_id=profile["id"],
-            plan_date=plan_date,
+            time_scope=time_scope,
+            period_key=period_key,
         )
 
-    def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, bool]]:
+    def list_plans_for_date(self, plan_date: str) -> list[dict[str, Any]]:
+        return self.list_plans_for_period("day", plan_date)
+
+    def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, dict[str, bool]]]:
         self.require_master_key()
         profile = self.get_profile()
         return self.database.get_content_status(

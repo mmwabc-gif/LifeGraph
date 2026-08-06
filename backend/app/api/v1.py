@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 from app.models import EventCreateRequest, InitializeRequest, MemoryCreateRequest, PlanCreateRequest, UnlockRequest
 from app.security.vault import VaultError, VaultManager
-from app.services.date_detail import DateOutOfLifeRange, describe_date
+from app.services.date_detail import DateOutOfLifeRange
+from app.services.periods import child_periods, resolve_period
 from app.services.progress import calculate_progress
 
 
@@ -53,11 +54,40 @@ def date_range_error(exc: DateOutOfLifeRange) -> HTTPException:
     )
 
 
+def invalid_period_error(exc: ValueError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"code": "INVALID_PERIOD", "message": str(exc)},
+    )
+
+
+def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
+    profile_value = vault.get_profile()
+    description = resolve_period(profile_value, scope, period_key)
+    events = vault.list_events_for_period(scope, period_key)
+    memories = vault.list_memories_for_period(scope, period_key)
+    plans = vault.list_plans_for_period(scope, period_key)
+    description.update(
+        {
+            "content_state": {
+                "has_event": bool(events),
+                "has_memory": bool(memories),
+                "has_plan": bool(plans),
+            },
+            "events": events,
+            "memories": memories,
+            "plans": plans,
+            "children": child_periods(profile_value, description),
+        }
+    )
+    return description
+
+
 @router.get("/system/status")
 def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     return envelope(
         {
-            "version": "0.0.2.4",
+            "version": "0.0.2",
             "initialized": vault.is_initialized,
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
@@ -149,11 +179,27 @@ def content_status(
             detail={"code": "DATE_RANGE_TOO_LARGE", "message": "日期范围过大"},
         )
     try:
-        dates = vault.get_content_status(
+        statuses = vault.get_content_status(
             start_date=start.isoformat(),
             end_date=end.isoformat(),
         )
-        return envelope({"dates": dates})
+        return envelope(statuses)
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/periods/{scope}/{period_key}", dependencies=[Depends(require_session)])
+def period_detail(
+    scope: Literal["year", "month", "day"],
+    period_key: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(period_content(vault, scope, period_key))
+    except DateOutOfLifeRange as exc:
+        raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
 
@@ -164,28 +210,16 @@ def date_detail(
     vault: Annotated[VaultManager, Depends(get_vault)],
 ) -> dict:
     try:
-        profile_value = vault.get_profile()
-        description = describe_date(profile_value, selected_date)
-        events = vault.list_events_for_date(selected_date.isoformat())
-        memories = vault.list_memories_for_date(selected_date.isoformat())
-        plans = vault.list_plans_for_date(selected_date.isoformat())
-        description.update(
-            {
-                "content_state": {
-                    "has_event": bool(events),
-                    "has_memory": bool(memories),
-                    "has_plan": bool(plans),
-                },
-                "events": events,
-                "memories": memories,
-                "plans": plans,
-            }
-        )
-        return envelope(description)
+        return envelope(period_content(vault, "day", selected_date.isoformat()))
     except DateOutOfLifeRange as exc:
         raise date_range_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
+
+
+def resolve_payload_target(vault: VaultManager, scope: str, period_key: str) -> dict:
+    profile_value = vault.get_profile()
+    return resolve_period(profile_value, scope, period_key)
 
 
 @router.post("/events", dependencies=[Depends(require_session)])
@@ -194,18 +228,22 @@ def create_event(
     vault: Annotated[VaultManager, Depends(get_vault)],
 ) -> dict:
     try:
-        profile_value = vault.get_profile()
-        describe_date(profile_value, payload.event_date)
+        description = resolve_payload_target(vault, payload.time_scope, payload.period_key or "")
         event = vault.create_event(
-            event_date=payload.event_date.isoformat(),
+            event_date=description["anchor_date"],
+            time_scope=payload.time_scope,
+            period_key=payload.period_key,
             title=payload.title,
             content=payload.content,
         )
         return envelope(event)
     except DateOutOfLifeRange as exc:
         raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
+
 
 @router.post("/memories", dependencies=[Depends(require_session)])
 def create_memory(
@@ -213,18 +251,22 @@ def create_memory(
     vault: Annotated[VaultManager, Depends(get_vault)],
 ) -> dict:
     try:
-        profile_value = vault.get_profile()
-        describe_date(profile_value, payload.memory_date)
+        description = resolve_payload_target(vault, payload.time_scope, payload.period_key or "")
         memory = vault.create_memory(
-            memory_date=payload.memory_date.isoformat(),
+            memory_date=description["anchor_date"],
+            time_scope=payload.time_scope,
+            period_key=payload.period_key,
             title=payload.title,
             content=payload.content,
         )
         return envelope(memory)
     except DateOutOfLifeRange as exc:
         raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
+
 
 @router.post("/plans", dependencies=[Depends(require_session)])
 def create_plan(
@@ -232,24 +274,25 @@ def create_plan(
     vault: Annotated[VaultManager, Depends(get_vault)],
 ) -> dict:
     try:
-        profile_value = vault.get_profile()
-        description = describe_date(profile_value, payload.plan_date)
-        if description["time_state"] == "past":
+        description = resolve_payload_target(vault, payload.time_scope, payload.period_key or "")
+        if not description["plan_allowed"]:
+            code = "PLAN_DATE_IN_PAST" if payload.time_scope == "day" else "PLAN_PERIOD_IN_PAST"
+            message = "未来计划不能安排在已经过去的日期" if payload.time_scope == "day" else "未来计划不能安排在已经结束的时间范围"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "PLAN_DATE_IN_PAST",
-                    "message": "未来计划不能安排在已经过去的日期",
-                },
+                detail={"code": code, "message": message},
             )
         plan = vault.create_plan(
-            plan_date=payload.plan_date.isoformat(),
+            plan_date=description["anchor_date"],
+            time_scope=payload.time_scope,
+            period_key=payload.period_key,
             title=payload.title,
             content=payload.content,
         )
         return envelope(plan)
     except DateOutOfLifeRange as exc:
         raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
-

@@ -695,3 +695,1088 @@ body.drawer-open {
   color: #8b8d87;
   box-shadow: none;
 }
+
+/* LifeGraph v0.0.2.8：人生／月／年视图顺序与悬停信息栏调整 */
+.life-map-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.life-map-heading {
+  min-width: 0;
+}
+
+.life-map-heading h2 {
+  margin-bottom: 7px;
+}
+
+.life-map-heading .subtle {
+  max-width: 720px;
+  margin-bottom: 0;
+}
+
+.life-view-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(3, minmax(66px, 1fr));
+  flex: 0 0 auto;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 4px;
+  background: rgba(255,255,255,.72);
+}
+
+.life-view-tab {
+  min-height: 40px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.life-view-tab:hover {
+  background: rgba(49,92,77,.07);
+  color: var(--accent);
+}
+
+.life-view-tab.is-active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(49,92,77,.18);
+}
+
+.life-view-tab:focus-visible,
+.hierarchy-cell:focus-visible,
+.breadcrumb-button:focus-visible {
+  outline: 3px solid rgba(49,92,77,.24);
+  outline-offset: 2px;
+}
+
+.life-map-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 46px;
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 9px 0;
+}
+
+.life-map-breadcrumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 800;
+}
+
+.breadcrumb-button {
+  border: 0;
+  border-radius: 9px;
+  padding: 5px 7px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.breadcrumb-button:hover {
+  background: var(--accent-soft);
+}
+
+.breadcrumb-current {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb-separator {
+  color: rgba(116,118,109,.65);
+}
+
+.life-map-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hierarchy-nav-button {
+  min-height: 36px;
+  border-radius: 11px;
+  padding: 0 12px;
+  font-size: .78rem;
+}
+
+.life-map-legend {
+  justify-content: flex-start;
+  margin-top: 14px;
+  align-items: center;
+}
+
+.life-map-view {
+  min-height: 498px;
+}
+
+.hierarchy-hover-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  margin-top: 0;
+  order: -1;
+}
+
+.life-map-navigation .hierarchy-hover-status .grid-hover-badge {
+  max-width: min(420px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 年、月视图与人生 Canvas 使用相同的 780 × 430 固定图谱区域。 */
+.hierarchy-stage-wrap {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  margin-top: 22px;
+  padding-bottom: 8px;
+}
+
+.hierarchy-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 780px;
+  height: 430px;
+  overflow: hidden;
+}
+
+.hierarchy-grid {
+  --hierarchy-cell-size: 18px;
+  --hierarchy-gap: 3px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, var(--hierarchy-cell-size));
+  grid-auto-rows: var(--hierarchy-cell-size);
+  align-content: center;
+  justify-content: center;
+  gap: var(--hierarchy-gap);
+  width: 100%;
+  max-height: 100%;
+  overflow: visible;
+  padding: 12px;
+}
+
+/* 年最大、月次之、人生日期格最小。 */
+.year-grid {
+  --hierarchy-cell-size: 44px;
+  --hierarchy-gap: 7px;
+}
+
+.month-grid {
+  --hierarchy-cell-size: 14px;
+  --hierarchy-gap: 1.5px;
+}
+
+.hierarchy-cell {
+  position: relative;
+  display: block;
+  width: var(--hierarchy-cell-size);
+  height: var(--hierarchy-cell-size);
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: clamp(2px, calc(var(--hierarchy-cell-size) * .11), 5px);
+  padding: 0;
+  background: var(--future);
+  color: transparent;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(36,37,31,.06);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+
+.year-grid .hierarchy-cell:hover:not(:disabled),
+.year-grid .hierarchy-cell:focus-visible:not(:disabled) {
+  z-index: 4;
+  transform: scale(1.18);
+  box-shadow: 0 0 0 2px rgba(255,255,255,.98), 0 0 0 4px rgba(36,37,31,.72), 0 8px 20px rgba(35,31,24,.2);
+}
+
+.month-grid .hierarchy-cell:hover:not(:disabled),
+.month-grid .hierarchy-cell:focus-visible:not(:disabled) {
+  z-index: 4;
+  transform: scale(1.65);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.98), 0 0 0 2px rgba(36,37,31,.72), 0 6px 14px rgba(35,31,24,.18);
+}
+
+.hierarchy-cell.is-past {
+  background: #315c4d;
+}
+
+.hierarchy-cell.is-current {
+  background: #c06b3e;
+}
+
+.hierarchy-cell.is-future {
+  background: #dfddd5;
+}
+
+.hierarchy-cell.is-selected {
+  box-shadow: 0 0 0 2px rgba(255,255,255,.96), 0 0 0 4px rgba(36,37,31,.72);
+}
+
+.month-grid .hierarchy-cell.is-selected {
+  box-shadow: 0 0 0 1px rgba(255,255,255,.98), 0 0 0 2px rgba(36,37,31,.78);
+}
+
+.hierarchy-cell:disabled {
+  cursor: default;
+  opacity: .18;
+  filter: grayscale(.55);
+}
+
+.hierarchy-cell.has-memory::after {
+  content: "";
+  position: absolute;
+  inset: max(1px, calc(var(--hierarchy-cell-size) * .09));
+  border: 1px solid #b9dfcf;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.hierarchy-cell.is-future.has-memory::after {
+  border-color: #477765;
+}
+
+.hierarchy-cell-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hierarchy-markers {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.hierarchy-event-marker,
+.hierarchy-plan-marker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: block;
+  transform: translate(-50%, -50%);
+}
+
+.hierarchy-event-marker {
+  width: clamp(3px, calc(var(--hierarchy-cell-size) * .14), 6px);
+  height: clamp(3px, calc(var(--hierarchy-cell-size) * .14), 6px);
+  border-radius: 50%;
+  background: #f0b84a;
+  box-shadow: 0 0 0 1px rgba(93,61,18,.2);
+}
+
+.hierarchy-plan-marker {
+  width: clamp(6px, calc(var(--hierarchy-cell-size) * .29), 13px);
+  height: clamp(6px, calc(var(--hierarchy-cell-size) * .29), 13px);
+  border: 1.5px solid #a8bfd4;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.month-grid .hierarchy-plan-marker {
+  border-width: 1px;
+}
+
+.hierarchy-cell.is-future .hierarchy-plan-marker {
+  border-color: #3f6fa5;
+}
+
+.hierarchy-help {
+  margin: 14px 0 0;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .life-map-toolbar,
+  .life-map-context-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .life-view-switch {
+    width: 100%;
+  }
+
+  .life-map-navigation,
+  .life-map-legend,
+  .hierarchy-hover-status {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 440px) {
+  .life-view-tab {
+    min-width: 0;
+    padding: 0 8px;
+  }
+}
+
+/* LifeGraph v0.0.2.7：年／月／日范围抽屉与范围内容 */
+.period-navigator {
+  border: 1px solid rgba(49,92,77,.18);
+  border-radius: 20px;
+  padding: 18px;
+  background: linear-gradient(145deg, rgba(231,240,235,.9), rgba(255,255,255,.78));
+}
+
+.period-year-navigation {
+  display: grid;
+  grid-template-columns: minmax(86px, 1fr) auto minmax(86px, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.period-year-nav-button {
+  border: 1px solid rgba(49,92,77,.18);
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(255,255,255,.84);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+  transition: background .14s ease, transform .14s ease, opacity .14s ease;
+}
+
+.period-year-nav-button:first-child {
+  justify-self: start;
+}
+
+.period-year-nav-button:last-child {
+  justify-self: end;
+}
+
+.period-year-nav-button:hover:not(:disabled),
+.period-year-nav-button:focus-visible:not(:disabled) {
+  background: var(--accent-soft);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.period-year-nav-button:disabled {
+  cursor: not-allowed;
+  opacity: .36;
+}
+
+.period-drawer-breadcrumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 30px;
+  margin: 0;
+  color: var(--muted);
+  font-size: .82rem;
+  text-align: center;
+}
+
+.period-drawer-breadcrumb button {
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(255,255,255,.82);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.period-drawer-breadcrumb button:hover {
+  background: var(--accent-soft);
+}
+
+.period-drawer-breadcrumb .is-current {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.period-breadcrumb-separator {
+  color: #a4a49c;
+}
+
+
+.period-child-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.period-navigator[data-scope="year"] .period-child-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.period-child-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 36px;
+  overflow: hidden;
+  border: 1px solid rgba(36,37,31,.08);
+  border-radius: 9px;
+  padding: 0 4px;
+  background: #dfddd5;
+  color: #363832;
+  cursor: pointer;
+  font-size: .76rem;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+
+.period-navigator[data-scope="year"] .period-child-cell {
+  min-height: 42px;
+  font-size: .82rem;
+}
+
+.period-child-cell.is-past {
+  background: #315c4d;
+  color: #f6f6f1;
+}
+
+.period-child-cell.is-current {
+  background: #c06b3e;
+  color: #fff8ef;
+}
+
+.period-child-cell.is-future {
+  background: #dfddd5;
+  color: #62635d;
+}
+
+.period-child-cell:hover,
+.period-child-cell:focus-visible {
+  z-index: 2;
+  transform: translateY(-1px) scale(1.04);
+  box-shadow: 0 0 0 2px rgba(255,255,255,.96), 0 0 0 4px rgba(36,37,31,.55), 0 8px 16px rgba(35,31,24,.16);
+  outline: none;
+}
+
+.period-child-cell.is-selected {
+  box-shadow: 0 0 0 2px rgba(255,255,255,.98), 0 0 0 4px rgba(36,37,31,.76);
+}
+
+.period-child-cell.has-memory {
+  border-color: #b9dfcf;
+  box-shadow: inset 0 0 0 2px rgba(185,223,207,.92);
+}
+
+.period-child-cell.has-event::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f0b84a;
+  box-shadow: 0 0 0 1px rgba(93,61,18,.18);
+}
+
+.period-child-cell.has-plan::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #78a2ce;
+  border-radius: 50%;
+}
+
+@media (max-width: 620px) {
+  .period-year-navigation {
+    grid-template-columns: minmax(68px, 1fr) auto minmax(68px, 1fr);
+    gap: 7px;
+  }
+
+  .period-year-nav-button {
+    padding: 6px 9px;
+    font-size: .72rem;
+  }
+
+  .period-child-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .period-navigator[data-scope="year"] .period-child-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.period-child-cell.is-selected.has-memory {
+  box-shadow: inset 0 0 0 2px rgba(185,223,207,.92), 0 0 0 2px rgba(255,255,255,.98), 0 0 0 4px rgba(36,37,31,.76);
+}
+
+/* LifeGraph v0.0.2.10：定位按钮、当前定位信息与图例分区布局修正 */
+.life-map-context-row {
+  height: 62px;
+  min-height: 62px;
+  box-sizing: border-box;
+  flex-direction: row;
+  align-items: center;
+}
+
+.life-map-breadcrumb {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+.life-map-context-row .hierarchy-hover-status {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  margin: 0;
+  order: initial;
+}
+
+.life-map-context-row .hierarchy-hover-status .grid-hover-badge {
+  max-width: min(480px, 52vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.life-map-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 44px;
+  flex-wrap: nowrap;
+}
+
+.life-map-legend .life-map-navigation {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+}
+
+.life-map-legend-items {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.life-map-legend-items > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .life-map-context-row {
+    height: 62px;
+    min-height: 62px;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .life-map-context-row .hierarchy-hover-status {
+    justify-content: flex-end;
+  }
+
+  .life-map-legend {
+    align-items: flex-start;
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+
+  .life-map-legend-items {
+    justify-content: flex-start;
+  }
+}
+
+
+/* LifeGraph v0.0.2.11：人生视图指向信息统一到标题导航行 */
+.life-map-context-row .hierarchy-hover-status {
+  visibility: visible;
+}
+
+
+/* LifeGraph v0.0.2.12：移除固定层级导航行，年/月指向信息跟随鼠标 */
+.life-map-context-row {
+  display: none !important;
+}
+
+.hierarchy-pointer-tooltip {
+  position: fixed;
+  z-index: 136;
+  width: 244px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  border: 1px solid rgba(31,54,45,.2);
+  border-radius: 16px;
+  background: rgba(251,250,246,.97);
+  box-shadow: 0 16px 44px rgba(35,31,24,.24);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.hierarchy-pointer-tooltip .grid-magnifier-heading {
+  margin-bottom: 0;
+}
+
+.hierarchy-pointer-tooltip small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .68rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .hierarchy-pointer-tooltip {
+    display: none !important;
+  }
+}
+
+/* LifeGraph v0.0.2.13：说明与图例同排，抽屉日期按周一至周日排列 */
+.life-map-toolbar {
+  display: block;
+}
+
+.life-map-toolbar-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.life-map-description-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 8px;
+}
+
+.life-map-description-row > .subtle {
+  min-width: 0;
+  max-width: 760px;
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.life-map-description-row .life-map-legend-items {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+  margin-left: auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+
+.life-map-description-row .life-map-legend-items > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.period-weekday-header {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0 0 7px;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.period-weekday-header.hidden {
+  display: none;
+}
+
+.period-weekday-header span {
+  padding: 2px 0 4px;
+}
+
+.period-child-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.period-navigator[data-scope="year"] .period-child-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.period-day-placeholder {
+  display: block;
+  min-height: 36px;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.period-child-cell.is-outside-life,
+.period-child-cell.is-outside-life:disabled {
+  cursor: not-allowed;
+  border-color: rgba(36,37,31,.06);
+  background: rgba(223,221,213,.42);
+  color: rgba(98,99,93,.42);
+  box-shadow: none;
+  opacity: .72;
+}
+
+.period-child-cell.is-outside-life:hover,
+.period-child-cell.is-outside-life:focus-visible {
+  transform: none;
+  box-shadow: none;
+}
+
+@media (max-width: 860px) {
+  .life-map-description-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .life-map-description-row .life-map-legend-items {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .life-map-toolbar-main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .period-weekday-header,
+  .period-child-grid {
+    gap: 5px;
+  }
+
+  .period-navigator[data-scope="year"] .period-child-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+
+/* LifeGraph v0.0.2.18：抽屉时间格紧凑化与首页指标内嵌进度条 */
+.metric-card {
+  min-height: 142px;
+}
+
+.metric-card strong {
+  --metric-progress: 0%;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  box-sizing: border-box;
+  margin: 7px 0 9px;
+  padding: 5px 16px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(49,92,77,.11);
+  border-radius: 17px;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(49,92,77,.24) 0,
+      rgba(49,92,77,.24) var(--metric-progress),
+      rgba(49,92,77,.055) var(--metric-progress),
+      rgba(49,92,77,.055) 100%
+    );
+  color: var(--ink);
+  font-size: clamp(1.65rem, 3.15vw, 2.35rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(255,255,255,.55);
+}
+
+.period-navigator {
+  padding: 14px;
+  border-radius: 18px;
+}
+
+.period-year-navigation {
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.period-child-grid,
+.period-weekday-header {
+  gap: 5px;
+}
+
+.period-child-cell,
+.period-day-placeholder {
+  height: 30px;
+  min-height: 30px;
+}
+
+.period-child-cell {
+  border-radius: 8px;
+  padding: 0 3px;
+  font-size: .7rem;
+}
+
+.period-navigator[data-scope="year"] .period-child-cell,
+.period-navigator[data-scope="year"] .period-day-placeholder {
+  height: 34px;
+  min-height: 34px;
+}
+
+.period-navigator[data-scope="year"] .period-child-cell {
+  font-size: .76rem;
+}
+
+.period-weekday-header {
+  margin-bottom: 5px;
+  font-size: .68rem;
+}
+
+.period-weekday-header span {
+  padding: 1px 0 2px;
+}
+
+@media (max-width: 620px) {
+  .metric-card strong {
+    min-height: 52px;
+    padding-inline: 13px;
+    font-size: 1.65rem;
+  }
+
+  .period-navigator {
+    padding: 11px;
+  }
+
+  .period-child-cell,
+  .period-day-placeholder {
+    height: 28px;
+    min-height: 28px;
+  }
+
+  .period-navigator[data-scope="year"] .period-child-cell,
+  .period-navigator[data-scope="year"] .period-day-placeholder {
+    height: 32px;
+    min-height: 32px;
+  }
+}
+
+
+/* LifeGraph v0.0.2.19：人生视图 Canvas 自适应宽度，移除横向滚动条 */
+.canvas-wrap {
+  overflow-x: hidden;
+  overflow-y: hidden;
+  padding-bottom: 0;
+}
+
+#lifeCanvas {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+
+/* LifeGraph v0.0.2.20：指标标题与剩余信息同排，进度数字居中 */
+.metric-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 8px;
+}
+
+.metric-card > span {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  min-width: 0;
+  font-weight: 700;
+  text-align: left;
+}
+
+.metric-card > small {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  max-width: 100%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.metric-card > strong {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-content: center;
+  margin: 0;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .metric-card {
+    column-gap: 10px;
+  }
+
+  .metric-card > small {
+    white-space: normal;
+  }
+}
+
+
+/* LifeGraph v0.0.2.21：进度卡文案与行程寄语 */
+.metric-card {
+  grid-template-rows: auto auto auto;
+  row-gap: 8px;
+  min-height: 158px;
+}
+
+.metric-card > .metric-note {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  justify-self: end;
+  margin: 0;
+  color: var(--muted);
+  font-size: .86rem;
+  line-height: 1.45;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .metric-card {
+    min-height: 150px;
+  }
+
+  .metric-card > .metric-note {
+    font-size: .8rem;
+  }
+}
+
+
+/* LifeGraph v0.0.2.22：进度卡文字层级与进度条紧凑化 */
+.metric-card {
+  min-height: 142px;
+  row-gap: 6px;
+}
+
+.metric-card > span,
+.metric-card > small,
+.metric-card > .metric-note {
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.metric-card > strong {
+  min-height: 46px;
+  margin: 0;
+  padding: 4px 12px 5px;
+  border-radius: 15px;
+  font-size: clamp(1.45rem, 2.6vw, 2rem);
+  letter-spacing: -.035em;
+}
+
+@media (max-width: 760px) {
+  .metric-card {
+    min-height: 136px;
+    row-gap: 5px;
+  }
+
+  .metric-card > span,
+  .metric-card > small,
+  .metric-card > .metric-note {
+    font-size: .8rem;
+  }
+
+  .metric-card > strong {
+    min-height: 43px;
+    padding-inline: 10px;
+    font-size: 1.45rem;
+  }
+}
+
+
+/* LifeGraph v0.0.2.23：进度卡移除抬头行，合并行程文案 */
+.metric-card {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  row-gap: 8px;
+  min-height: 118px;
+  padding-block: 20px;
+}
+
+.metric-card > strong {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+}
+
+.metric-card > .metric-note {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .metric-card {
+    min-height: 112px;
+    padding-block: 18px;
+  }
+
+  .metric-card > .metric-note {
+    font-size: .78rem;
+  }
+}
+
+
+/* LifeGraph v0.0.2.24：进度卡下方文案统一居中 */
+.metric-card > .metric-note {
+  justify-self: stretch;
+  width: 100%;
+  text-align: center;
+}
