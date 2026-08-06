@@ -39,6 +39,65 @@ class UnlockRequest(BaseModel):
     secret: str = Field(min_length=1, max_length=256)
 
 
+
+
+class ProfileImpactRequest(BaseModel):
+    birth_date: date
+
+
+class ProfileUpdateRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+    birth_date: date
+    current_pin: str
+    revision: int = Field(ge=1)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("姓名不能为空")
+        return cleaned
+
+    @field_validator("current_pin")
+    @classmethod
+    def validate_current_pin(cls, value: str) -> str:
+        if not value.isdigit() or not 6 <= len(value) <= 12:
+            raise ValueError("当前 PIN 必须为 6—12 位数字")
+        return value
+
+
+class PinChangeRequest(BaseModel):
+    current_pin: str
+    new_pin: str
+    confirm_new_pin: str
+
+    @model_validator(mode="after")
+    def validate_pins(self) -> "PinChangeRequest":
+        for label, value in (("当前 PIN", self.current_pin), ("新 PIN", self.new_pin)):
+            if not value.isdigit() or not 6 <= len(value) <= 12:
+                raise ValueError(f"{label} 必须为 6—12 位数字")
+        if self.new_pin != self.confirm_new_pin:
+            raise ValueError("两次输入的新 PIN 不一致")
+        if self.new_pin == self.current_pin:
+            raise ValueError("新 PIN 不能与当前 PIN 相同")
+        return self
+
+
+class PinResetRequest(BaseModel):
+    recovery_secret: str = Field(min_length=12, max_length=256)
+    new_pin: str
+    confirm_new_pin: str
+
+    @model_validator(mode="after")
+    def validate_pins(self) -> "PinResetRequest":
+        if not self.new_pin.isdigit() or not 6 <= len(self.new_pin) <= 12:
+            raise ValueError("新 PIN 必须为 6—12 位数字")
+        if self.new_pin != self.confirm_new_pin:
+            raise ValueError("两次输入的新 PIN 不一致")
+        return self
+
+
 class ScopedContentRequest(BaseModel):
     time_scope: TimeScope = "day"
     period_key: str | None = Field(default=None, max_length=10)
@@ -83,6 +142,33 @@ class ScopedContentRequest(BaseModel):
             except ValueError as exc:
                 raise ValueError("日期格式无效") from exc
         return self
+
+
+class ContentUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(default="", max_length=20_000)
+    revision: int = Field(ge=1)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("标题不能为空")
+        return cleaned
+
+    @field_validator("content")
+    @classmethod
+    def clean_content(cls, value: str) -> str:
+        return value.strip()
+
+
+class ContentDeleteRequest(BaseModel):
+    revision: int = Field(ge=1)
+
+
+class TrashClearRequest(BaseModel):
+    confirm: Literal["EMPTY_TRASH"]
 
 
 class EventCreateRequest(ScopedContentRequest):

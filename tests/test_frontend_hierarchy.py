@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.2"' in javascript
+    assert 'const frontendBuildVersion = "0.0.3"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -82,6 +82,9 @@ def test_period_drawer_supports_year_month_and_day_content() -> None:
 
 def test_view_tab_order_is_life_month_year() -> None:
     html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    assert '<h2 id="lifeMapViewTitle">太阳每天都是新的</h2>' in html
+    assert 'data-life-view="life" aria-selected="true">日</button>' in html
 
     life_pos = html.index('data-life-view="life"')
     month_pos = html.index('data-life-view="month"')
@@ -254,3 +257,151 @@ def test_metric_cards_merge_labels_into_notes_below_progress() -> None:
     assert '.metric-card > .metric-note {' in css
     assert '/* LifeGraph v0.0.2.24：进度卡下方文案统一居中 */' in css
     assert 'text-align: center;' in css
+
+
+def test_content_cards_support_encrypted_editing_flow() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'async function startContentEdit(kind, item)' in javascript
+    assert 'editButton.textContent = "编辑";' in javascript
+    assert 'config.form.dataset.editId = item.id;' in javascript
+    assert 'config.form.dataset.editRevision = String(item.revision);' in javascript
+    assert 'config.form.querySelector(\'[name="title"]\').value = item.title || "";' in javascript
+    assert 'method: editId ? "PUT" : "POST"' in javascript
+    assert 'revision: editRevision' in javascript
+    assert 'config.form.querySelector(\'button[type="submit"]\').textContent = "保存修改";' in javascript
+    assert 'toggleContentForm("event", false)' in javascript
+    assert 'toggleContentForm("memory", false)' in javascript
+    assert 'toggleContentForm("plan", false)' in javascript
+    assert 'captureContentFormSnapshot(kind);' in javascript
+    assert '.content-edit-button {' in css
+    assert '.event-form.is-editing,' in css
+
+
+def test_content_cards_support_confirmed_soft_delete() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'const frontendBuildVersion = "0.0.3"' in javascript
+    assert 'async function deleteScopedContent(kind, item, button)' in javascript
+    assert 'const confirmed = await askConfirmation({' in javascript
+    assert 'method: "DELETE"' in javascript
+    assert 'body: JSON.stringify({ revision: item.revision })' in javascript
+    assert 'content-delete-button' in javascript
+    assert '.content-delete-button {' in css
+
+
+def test_frontend_has_unified_recycle_bin_controls() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="trashButton"' in html
+    assert 'id="trashDrawerContent"' in html
+    assert 'id="emptyTrashButton"' in html
+    assert 'id="trashList"' in html
+    assert 'async function openTrashDrawer()' in javascript
+    assert '/api/v1/trash/${encodeURIComponent(item.kind)}' in javascript
+    assert 'body: JSON.stringify({ confirm: "EMPTY_TRASH" })' in javascript
+    assert 'className = "trash-restore-button"' in javascript
+    assert 'className = "trash-purge-button"' in javascript
+    assert '.trash-card' in css
+    assert '.trash-toolbar' in css
+
+
+def test_full_page_continuous_day_grid_is_available() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="openFullPageView"' in html
+    assert '>全页视图</button>' in html
+    assert '<h2>太阳每一天都是新的</h2>' in html
+    assert '>进入首页</button>' in html
+    assert 'async function loadHome({ enterFullPage = false } = {})' in javascript
+    assert 'if (enterFullPage) openFullPageLifeView();' in javascript
+    assert 'await loadHome({ enterFullPage: true });' in javascript
+    assert 'document.getElementById("refreshButton").addEventListener("click", () => loadHome());' in javascript
+    assert 'id="fullPageLifeView"' in html
+    assert 'id="fullPageLifeCanvas"' in html
+    assert 'id="fullPageDateTooltip"' in html
+    assert 'function drawFullPageLifeGrid(force = false)' in javascript
+    assert 'function resolveFullPageDateFromPointer(event)' in javascript
+    assert 'function scrollFullPageToDate(isoDate, behavior = "auto")' in javascript
+    assert 'openDateDrawer(resolved.isoDate)' in javascript
+    assert 'fullPageLifeCanvas.addEventListener("mousemove"' in javascript
+    assert 'fullPageLifeCanvas.addEventListener("click"' in javascript
+    assert 'document.documentElement.classList.add("full-page-life-open")' in javascript
+    assert 'document.documentElement.classList.remove("full-page-life-open")' in javascript
+    assert 'html.full-page-life-open' in css
+    assert 'body.full-page-life-open' in css
+    assert 'scrollbar-width: none' in css
+    assert '.full-page-life-canvas-wrap::-webkit-scrollbar' in css
+    assert '.full-page-life-view {' in css
+    assert '.full-page-date-tooltip {' in css
+
+
+def test_full_page_header_grows_on_narrow_viewports():
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    assert "flex: 0 0 auto;" in css
+    assert "flex-shrink: 0;" in css
+    assert "height: auto;" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in css
+    assert "grid-column: 1 / -1;" in css
+
+
+def test_home_uses_completed_day_count_consistently() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="lifeSentence"' in html
+    assert 'document.getElementById("lifeSentence").textContent = `你已经走过 ${progress.life.elapsed_days.toLocaleString()} 天。`;' in javascript
+    assert 'lifeDayMetric.textContent = progress.life.elapsed_days.toLocaleString();' in javascript
+    assert 'lifeDayMetric.textContent = progress.life_day_number.toLocaleString();' not in javascript
+    assert 'lifeMapViewTitle.textContent = "太阳每天都是新的";' in javascript
+    assert '<h2 id="lifeMapViewTitle">太阳每天都是新的</h2>' in html
+
+
+def test_home_hero_copy_and_life_ring_percentage_are_centered():
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "LifeGraph v0.0.3.16：首页已走过天数说明字号协调" in stylesheet
+    assert "LifeGraph v0.0.3.16：首页已走过天数说明字号协调" in stylesheet
+    assert "font-size: clamp(.92rem, 1.55vw, 1.05rem);" in stylesheet
+    assert ".life-percent {\n  display: grid;\n  place-items: center;" in stylesheet
+    assert '<span>生命进度</span>' not in html
+
+
+
+def test_profile_and_security_settings_ui_is_available() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="settingsButton"' in html
+    assert 'id="fullPageSettingsButton"' in html
+    assert 'id="settingsModal"' in html
+    assert 'id="profileSettingsForm"' in html
+    assert 'id="changePinForm"' in html
+    assert 'id="resetPinModal"' in html
+    assert 'id="resetPinForm"' in html
+    assert 'id="openResetPin"' in html
+    assert 'api("/api/v1/profile/change-impact"' in javascript
+    assert 'api("/api/v1/profile"' in javascript
+    assert 'api("/api/v1/auth/change-pin"' in javascript
+    assert 'api("/api/v1/auth/reset-pin"' in javascript
+    assert '.settings-modal' in css
+    assert 'z-index: 270' in css
+
+
+def test_settings_modal_uses_natural_height_without_visible_scrollbars() -> None:
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "LifeGraph v0.0.3.17：个人设置弹窗自然高度与隐藏式小屏滚动" in stylesheet
+    assert ".settings-card {\n  width: min(760px, 100%);\n  max-height: none;\n  overflow: visible;" in stylesheet
+    assert ".settings-modal {\n  z-index: 270;\n  overflow: hidden;" in stylesheet
+    assert "@media (max-width: 760px), (max-height: 820px)" in stylesheet
+    assert ".settings-modal::-webkit-scrollbar" in stylesheet
+    assert "scrollbar-width: none;" in stylesheet

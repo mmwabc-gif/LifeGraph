@@ -5,7 +5,7 @@ import os
 import secrets
 import threading
 import uuid
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,7 +20,12 @@ from app.security.crypto import (
     wrap_master_key,
 )
 from app.security.sessions import Session, SessionManager
-from app.storage.database import Database
+from app.services.progress import add_years, today_for_timezone
+from app.storage.database import (
+    Database,
+    DatabaseContentNotFound,
+    DatabaseRevisionConflict,
+)
 
 
 PIN_AAD = b"lifegraph:v1:key-slot:pin"
@@ -30,6 +35,18 @@ VERIFY_TEXT = b"lifegraph-vault-ok-v1"
 
 
 class VaultError(ValueError):
+    pass
+
+
+class CredentialError(VaultError):
+    pass
+
+
+class ContentNotFound(VaultError):
+    pass
+
+
+class ContentRevisionConflict(VaultError):
     pass
 
 
@@ -194,6 +211,173 @@ class VaultManager:
             raise VaultError("个人档案不存在")
         return profile
 
+    def _verify_slot_secret(
+        self,
+        *,
+        slot_name: Literal["pin", "recovery"],
+        secret: str,
+        expected_master_key: bytes | None = None,
+    ) -> tuple[dict[str, Any], bytes]:
+        metadata = self._read_metadata()
+        aad = PIN_AAD if slot_name == "pin" else RECOVERY_AAD
+        try:
+            master_key = unwrap_master_key(metadata["key_slots"][slot_name], secret, aad=aad)
+            verification = metadata["verification"]
+            plain = decrypt_bytes(
+                master_key,
+                b64d(verification["nonce"]),
+                b64d(verification["ciphertext"]),
+                aad=VERIFY_AAD,
+            )
+            if plain != VERIFY_TEXT:
+                raise CredentialError("凭据验证失败")
+            if expected_master_key is not None and not secrets.compare_digest(
+                master_key, expected_master_key
+            ):
+                raise CredentialError("凭据与当前仓库不匹配")
+        except (CryptoError, KeyError, TypeError) as exc:
+            label = "当前 PIN" if slot_name == "pin" else "恢复凭据"
+            raise CredentialError(f"{label}不正确") from exc
+        return metadata, master_key
+
+    @staticmethod
+    def _validate_pin_value(pin: str, label: str = "PIN") -> None:
+        if not pin.isdigit() or not 6 <= len(pin) <= 12:
+            raise VaultError(f"{label} 必须为 6—12 位数字")
+
+    @staticmethod
+    def _profile_payload(profile: dict[str, Any]) -> dict[str, Any]:
+        metadata_keys = {"id", "created_at", "updated_at", "revision"}
+        return {key: value for key, value in profile.items() if key not in metadata_keys}
+
+    @staticmethod
+    def _period_intersects_life(
+        *,
+        time_scope: str,
+        period_key: str,
+        birth_date: date,
+        target_date: date,
+    ) -> bool:
+        try:
+            if time_scope == "day":
+                start = date.fromisoformat(period_key)
+                end = date.fromordinal(start.toordinal() + 1)
+            elif time_scope == "month":
+                year, month = map(int, period_key.split("-", 1))
+                start = date(year, month, 1)
+                if month == 12:
+                    end = date(year + 1, 1, 1)
+                else:
+                    end = date(year, month + 1, 1)
+            elif time_scope == "year":
+                year = int(period_key)
+                start = date(year, 1, 1)
+                end = date(year + 1, 1, 1)
+            else:
+                return False
+        except (TypeError, ValueError):
+            return False
+        return start < target_date and end > birth_date
+
+    def profile_change_impact(self, *, birth_date: str) -> dict[str, Any]:
+        profile = self.get_profile()
+        new_birth = date.fromisoformat(birth_date)
+        today, _ = today_for_timezone(profile.get("timezone"))
+        if new_birth > today:
+            raise VaultError("出生日期不能晚于今天")
+        new_target = add_years(new_birth, int(profile["target_age"]))
+        references = self.database.list_active_period_references(profile_id=profile["id"])
+        counts = {"event": 0, "memory": 0, "plan": 0}
+        for item in references:
+            if not self._period_intersects_life(
+                time_scope=item["time_scope"],
+                period_key=item["period_key"],
+                birth_date=new_birth,
+                target_date=new_target,
+            ):
+                counts[item["kind"]] += 1
+        return {
+            "birth_date": birth_date,
+            "target_date": new_target.isoformat(),
+            "hidden_content_count": sum(counts.values()),
+            "hidden_counts": counts,
+        }
+
+    def update_profile(
+        self,
+        *,
+        display_name: str,
+        birth_date: str,
+        current_pin: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            self._verify_slot_secret(
+                slot_name="pin", secret=current_pin, expected_master_key=master_key
+            )
+            profile = self.get_profile()
+            new_birth = date.fromisoformat(birth_date)
+            today, _ = today_for_timezone(profile.get("timezone"))
+            if new_birth > today:
+                raise VaultError("出生日期不能晚于今天")
+            payload = self._profile_payload(profile)
+            payload["display_name"] = display_name.strip()
+            payload["birth_date"] = birth_date
+            now = datetime.now(dt_timezone.utc).isoformat()
+            try:
+                return self.database.update_profile(
+                    master_key,
+                    profile_id=profile["id"],
+                    payload=payload,
+                    expected_revision=revision,
+                    timestamp=now,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
+
+    def change_pin(self, *, current_pin: str, new_pin: str) -> None:
+        with self._mutex:
+            self._validate_pin_value(current_pin, "当前 PIN")
+            self._validate_pin_value(new_pin, "新 PIN")
+            master_key = self.require_master_key()
+            metadata, verified_key = self._verify_slot_secret(
+                slot_name="pin", secret=current_pin, expected_master_key=master_key
+            )
+            if current_pin == new_pin:
+                raise VaultError("新 PIN 不能与当前 PIN 相同")
+            try:
+                params = KdfParams.from_dict(metadata["key_slots"]["pin"]["kdf"])
+            except (CryptoError, KeyError, TypeError) as exc:
+                raise VaultError("PIN 密钥槽元数据损坏") from exc
+            metadata["key_slots"]["pin"] = wrap_master_key(
+                verified_key, new_pin, aad=PIN_AAD, params=params
+            )
+            metadata["security_updated_at"] = datetime.now(dt_timezone.utc).isoformat()
+            self._write_metadata(metadata)
+            self.lock()
+
+    def reset_pin_with_recovery(self, *, recovery_secret: str, new_pin: str) -> None:
+        with self._mutex:
+            self._validate_pin_value(new_pin, "新 PIN")
+            if not self.is_initialized:
+                raise VaultError("仓库尚未初始化")
+            metadata, master_key = self._verify_slot_secret(
+                slot_name="recovery", secret=recovery_secret
+            )
+            try:
+                params = KdfParams.from_dict(metadata["key_slots"]["pin"]["kdf"])
+            except (CryptoError, KeyError, TypeError) as exc:
+                raise VaultError("PIN 密钥槽元数据损坏") from exc
+            metadata["key_slots"]["pin"] = wrap_master_key(
+                master_key, new_pin, aad=PIN_AAD, params=params
+            )
+            metadata["security_updated_at"] = datetime.now(dt_timezone.utc).isoformat()
+            self._write_metadata(metadata)
+            self.lock()
+
     def create_event(
         self,
         *,
@@ -230,6 +414,25 @@ class VaultManager:
 
     def list_events_for_date(self, event_date: str) -> list[dict[str, Any]]:
         return self.list_events_for_period("day", event_date)
+
+    def update_event(
+        self,
+        *,
+        event_id: str,
+        title: str,
+        content: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            kind="event",
+            content_id=event_id,
+            title=title,
+            content=content,
+            revision=revision,
+        )
+
+    def delete_event(self, *, event_id: str, revision: int) -> dict[str, Any]:
+        return self._delete_content(kind="event", content_id=event_id, revision=revision)
 
     def create_memory(
         self,
@@ -268,6 +471,25 @@ class VaultManager:
     def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
         return self.list_memories_for_period("day", memory_date)
 
+    def update_memory(
+        self,
+        *,
+        memory_id: str,
+        title: str,
+        content: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            kind="memory",
+            content_id=memory_id,
+            title=title,
+            content=content,
+            revision=revision,
+        )
+
+    def delete_memory(self, *, memory_id: str, revision: int) -> dict[str, Any]:
+        return self._delete_content(kind="memory", content_id=memory_id, revision=revision)
+
     def create_plan(
         self,
         *,
@@ -304,6 +526,140 @@ class VaultManager:
 
     def list_plans_for_date(self, plan_date: str) -> list[dict[str, Any]]:
         return self.list_plans_for_period("day", plan_date)
+
+    def update_plan(
+        self,
+        *,
+        plan_id: str,
+        title: str,
+        content: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            kind="plan",
+            content_id=plan_id,
+            title=title,
+            content=content,
+            revision=revision,
+        )
+
+    def delete_plan(self, *, plan_id: str, revision: int) -> dict[str, Any]:
+        return self._delete_content(kind="plan", content_id=plan_id, revision=revision)
+
+    def _delete_content(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            method = getattr(self.database, f"delete_{kind}")
+            id_name = f"{kind}_id"
+            try:
+                return method(
+                    **{
+                        id_name: content_id,
+                        "profile_id": profile["id"],
+                        "expected_revision": revision,
+                        "timestamp": now,
+                    },
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
+
+    def _update_content(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        title: str,
+        content: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            method = getattr(self.database, f"update_{kind}")
+            id_name = f"{kind}_id"
+            try:
+                return method(
+                    master_key,
+                    **{
+                        id_name: content_id,
+                        "profile_id": profile["id"],
+                        "payload": {"title": title, "content": content},
+                        "expected_revision": revision,
+                        "timestamp": now,
+                    },
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
+
+    def list_trash(self) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.list_deleted_content(master_key, profile_id=profile["id"])
+
+    def restore_trash_item(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            try:
+                return self.database.restore_deleted_content(
+                    kind=kind,
+                    content_id=content_id,
+                    profile_id=profile["id"],
+                    expected_revision=revision,
+                    timestamp=now,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
+
+    def permanently_delete_trash_item(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            try:
+                return self.database.permanently_delete_content(
+                    kind=kind,
+                    content_id=content_id,
+                    profile_id=profile["id"],
+                    expected_revision=revision,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
+
+    def empty_trash(self) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            return self.database.empty_trash(profile_id=profile["id"])
 
     def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, dict[str, bool]]]:
         self.require_master_key()

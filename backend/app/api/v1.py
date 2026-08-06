@@ -5,8 +5,27 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
-from app.models import EventCreateRequest, InitializeRequest, MemoryCreateRequest, PlanCreateRequest, UnlockRequest
-from app.security.vault import VaultError, VaultManager
+from app.models import (
+    ContentDeleteRequest,
+    ContentUpdateRequest,
+    EventCreateRequest,
+    InitializeRequest,
+    MemoryCreateRequest,
+    PinChangeRequest,
+    PinResetRequest,
+    PlanCreateRequest,
+    ProfileImpactRequest,
+    ProfileUpdateRequest,
+    TrashClearRequest,
+    UnlockRequest,
+)
+from app.security.vault import (
+    ContentNotFound,
+    ContentRevisionConflict,
+    CredentialError,
+    VaultError,
+    VaultManager,
+)
 from app.services.date_detail import DateOutOfLifeRange
 from app.services.periods import child_periods, resolve_period
 from app.services.progress import calculate_progress
@@ -61,6 +80,27 @@ def invalid_period_error(exc: ValueError) -> HTTPException:
     )
 
 
+def content_not_found_error(exc: ContentNotFound) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "CONTENT_NOT_FOUND", "message": str(exc)},
+    )
+
+
+def revision_conflict_error(exc: ContentRevisionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": "REVISION_CONFLICT", "message": str(exc)},
+    )
+
+
+def credential_error(exc: CredentialError, code: str = "INVALID_CREDENTIAL") -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": code, "message": str(exc)},
+    )
+
+
 def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
     profile_value = vault.get_profile()
     description = resolve_period(profile_value, scope, period_key)
@@ -87,7 +127,7 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
 def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     return envelope(
         {
-            "version": "0.0.2",
+            "version": "0.0.3",
             "initialized": vault.is_initialized,
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
@@ -140,6 +180,43 @@ def unlock(
     return envelope({"token": session.token, "expires_at": session.expires_at})
 
 
+@router.post("/auth/reset-pin")
+def reset_pin(
+    payload: PinResetRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.reset_pin_with_recovery(
+            recovery_secret=payload.recovery_secret,
+            new_pin=payload.new_pin,
+        )
+        return envelope({"reset": True, "locked": True})
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_RECOVERY_CREDENTIAL") from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PIN_RESET_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/auth/change-pin", dependencies=[Depends(require_session)])
+def change_pin(
+    payload: PinChangeRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.change_pin(current_pin=payload.current_pin, new_pin=payload.new_pin)
+        return envelope({"changed": True, "locked": True})
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_CURRENT_PIN") from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PIN_CHANGE_FAILED", "message": str(exc)},
+        ) from exc
+
+
 @router.post("/auth/lock")
 def lock(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     vault.lock()
@@ -152,6 +229,47 @@ def profile(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
         return envelope(vault.get_profile())
     except VaultError as exc:
         raise locked_error(exc) from exc
+
+
+@router.post("/profile/change-impact", dependencies=[Depends(require_session)])
+def profile_change_impact(
+    payload: ProfileImpactRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.profile_change_impact(birth_date=payload.birth_date.isoformat()))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PROFILE_IMPACT_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.put("/profile", dependencies=[Depends(require_session)])
+def update_profile(
+    payload: ProfileUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_profile(
+                display_name=payload.display_name,
+                birth_date=payload.birth_date.isoformat(),
+                current_pin=payload.current_pin,
+                revision=payload.revision,
+            )
+        )
+    except CredentialError as exc:
+        raise credential_error(exc, "INVALID_CURRENT_PIN") from exc
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "PROFILE_UPDATE_FAILED", "message": str(exc)},
+        ) from exc
 
 
 @router.get("/progress/life", dependencies=[Depends(require_session)])
@@ -245,6 +363,45 @@ def create_event(
         raise locked_error(exc) from exc
 
 
+@router.put("/events/{event_id}", dependencies=[Depends(require_session)])
+def update_event(
+    event_id: str,
+    payload: ContentUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_event(
+                event_id=event_id,
+                title=payload.title,
+                content=payload.content,
+                revision=payload.revision,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/events/{event_id}", dependencies=[Depends(require_session)])
+def delete_event(
+    event_id: str,
+    payload: ContentDeleteRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_event(event_id=event_id, revision=payload.revision))
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
 @router.post("/memories", dependencies=[Depends(require_session)])
 def create_memory(
     payload: MemoryCreateRequest,
@@ -264,6 +421,45 @@ def create_memory(
         raise date_range_error(exc) from exc
     except ValueError as exc:
         raise invalid_period_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/memories/{memory_id}", dependencies=[Depends(require_session)])
+def update_memory(
+    memory_id: str,
+    payload: ContentUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_memory(
+                memory_id=memory_id,
+                title=payload.title,
+                content=payload.content,
+                revision=payload.revision,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/memories/{memory_id}", dependencies=[Depends(require_session)])
+def delete_memory(
+    memory_id: str,
+    payload: ContentDeleteRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_memory(memory_id=memory_id, revision=payload.revision))
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
 
@@ -296,3 +492,111 @@ def create_plan(
         raise invalid_period_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
+
+
+@router.put("/plans/{plan_id}", dependencies=[Depends(require_session)])
+def update_plan(
+    plan_id: str,
+    payload: ContentUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_plan(
+                plan_id=plan_id,
+                title=payload.title,
+                content=payload.content,
+                revision=payload.revision,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/plans/{plan_id}", dependencies=[Depends(require_session)])
+def delete_plan(
+    plan_id: str,
+    payload: ContentDeleteRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_plan(plan_id=plan_id, revision=payload.revision))
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+@router.get("/trash", dependencies=[Depends(require_session)])
+def list_trash(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        items = vault.list_trash()
+        counts = {"event": 0, "memory": 0, "plan": 0}
+        for item in items:
+            counts[item["kind"]] += 1
+        return envelope({"items": items, "counts": counts, "total": len(items)})
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/trash/{kind}/{content_id}/restore", dependencies=[Depends(require_session)])
+def restore_trash_item(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    payload: ContentDeleteRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.restore_trash_item(
+                kind=kind,
+                content_id=content_id,
+                revision=payload.revision,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/trash/{kind}/{content_id}", dependencies=[Depends(require_session)])
+def permanently_delete_trash_item(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    payload: ContentDeleteRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.permanently_delete_trash_item(
+                kind=kind,
+                content_id=content_id,
+                revision=payload.revision,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/trash", dependencies=[Depends(require_session)])
+def empty_trash(
+    payload: TrashClearRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.empty_trash())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+

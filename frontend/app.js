@@ -7,9 +7,12 @@ const views = {
 
 const statusBadge = document.getElementById("statusBadge");
 const lockButton = document.getElementById("lockButton");
+const settingsButton = document.getElementById("settingsButton");
+const fullPageSettingsButton = document.getElementById("fullPageSettingsButton");
+const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.2";
+const frontendBuildVersion = "0.0.3";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -30,6 +33,11 @@ let activeLifeMapView = "life";
 let navigatorYear = null;
 let navigatorMonth = null;
 let navigatorDate = null;
+let openContentMenu = null;
+let openContentMenuTrigger = null;
+let fullPageLifeOpen = false;
+let fullPageGridSignature = "";
+let fullPageReturnFocus = null;
 
 const lifeMapViewTitle = document.getElementById("lifeMapViewTitle");
 const lifeMapViewSubtitle = document.getElementById("lifeMapViewSubtitle");
@@ -42,6 +50,16 @@ const lifeMapViewNodes = {
 const hierarchyPointerTooltip = document.getElementById("hierarchyPointerTooltip");
 const hierarchyPointerTitle = document.getElementById("hierarchyPointerTitle");
 const hierarchyPointerMeta = document.getElementById("hierarchyPointerMeta");
+const openFullPageViewButton = document.getElementById("openFullPageView");
+const fullPageLifeView = document.getElementById("fullPageLifeView");
+const closeFullPageViewButton = document.getElementById("closeFullPageView");
+const fullPageLocateTodayButton = document.getElementById("fullPageLocateToday");
+const fullPageLifeSummary = document.getElementById("fullPageLifeSummary");
+const fullPageLifeCanvasWrap = document.getElementById("fullPageLifeCanvasWrap");
+const fullPageLifeCanvas = document.getElementById("fullPageLifeCanvas");
+const fullPageDateTooltip = document.getElementById("fullPageDateTooltip");
+const fullPageDateTooltipTitle = document.getElementById("fullPageDateTooltipTitle");
+const fullPageDateTooltipMeta = document.getElementById("fullPageDateTooltipMeta");
 
 function token() {
   return sessionStorage.getItem(tokenKey);
@@ -54,15 +72,116 @@ function setToken(value) {
 function showView(name) {
   Object.entries(views).forEach(([key, node]) => node.classList.toggle("hidden", key !== name));
   lockButton.classList.toggle("hidden", name !== "home");
-  if (name !== "home") closeDateDrawer();
+  settingsButton.classList.toggle("hidden", name !== "home");
+  trashButton.classList.toggle("hidden", name !== "home");
+  if (name !== "home") {
+    closeDateDrawerNow();
+    closeFullPageLifeViewNow();
+    closeSettingsModalNow();
+  }
 }
 
-function showToast(message) {
+function showToast(message, tone = "info") {
   toast.textContent = message;
+  toast.dataset.tone = tone;
   toast.classList.remove("hidden");
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.add("hidden"), 3200);
+  showToast.timer = window.setTimeout(() => {
+    toast.classList.add("hidden");
+    delete toast.dataset.tone;
+  }, tone === "error" ? 4800 : 3200);
 }
+
+function friendlyErrorMessage(error) {
+  const messages = {
+    REVISION_CONFLICT: "内容已经发生变化，请重新打开后再操作。",
+    CONTENT_NOT_FOUND: "内容不存在，或已经被其他操作处理。",
+    SESSION_EXPIRED: "解锁会话已过期，请重新解锁。",
+    AUTH_REQUIRED: "请先解锁加密仓库。",
+    VAULT_LOCKED: "加密仓库已锁定，请重新解锁。",
+    PLAN_DATE_IN_PAST: "过去的时间范围不能新增未来计划。",
+    INVALID_CURRENT_PIN: "当前 PIN 不正确。",
+    INVALID_RECOVERY_CREDENTIAL: "恢复凭据不正确。",
+    PROFILE_UPDATE_FAILED: "个人档案保存失败。",
+    PIN_CHANGE_FAILED: "PIN 修改失败。",
+    PIN_RESET_FAILED: "PIN 重置失败。",
+  };
+  return messages[error?.code] || error?.message || "操作失败，请稍后重试。";
+}
+
+function showOperationError(error) {
+  showToast(friendlyErrorMessage(error), "error");
+}
+
+function setButtonBusy(button, busy, busyLabel = "处理中…") {
+  if (!button) return;
+  if (busy) {
+    if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent;
+    button.disabled = true;
+    button.classList.add("is-busy");
+    button.textContent = busyLabel;
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  button.disabled = false;
+  button.classList.remove("is-busy");
+  button.textContent = button.dataset.idleLabel || button.textContent;
+  button.removeAttribute("aria-busy");
+  delete button.dataset.idleLabel;
+}
+
+const confirmModal = document.getElementById("confirmModal");
+const confirmEyebrow = document.getElementById("confirmEyebrow");
+const confirmTitle = document.getElementById("confirmTitle");
+const confirmMessage = document.getElementById("confirmMessage");
+const confirmCancel = document.getElementById("confirmCancel");
+const confirmAccept = document.getElementById("confirmAccept");
+let confirmResolver = null;
+let confirmReturnFocus = null;
+
+function closeConfirmation(result = false) {
+  if (confirmModal.classList.contains("hidden")) return;
+  confirmModal.classList.add("hidden");
+  confirmModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("confirm-open");
+  const resolver = confirmResolver;
+  confirmResolver = null;
+  resolver?.(result);
+  if (confirmReturnFocus instanceof HTMLElement && document.contains(confirmReturnFocus)) {
+    confirmReturnFocus.focus();
+  }
+  confirmReturnFocus = null;
+}
+
+function askConfirmation({
+  eyebrow = "请确认",
+  title = "确认操作",
+  message,
+  confirmLabel = "确认",
+  tone = "danger",
+} = {}) {
+  if (confirmResolver) closeConfirmation(false);
+  confirmReturnFocus = document.activeElement;
+  confirmEyebrow.textContent = eyebrow;
+  confirmTitle.textContent = title;
+  confirmMessage.textContent = message || "确定继续吗？";
+  confirmAccept.textContent = confirmLabel;
+  confirmAccept.dataset.tone = tone;
+  confirmModal.dataset.tone = tone;
+  confirmModal.classList.remove("hidden");
+  confirmModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("confirm-open");
+  window.requestAnimationFrame(() => confirmCancel.focus());
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+  });
+}
+
+confirmCancel.addEventListener("click", () => closeConfirmation(false));
+confirmAccept.addEventListener("click", () => closeConfirmation(true));
+confirmModal.addEventListener("click", (event) => {
+  if (event.target === confirmModal) closeConfirmation(false);
+});
 
 async function api(path, options = {}, requireAuth = false) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -84,6 +203,237 @@ async function api(path, options = {}, requireAuth = false) {
   return payload.data;
 }
 
+const settingsModal = document.getElementById("settingsModal");
+const closeSettingsButton = document.getElementById("closeSettings");
+const profileSettingsForm = document.getElementById("profileSettingsForm");
+const changePinForm = document.getElementById("changePinForm");
+const resetPinModal = document.getElementById("resetPinModal");
+const resetPinForm = document.getElementById("resetPinForm");
+const openResetPinButton = document.getElementById("openResetPin");
+const closeResetPinButton = document.getElementById("closeResetPin");
+const cancelResetPinButton = document.getElementById("cancelResetPin");
+let settingsReturnFocus = null;
+let settingsProfileSnapshot = "";
+
+function profileSettingsState() {
+  if (!profileSettingsForm) return {};
+  const form = new FormData(profileSettingsForm);
+  return {
+    display_name: String(form.get("display_name") || "").trim(),
+    birth_date: String(form.get("birth_date") || ""),
+  };
+}
+
+function hasUnsavedSettingsChanges() {
+  if (settingsModal.classList.contains("hidden")) return false;
+  const profileChanged = JSON.stringify(profileSettingsState()) !== settingsProfileSnapshot;
+  const profilePin = profileSettingsForm.querySelector('[name="current_pin"]')?.value || "";
+  const pinValues = Array.from(changePinForm.querySelectorAll('input[type="password"]')).some(input => input.value);
+  return profileChanged || Boolean(profilePin) || pinValues;
+}
+
+function fillProfileSettingsForm() {
+  if (!currentProfile) return;
+  profileSettingsForm.elements.display_name.value = currentProfile.display_name || "";
+  profileSettingsForm.elements.birth_date.value = currentProfile.birth_date || "";
+  profileSettingsForm.elements.current_pin.value = "";
+  changePinForm.reset();
+  settingsProfileSnapshot = JSON.stringify(profileSettingsState());
+}
+
+async function openSettingsModal() {
+  if (!currentProfile) return;
+  if (!dateDrawer.classList.contains("hidden")) {
+    if (!(await confirmDiscardChanges())) return;
+    closeDateDrawerNow();
+  }
+  settingsReturnFocus = document.activeElement;
+  fillProfileSettingsForm();
+  settingsModal.classList.remove("hidden");
+  settingsModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("settings-open");
+  requestAnimationFrame(() => profileSettingsForm.elements.display_name.focus());
+}
+
+function closeSettingsModalNow() {
+  if (!settingsModal || settingsModal.classList.contains("hidden")) return;
+  settingsModal.classList.add("hidden");
+  settingsModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("settings-open");
+  profileSettingsForm.reset();
+  changePinForm.reset();
+  settingsProfileSnapshot = "";
+  if (settingsReturnFocus instanceof HTMLElement && document.contains(settingsReturnFocus)) {
+    settingsReturnFocus.focus({ preventScroll: true });
+  }
+  settingsReturnFocus = null;
+}
+
+async function requestCloseSettingsModal() {
+  if (settingsModal.classList.contains("hidden")) return;
+  if (hasUnsavedSettingsChanges()) {
+    const confirmed = await askConfirmation({
+      eyebrow: "尚未保存",
+      title: "放弃设置修改？",
+      message: "当前个人档案或 PIN 表单中还有未保存内容。",
+      confirmLabel: "放弃修改",
+      tone: "warning",
+    });
+    if (!confirmed) return;
+  }
+  closeSettingsModalNow();
+}
+
+function openResetPinModal() {
+  resetPinForm.reset();
+  resetPinModal.classList.remove("hidden");
+  resetPinModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("settings-open");
+  requestAnimationFrame(() => resetPinForm.elements.recovery_secret.focus());
+}
+
+function closeResetPinModal() {
+  if (resetPinModal.classList.contains("hidden")) return;
+  resetPinModal.classList.add("hidden");
+  resetPinModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("settings-open");
+  resetPinForm.reset();
+  openResetPinButton?.focus({ preventScroll: true });
+}
+
+settingsButton.addEventListener("click", openSettingsModal);
+fullPageSettingsButton.addEventListener("click", openSettingsModal);
+closeSettingsButton.addEventListener("click", requestCloseSettingsModal);
+document.getElementById("cancelProfileSettings").addEventListener("click", requestCloseSettingsModal);
+settingsModal.addEventListener("click", (event) => {
+  if (event.target === settingsModal) requestCloseSettingsModal();
+});
+openResetPinButton.addEventListener("click", openResetPinModal);
+closeResetPinButton.addEventListener("click", closeResetPinModal);
+cancelResetPinButton.addEventListener("click", closeResetPinModal);
+resetPinModal.addEventListener("click", (event) => {
+  if (event.target === resetPinModal) closeResetPinModal();
+});
+
+profileSettingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!currentProfile) return;
+  const form = new FormData(profileSettingsForm);
+  const displayName = String(form.get("display_name") || "").trim();
+  const birthDate = String(form.get("birth_date") || "");
+  const currentPin = String(form.get("current_pin") || "");
+  const submit = profileSettingsForm.querySelector('button[type="submit"]');
+
+  try {
+    if (birthDate !== currentProfile.birth_date) {
+      const impact = await api("/api/v1/profile/change-impact", {
+        method: "POST",
+        body: JSON.stringify({ birth_date: birthDate }),
+      }, true);
+      const hiddenMessage = impact.hidden_content_count
+        ? `修改后有 ${impact.hidden_content_count} 条内容将暂时超出图谱范围，但不会被删除。`
+        : "现有内容都仍在新的图谱范围内。";
+      const confirmed = await askConfirmation({
+        eyebrow: "出生日期调整",
+        title: "重新计算人生图谱？",
+        message: `出生日期将改为 ${birthDate}，人生进度、年龄和今天的位置会重新计算。\n${hiddenMessage}`,
+        confirmLabel: "确认修改",
+        tone: "warning",
+      });
+      if (!confirmed) return;
+    }
+
+    setButtonBusy(submit, true, "加密保存中…");
+    const updated = await api("/api/v1/profile", {
+      method: "PUT",
+      body: JSON.stringify({
+        display_name: displayName,
+        birth_date: birthDate,
+        current_pin: currentPin,
+        revision: currentProfile.revision,
+      }),
+    }, true);
+    currentProfile = updated;
+    closeDateDrawerNow();
+    closeSettingsModalNow();
+    lifeGridSignature = "";
+    fullPageGridSignature = "";
+    await loadHome();
+    requestAnimationFrame(() => {
+      if (fullPageLifeOpen) scrollFullPageToDate(currentProgress.today);
+    });
+    showToast("个人档案已更新", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+});
+
+changePinForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(changePinForm);
+  const submit = changePinForm.querySelector('button[type="submit"]');
+  const confirmed = await askConfirmation({
+    eyebrow: "安全设置",
+    title: "修改 PIN 并重新锁定？",
+    message: "修改成功后，当前会话会立即失效，需要使用新 PIN 重新解锁。原有加密内容不会被重写。",
+    confirmLabel: "修改 PIN",
+    tone: "warning",
+  });
+  if (!confirmed) return;
+
+  try {
+    setButtonBusy(submit, true, "正在修改…");
+    await api("/api/v1/auth/change-pin", {
+      method: "POST",
+      body: JSON.stringify({
+        current_pin: form.get("current_pin"),
+        new_pin: form.get("new_pin"),
+        confirm_new_pin: form.get("confirm_new_pin"),
+      }),
+    }, true);
+    setToken(null);
+    currentProfile = null;
+    currentProgress = null;
+    closeSettingsModalNow();
+    statusBadge.textContent = "PIN 已修改，请重新解锁";
+    showView("unlock");
+    unlockForm.elements.method.value = "pin";
+    showToast("PIN 已修改，请使用新 PIN 解锁", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+});
+
+resetPinForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(resetPinForm);
+  const submit = resetPinForm.querySelector('button[type="submit"]');
+  try {
+    setButtonBusy(submit, true, "正在重置…");
+    await api("/api/v1/auth/reset-pin", {
+      method: "POST",
+      body: JSON.stringify({
+        recovery_secret: form.get("recovery_secret"),
+        new_pin: form.get("new_pin"),
+        confirm_new_pin: form.get("confirm_new_pin"),
+      }),
+    });
+    closeResetPinModal();
+    unlockForm.elements.method.value = "pin";
+    unlockForm.elements.secret.value = "";
+    statusBadge.textContent = "PIN 已重置";
+    showToast("PIN 已重置，请使用新 PIN 解锁", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+});
+
 async function bootstrap() {
   showView("loading");
   try {
@@ -99,14 +449,14 @@ async function bootstrap() {
       showView("unlock");
       return;
     }
-    await loadHome();
+    await loadHome({ enterFullPage: true });
   } catch (error) {
     statusBadge.textContent = "连接失败";
     showToast(error.message);
   }
 }
 
-async function loadHome() {
+async function loadHome({ enterFullPage = false } = {}) {
   try {
     const [profile, progress] = await Promise.all([
       api("/api/v1/profile", {}, true),
@@ -127,14 +477,14 @@ async function loadHome() {
     statusBadge.textContent = "加密仓库已解锁";
     document.getElementById("welcomeTitle").textContent = profile.display_name;
     document.getElementById("todayText").textContent = `${progress.today} · ${progress.timezone}`;
-    document.getElementById("lifeSentence").textContent = `今天是人生的第 ${progress.life_day_number.toLocaleString()} 天。按 ${progress.target_age} 岁展示，你已经走过 ${progress.life.elapsed_days.toLocaleString()} 天。`;
+    document.getElementById("lifeSentence").textContent = `你已经走过 ${progress.life.elapsed_days.toLocaleString()} 天。`;
     document.getElementById("lifePercent").textContent = `${progress.life.percent.toFixed(2)}%`;
     document.querySelector(".life-percent").style.setProperty("--progress", `${Math.min(100, progress.life.percent)}%`);
     const lifeDayMetric = document.getElementById("lifeDay");
     const yearPercentMetric = document.getElementById("yearPercent");
     const monthPercentMetric = document.getElementById("monthPercent");
 
-    lifeDayMetric.textContent = progress.life_day_number.toLocaleString();
+    lifeDayMetric.textContent = progress.life.elapsed_days.toLocaleString();
     yearPercentMetric.textContent = `${progress.year.percent.toFixed(1)}%`;
     monthPercentMetric.textContent = `${progress.month.percent.toFixed(1)}%`;
     const currentYear = progress.today.slice(0, 4);
@@ -147,7 +497,13 @@ async function loadHome() {
     monthPercentMetric.style.setProperty("--metric-progress", `${Math.max(0, Math.min(100, progress.month.percent))}%`);
     initializeLifeNavigator(progress);
     showView("home");
-    requestAnimationFrame(() => renderLifeMapView(true));
+    requestAnimationFrame(() => {
+      renderLifeMapView(true);
+      if (fullPageLifeOpen) {
+        fullPageGridSignature = "";
+        drawFullPageLifeGrid(true);
+      } else if (enterFullPage) openFullPageLifeView();
+    });
   } catch (error) {
     if (["SESSION_EXPIRED", "AUTH_REQUIRED", "VAULT_LOCKED"].includes(error.code)) {
       setToken(null);
@@ -170,6 +526,8 @@ async function refreshContentStatuses() {
   yearContentStatus = statusResult.years || {};
   contentStatusRevision += 1;
   lifeGridSignature = "";
+  fullPageGridSignature = "";
+  if (fullPageLifeOpen) drawFullPageLifeGrid(true);
 }
 
 const initForm = document.getElementById("initForm");
@@ -197,7 +555,7 @@ if (initForm) {
         document.getElementById("recoveryValue").textContent = data.generated_recovery_secret;
         document.getElementById("recoveryModal").classList.remove("hidden");
       } else {
-        await loadHome();
+        await loadHome({ enterFullPage: true });
       }
     } catch (error) {
       showToast(error.message);
@@ -223,7 +581,7 @@ if (unlockForm) {
       setToken(data.token);
       const secretInput = formNode.querySelector('[name="secret"]');
       if (secretInput) secretInput.value = "";
-      await loadHome();
+      await loadHome({ enterFullPage: true });
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -233,6 +591,7 @@ if (unlockForm) {
 }
 
 lockButton.addEventListener("click", async () => {
+  if (!(await confirmDiscardChanges())) return;
   try {
     await api("/api/v1/auth/lock", { method: "POST" });
   } catch (_) {
@@ -246,15 +605,15 @@ lockButton.addEventListener("click", async () => {
   navigatorYear = null;
   navigatorMonth = null;
   navigatorDate = null;
-  closeDateDrawer();
+  closeDateDrawerNow();
   statusBadge.textContent = "仓库已锁定";
   showView("unlock");
 });
 
-document.getElementById("refreshButton").addEventListener("click", loadHome);
+document.getElementById("refreshButton").addEventListener("click", () => loadHome());
 document.getElementById("closeRecovery").addEventListener("click", async () => {
   document.getElementById("recoveryModal").classList.add("hidden");
-  await loadHome();
+  await loadHome({ enterFullPage: true });
 });
 document.getElementById("copyRecovery").addEventListener("click", async () => {
   await navigator.clipboard.writeText(document.getElementById("recoveryValue").textContent);
@@ -586,7 +945,7 @@ function renderLifeMapView(force = false) {
   const endYear = addUtcDays(bounds.target, -1).getUTCFullYear();
 
   if (activeLifeMapView === "life") {
-    lifeMapViewTitle.textContent = "人生总览";
+    lifeMapViewTitle.textContent = "太阳每天都是新的";
     const focusText = navigatorYear && navigatorMonth ? ` 当前定位：${navigatorYear}年${navigatorMonth}月。` : "";
     lifeMapViewSubtitle.textContent = `完整人生日期格保持不变，用于观察生命进度与内容分布。${focusText}`;
     drawLifeGrid(currentProgress, force);
@@ -614,6 +973,256 @@ function switchLifeMapView(view) {
 lifeMapTabs.forEach((button) => {
   button.addEventListener("click", () => switchLifeMapView(button.dataset.lifeView));
 });
+
+function hideFullPageDateTooltip() {
+  fullPageDateTooltip.classList.add("hidden");
+  fullPageDateTooltip.setAttribute("aria-hidden", "true");
+}
+
+function positionFullPageDateTooltip(event) {
+  const edge = 12;
+  const gap = 18;
+  const rect = fullPageDateTooltip.getBoundingClientRect();
+  let left = event.clientX + gap;
+  let top = event.clientY + gap;
+
+  if (left + rect.width > window.innerWidth - edge) left = event.clientX - rect.width - gap;
+  if (top + rect.height > window.innerHeight - edge) top = event.clientY - rect.height - gap;
+
+  fullPageDateTooltip.style.left = `${Math.max(edge, left)}px`;
+  fullPageDateTooltip.style.top = `${Math.max(edge, top)}px`;
+}
+
+function fullPageContentLabel(isoDate) {
+  const state = contentStatus[isoDate] || {};
+  const labels = [];
+  if (state.has_event) labels.push("有事件");
+  if (state.has_memory) labels.push("有记忆");
+  if (state.has_plan) labels.push("有计划");
+  return labels;
+}
+
+function drawFullPageLifeGrid(force = false) {
+  if (!currentProgress || !fullPageLifeOpen) return;
+  const measuredWidth = Math.floor(fullPageLifeCanvasWrap.clientWidth || 0);
+  const cssWidth = Math.max(320, measuredWidth || window.innerWidth);
+  const birth = parseIsoDate(currentProgress.birth_date);
+  const target = parseIsoDate(currentProgress.target_date);
+  const today = parseIsoDate(currentProgress.today);
+  const totalDays = daysBetween(birth, target);
+  const padding = cssWidth < 620 ? 10 : 16;
+  const gap = cssWidth < 620 ? 0.8 : 1;
+  const preferredCellSize = cssWidth >= 1500 ? 14 : cssWidth >= 1100 ? 12 : cssWidth >= 760 ? 10 : 8;
+  const columns = Math.max(24, Math.floor((cssWidth - padding * 2 + gap) / (preferredCellSize + gap)));
+  const stride = (cssWidth - padding * 2 + gap) / columns;
+  const cellSize = Math.max(5, stride - gap);
+  const rows = Math.ceil(totalDays / columns);
+  const cssHeight = Math.ceil(padding * 2 + rows * stride - gap);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const signature = [cssWidth, cssHeight, dpr, currentProgress.birth_date, currentProgress.today, currentProgress.target_date, contentStatusRevision, selectedDate].join(":");
+
+  if (!force && signature === fullPageGridSignature) return;
+  fullPageGridSignature = signature;
+
+  fullPageLifeCanvas.width = Math.round(cssWidth * dpr);
+  fullPageLifeCanvas.height = Math.round(cssHeight * dpr);
+  fullPageLifeCanvas.style.width = `${cssWidth}px`;
+  fullPageLifeCanvas.style.height = `${cssHeight}px`;
+
+  const ctx = fullPageLifeCanvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.fillStyle = "rgba(255,255,255,.34)";
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+  const past = "#315c4d";
+  const future = "#dfddd5";
+  const todayColor = "#c06b3e";
+  const eventColor = "#f0b84a";
+  const memoryPastColor = "#b9dfcf";
+  const memoryFutureColor = "#477765";
+  const planPastColor = "#a8bfd4";
+  const planFutureColor = "#3f6fa5";
+
+  for (let index = 0; index < totalDays; index += 1) {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const x = padding + column * stride;
+    const y = padding + row * stride;
+    const date = addUtcDays(birth, index);
+    const isoDate = formatUtc(date);
+    const isToday = isoDate === currentProgress.today;
+    const state = contentStatus[isoDate] || {};
+
+    ctx.fillStyle = isToday ? todayColor : date < today ? past : future;
+    ctx.fillRect(x, y, cellSize, cellSize);
+
+    if (isoDate === selectedDate) {
+      ctx.strokeStyle = "rgba(255,255,255,.98)";
+      ctx.lineWidth = Math.max(1.2, cellSize * .16);
+      ctx.strokeRect(x - 1, y - 1, cellSize + 2, cellSize + 2);
+      ctx.strokeStyle = "#172d25";
+      ctx.lineWidth = Math.max(.7, cellSize * .08);
+      ctx.strokeRect(x, y, cellSize, cellSize);
+    }
+
+    if (state.has_memory) {
+      const inset = Math.max(1, cellSize * .13);
+      ctx.strokeStyle = date < today ? memoryPastColor : memoryFutureColor;
+      ctx.lineWidth = Math.max(.7, cellSize * .08);
+      ctx.strokeRect(x + inset, y + inset, Math.max(1, cellSize - inset * 2), Math.max(1, cellSize - inset * 2));
+    }
+
+    if (state.has_plan) {
+      ctx.beginPath();
+      ctx.arc(x + cellSize / 2, y + cellSize / 2, Math.max(1.4, cellSize * .28), 0, Math.PI * 2);
+      ctx.strokeStyle = date < today ? planPastColor : planFutureColor;
+      ctx.lineWidth = Math.max(.65, cellSize * .07);
+      ctx.stroke();
+    }
+
+    if (state.has_event) {
+      ctx.beginPath();
+      ctx.arc(x + cellSize / 2, y + cellSize / 2, Math.max(1, cellSize * .13), 0, Math.PI * 2);
+      ctx.fillStyle = eventColor;
+      ctx.fill();
+    }
+  }
+
+  fullPageLifeCanvas._fullPageGrid = {
+    birth,
+    totalDays,
+    columns,
+    padding,
+    gap,
+    stride,
+    cellSize,
+    cssWidth,
+    cssHeight,
+    dpr,
+  };
+  fullPageLifeSummary.textContent = `完整人生共 ${totalDays.toLocaleString()} 天，日期连续排列；悬停查看日期，点击打开右侧详情。`;
+}
+
+function resolveFullPageDateFromPointer(event) {
+  const grid = fullPageLifeCanvas._fullPageGrid;
+  if (!grid) return null;
+  const rect = fullPageLifeCanvas.getBoundingClientRect();
+  const x = (event.clientX - rect.left) * (grid.cssWidth / rect.width) - grid.padding;
+  const y = (event.clientY - rect.top) * (grid.cssHeight / rect.height) - grid.padding;
+  if (x < 0 || y < 0) return null;
+
+  const column = Math.floor(x / grid.stride);
+  const row = Math.floor(y / grid.stride);
+  if (column < 0 || column >= grid.columns || row < 0) return null;
+  const withinX = x - column * grid.stride;
+  const withinY = y - row * grid.stride;
+  if (withinX > grid.cellSize || withinY > grid.cellSize) return null;
+
+  const index = row * grid.columns + column;
+  if (index < 0 || index >= grid.totalDays) return null;
+  const date = addUtcDays(grid.birth, index);
+  return { index, date, isoDate: formatUtc(date) };
+}
+
+function showFullPageDateTooltip(event, resolved) {
+  const stateLabel = resolved.isoDate === currentProgress.today
+    ? "今天"
+    : resolved.isoDate < currentProgress.today ? "已走过" : "未来";
+  const labels = fullPageContentLabel(resolved.isoDate);
+  fullPageDateTooltipTitle.textContent = formatHoverDate(resolved.isoDate);
+  fullPageDateTooltipMeta.textContent = `人生第 ${(resolved.index + 1).toLocaleString()} 天 · ${stateLabel}${labels.length ? ` · ${labels.join(" · ")}` : ""}`;
+  fullPageDateTooltip.classList.remove("hidden");
+  fullPageDateTooltip.setAttribute("aria-hidden", "false");
+  positionFullPageDateTooltip(event);
+}
+
+function scrollFullPageToDate(isoDate, behavior = "auto") {
+  const grid = fullPageLifeCanvas._fullPageGrid;
+  if (!grid) return;
+  const date = parseIsoDate(isoDate);
+  const index = daysBetween(grid.birth, date);
+  if (index < 0 || index >= grid.totalDays) return;
+  const row = Math.floor(index / grid.columns);
+  const cellTop = grid.padding + row * grid.stride;
+  const top = Math.max(0, cellTop - fullPageLifeCanvasWrap.clientHeight / 2 + grid.cellSize / 2);
+  fullPageLifeCanvasWrap.scrollTo({ top, behavior });
+}
+
+function fullPageViewportAnchorDate() {
+  const grid = fullPageLifeCanvas._fullPageGrid;
+  if (!grid) return null;
+  const centerY = fullPageLifeCanvasWrap.scrollTop + fullPageLifeCanvasWrap.clientHeight / 2;
+  const row = Math.max(0, Math.floor((centerY - grid.padding) / grid.stride));
+  const index = Math.min(grid.totalDays - 1, row * grid.columns + Math.floor(grid.columns / 2));
+  return formatUtc(addUtcDays(grid.birth, index));
+}
+
+function openFullPageLifeView() {
+  if (!currentProgress || fullPageLifeOpen) return;
+  fullPageReturnFocus = views.home.contains(document.activeElement)
+    ? document.activeElement
+    : openFullPageViewButton;
+  fullPageLifeOpen = true;
+  fullPageLifeView.classList.remove("hidden");
+  fullPageLifeView.setAttribute("aria-hidden", "false");
+  document.documentElement.classList.add("full-page-life-open");
+  document.body.classList.add("full-page-life-open");
+  hideGridMagnifier();
+  hideHierarchyPointerTooltip();
+  requestAnimationFrame(() => {
+    drawFullPageLifeGrid(true);
+    scrollFullPageToDate(currentProgress.today);
+    closeFullPageViewButton.focus({ preventScroll: true });
+  });
+}
+
+function closeFullPageLifeViewNow() {
+  if (!fullPageLifeOpen) return;
+  fullPageLifeOpen = false;
+  fullPageLifeView.classList.add("hidden");
+  fullPageLifeView.setAttribute("aria-hidden", "true");
+  document.documentElement.classList.remove("full-page-life-open");
+  document.body.classList.remove("full-page-life-open");
+  hideFullPageDateTooltip();
+  if (fullPageReturnFocus?.focus) fullPageReturnFocus.focus({ preventScroll: true });
+  fullPageReturnFocus = null;
+}
+
+async function requestCloseFullPageLifeView() {
+  if (!fullPageLifeOpen) return;
+  if (!dateDrawer.classList.contains("hidden")) {
+    if (!(await confirmDiscardChanges())) return;
+    closeDateDrawerNow();
+  }
+  closeFullPageLifeViewNow();
+}
+
+openFullPageViewButton.addEventListener("click", openFullPageLifeView);
+closeFullPageViewButton.addEventListener("click", requestCloseFullPageLifeView);
+fullPageLocateTodayButton.addEventListener("click", () => {
+  drawFullPageLifeGrid();
+  scrollFullPageToDate(currentProgress.today, "smooth");
+});
+fullPageLifeCanvas.addEventListener("mousemove", (event) => {
+  const resolved = resolveFullPageDateFromPointer(event);
+  if (!resolved) {
+    hideFullPageDateTooltip();
+    return;
+  }
+  showFullPageDateTooltip(event, resolved);
+});
+fullPageLifeCanvas.addEventListener("mouseleave", hideFullPageDateTooltip);
+fullPageLifeCanvas.addEventListener("click", (event) => {
+  const resolved = resolveFullPageDateFromPointer(event);
+  if (!resolved) return;
+  hideFullPageDateTooltip();
+  setNavigatorFromDate(resolved.isoDate);
+  selectedDate = resolved.isoDate;
+  drawFullPageLifeGrid(true);
+  openDateDrawer(resolved.isoDate);
+});
+fullPageLifeCanvasWrap.addEventListener("scroll", hideFullPageDateTooltip, { passive: true });
 
 function drawLifeGrid(progress, force = false) {
   const canvas = document.getElementById("lifeCanvas");
@@ -897,9 +1506,16 @@ window.addEventListener("resize", () => {
   if (!currentProgress) return;
   hideHierarchyPointerTooltip();
   hideGridMagnifier();
+  hideFullPageDateTooltip();
+  const fullPageAnchor = fullPageLifeOpen ? fullPageViewportAnchorDate() : null;
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     renderLifeMapView(true);
+    if (fullPageLifeOpen) {
+      fullPageGridSignature = "";
+      drawFullPageLifeGrid(true);
+      if (fullPageAnchor) scrollFullPageToDate(fullPageAnchor);
+    }
   }, 120);
 });
 
@@ -907,6 +1523,11 @@ const dateDrawer = document.getElementById("dateDrawer");
 const dateDrawerBackdrop = document.getElementById("dateDrawerBackdrop");
 const dateDrawerLoading = document.getElementById("dateDrawerLoading");
 const dateDrawerContent = document.getElementById("dateDrawerContent");
+const trashDrawerContent = document.getElementById("trashDrawerContent");
+const trashList = document.getElementById("trashList");
+const trashSummary = document.getElementById("trashSummary");
+const refreshTrashButton = document.getElementById("refreshTrashButton");
+const emptyTrashButton = document.getElementById("emptyTrashButton");
 const periodNavigator = document.getElementById("periodNavigator");
 const periodDrawerBreadcrumb = document.getElementById("periodDrawerBreadcrumb");
 const periodPreviousYear = document.getElementById("periodPreviousYear");
@@ -920,38 +1541,162 @@ const toggleMemoryFormButton = document.getElementById("toggleMemoryForm");
 const planForm = document.getElementById("planForm");
 const togglePlanFormButton = document.getElementById("togglePlanForm");
 const planAvailability = document.getElementById("planAvailability");
+const eventSection = document.getElementById("eventSection");
+const memorySection = document.getElementById("memorySection");
+const planSection = document.getElementById("planSection");
+
+const contentFormConfigurations = {
+  event: {
+    form: eventForm,
+    toggleButton: toggleEventFormButton,
+    section: eventSection,
+    heading: document.getElementById("eventSectionHeading"),
+    endpoint: "/api/v1/events",
+    createLabel: "＋ 添加事件",
+    openLabel: "收起表单",
+    saveLabel: "保存事件",
+    createMessage: "事件已加密保存",
+    editMessage: "事件修改已加密保存",
+    deleteMessage: "事件已移入回收站",
+    itemLabel: "事件",
+  },
+  memory: {
+    form: memoryForm,
+    toggleButton: toggleMemoryFormButton,
+    section: memorySection,
+    heading: document.getElementById("memorySectionHeading"),
+    endpoint: "/api/v1/memories",
+    createLabel: "＋ 添加记忆",
+    openLabel: "收起表单",
+    saveLabel: "保存记忆",
+    createMessage: "记忆已加密保存",
+    editMessage: "记忆修改已加密保存",
+    deleteMessage: "记忆已移入回收站",
+    itemLabel: "记忆",
+  },
+  plan: {
+    form: planForm,
+    toggleButton: togglePlanFormButton,
+    section: planSection,
+    heading: document.getElementById("planSectionHeading"),
+    endpoint: "/api/v1/plans",
+    createLabel: "＋ 添加计划",
+    openLabel: "收起表单",
+    saveLabel: "保存计划",
+    createMessage: "未来计划已加密保存",
+    editMessage: "未来计划修改已加密保存",
+    deleteMessage: "未来计划已移入回收站",
+    itemLabel: "计划",
+  },
+};
 
 const EMPTY_CONTENT_STATE = { has_event: false, has_memory: false, has_plan: false };
 
+function contentFormSnapshot(form) {
+  return JSON.stringify({
+    title: form.querySelector('[name="title"]')?.value || "",
+    content: form.querySelector('[name="content"]')?.value || "",
+  });
+}
+
+function captureContentFormSnapshot(kind) {
+  const form = contentFormConfigurations[kind].form;
+  form.dataset.initialSnapshot = contentFormSnapshot(form);
+}
+
+function isContentFormDirty(kind) {
+  const form = contentFormConfigurations[kind].form;
+  if (form.classList.contains("hidden")) return false;
+  return contentFormSnapshot(form) !== (form.dataset.initialSnapshot || JSON.stringify({ title: "", content: "" }));
+}
+
+function hasUnsavedContentChanges() {
+  return Object.keys(contentFormConfigurations).some((kind) => isContentFormDirty(kind));
+}
+
+async function confirmDiscardChanges() {
+  if (!hasUnsavedContentChanges()) return true;
+  return askConfirmation({
+    eyebrow: "尚未保存",
+    title: "放弃当前更改吗？",
+    message: "表单中还有未保存的文字。继续后，这些更改将不会保留。",
+    confirmLabel: "放弃更改",
+    tone: "warning",
+  });
+}
+
+let drawerReturnFocus = null;
+
 function setDrawerOpen(open) {
+  const wasOpen = !dateDrawer.classList.contains("hidden");
+  if (open && !wasOpen) drawerReturnFocus = document.activeElement;
   dateDrawer.classList.toggle("hidden", !open);
   dateDrawerBackdrop.classList.toggle("hidden", !open);
   dateDrawer.setAttribute("aria-hidden", open ? "false" : "true");
   dateDrawerBackdrop.setAttribute("aria-hidden", open ? "false" : "true");
   document.body.classList.toggle("drawer-open", open);
+  if (open && !wasOpen) {
+    window.requestAnimationFrame(() => document.getElementById("closeDateDrawer")?.focus());
+  }
+  if (!open && wasOpen && drawerReturnFocus instanceof HTMLElement && document.contains(drawerReturnFocus)) {
+    drawerReturnFocus.focus();
+    drawerReturnFocus = null;
+  }
+}
+
+function updateContentSectionVisibility(kind) {
+  const config = contentFormConfigurations[kind];
+  const itemCount = Number(config.section.dataset.itemCount || 0);
+  const formOpen = !config.form.classList.contains("hidden");
+  config.section.classList.toggle("hidden", itemCount === 0 && !formOpen);
+  config.toggleButton.classList.toggle("is-active", formOpen);
+  config.toggleButton.setAttribute("aria-expanded", formOpen ? "true" : "false");
+}
+
+function resetContentForm(kind, hide = true) {
+  const config = contentFormConfigurations[kind];
+  const submit = config.form.querySelector('button[type="submit"]');
+  const cancel = config.form.querySelector('button[type="button"]');
+  config.form.reset();
+  config.form.classList.toggle("hidden", hide);
+  config.form.classList.remove("is-editing");
+  delete config.form.dataset.editId;
+  delete config.form.dataset.editRevision;
+  delete config.form.dataset.initialSnapshot;
+  config.toggleButton.textContent = kind === "plan" && config.toggleButton.disabled
+    ? "该时间范围已过去"
+    : config.createLabel;
+  submit.textContent = config.saveLabel;
+  cancel.textContent = "取消";
+  updateContentSectionVisibility(kind);
+}
+
+function resetAllContentForms() {
+  Object.keys(contentFormConfigurations).forEach((kind) => resetContentForm(kind, true));
 }
 
 function resetDrawerForms() {
-  eventForm.reset();
-  eventForm.classList.add("hidden");
-  toggleEventFormButton.textContent = "＋ 添加事件";
-  memoryForm.reset();
-  memoryForm.classList.add("hidden");
-  toggleMemoryFormButton.textContent = "＋ 添加记忆";
-  planForm.reset();
-  planForm.classList.add("hidden");
   togglePlanFormButton.disabled = false;
-  togglePlanFormButton.textContent = "＋ 添加计划";
+  resetAllContentForms();
   planAvailability.classList.add("hidden");
 }
 
-function closeDateDrawer() {
+function closeDateDrawerNow() {
   drawerRequestSequence += 1;
   selectedDate = null;
   selectedScope = null;
   selectedPeriodKey = null;
+  dateDrawerContent.classList.add("hidden");
+  trashDrawerContent.classList.add("hidden");
+  dateDrawerLoading.classList.add("hidden");
   setDrawerOpen(false);
   resetDrawerForms();
+}
+
+async function requestCloseDateDrawer() {
+  if (!(await confirmDiscardChanges())) return false;
+  closeDateDrawerNow();
+  return true;
 }
 
 function statusForPeriod(scope, periodKey) {
@@ -1184,6 +1929,7 @@ function renderPeriodNavigator(detail) {
 }
 
 async function openPeriodDrawer(scope, periodKey) {
+  if (hasUnsavedContentChanges() && !(await confirmDiscardChanges())) return false;
   selectedScope = scope;
   selectedPeriodKey = periodKey;
   selectedDate = scope === "day" ? periodKey : null;
@@ -1198,6 +1944,7 @@ async function openPeriodDrawer(scope, periodKey) {
   setDrawerOpen(true);
   dateDrawerLoading.classList.remove("hidden");
   dateDrawerContent.classList.add("hidden");
+  trashDrawerContent.classList.add("hidden");
   document.getElementById("dateDrawerTitle").textContent = periodKey;
   document.getElementById("dateDrawerMeta").textContent = "正在读取……";
   resetDrawerForms();
@@ -1209,9 +1956,10 @@ async function openPeriodDrawer(scope, periodKey) {
     dateDrawerLoading.classList.add("hidden");
     dateDrawerContent.classList.remove("hidden");
     renderLifeMapView(true);
+    if (fullPageLifeOpen) drawFullPageLifeGrid(true);
   } catch (error) {
     if (requestSequence !== drawerRequestSequence) return;
-    closeDateDrawer();
+    closeDateDrawerNow();
     if (["SESSION_EXPIRED", "AUTH_REQUIRED", "VAULT_LOCKED"].includes(error.code)) {
       setToken(null);
       statusBadge.textContent = "仓库已锁定";
@@ -1221,29 +1969,69 @@ async function openPeriodDrawer(scope, periodKey) {
   }
 }
 
-function openDateDrawer(isoDate) {
-  return openPeriodDrawer("day", isoDate);
+function trashKindCopy(kind) {
+  if (kind === "event") return { label: "事件", className: "event" };
+  if (kind === "memory") return { label: "记忆", className: "memory" };
+  return { label: "计划", className: "plan" };
 }
 
-function renderContentList(elementId, items, emptyText, cardClass = "") {
-  const list = document.getElementById(elementId);
-  list.replaceChildren();
+function trashScopeLabel(item) {
+  if (item.time_scope === "year") return `${item.period_key}年`;
+  if (item.time_scope === "month") {
+    const [year, month] = item.period_key.split("-");
+    return `${year}年${Number(month)}月`;
+  }
+  const [year, month, day] = item.period_key.split("-");
+  return `${year}年${Number(month)}月${Number(day)}日`;
+}
+
+function renderTrashList(data) {
+  const items = data.items || [];
+  const counts = data.counts || { event: 0, memory: 0, plan: 0 };
+  trashSummary.textContent = items.length
+    ? `共 ${items.length} 项 · 事件 ${counts.event || 0} · 记忆 ${counts.memory || 0} · 计划 ${counts.plan || 0}`
+    : "回收站为空";
+  emptyTrashButton.disabled = items.length === 0;
+  trashList.replaceChildren();
 
   if (!items.length) {
     const empty = document.createElement("p");
-    empty.className = "empty-copy";
-    empty.textContent = emptyText;
-    list.appendChild(empty);
+    empty.className = "empty-copy trash-empty-copy";
+    empty.textContent = "这里暂时没有已删除内容。";
+    trashList.appendChild(empty);
     return;
   }
 
   items.forEach((item) => {
+    const kindCopy = trashKindCopy(item.kind);
     const article = document.createElement("article");
-    article.className = `content-card ${cardClass}`.trim();
+    article.className = `trash-card trash-card-${kindCopy.className}`;
 
+    const heading = document.createElement("div");
+    heading.className = "trash-card-heading";
+    const titleWrap = document.createElement("div");
+    const badge = document.createElement("span");
+    badge.className = `trash-kind-badge trash-kind-${kindCopy.className}`;
+    badge.textContent = kindCopy.label;
     const title = document.createElement("h4");
     title.textContent = item.title;
-    article.appendChild(title);
+    titleWrap.append(badge, title);
+
+    const actions = document.createElement("div");
+    actions.className = "trash-card-actions";
+    const restoreButton = document.createElement("button");
+    restoreButton.type = "button";
+    restoreButton.className = "trash-restore-button";
+    restoreButton.textContent = "恢复";
+    restoreButton.addEventListener("click", () => restoreTrashItem(item, restoreButton));
+    const purgeButton = document.createElement("button");
+    purgeButton.type = "button";
+    purgeButton.className = "trash-purge-button";
+    purgeButton.textContent = "彻底删除";
+    purgeButton.addEventListener("click", () => purgeTrashItem(item, purgeButton));
+    actions.append(restoreButton, purgeButton);
+    heading.append(titleWrap, actions);
+    article.appendChild(heading);
 
     if (item.content) {
       const body = document.createElement("p");
@@ -1252,10 +2040,277 @@ function renderContentList(elementId, items, emptyText, cardClass = "") {
     }
 
     const meta = document.createElement("small");
-    meta.textContent = `创建于 ${formatDateTime(item.created_at)}`;
+    meta.textContent = `${trashScopeLabel(item)} · 删除于 ${formatDateTime(item.deleted_at)} · 版本 ${item.revision}`;
+    article.appendChild(meta);
+    trashList.appendChild(article);
+  });
+}
+
+async function openTrashDrawer() {
+  if (hasUnsavedContentChanges() && !(await confirmDiscardChanges())) return false;
+  const requestSequence = ++drawerRequestSequence;
+  selectedDate = null;
+  selectedScope = null;
+  selectedPeriodKey = null;
+  resetDrawerForms();
+  setDrawerOpen(true);
+  dateDrawerContent.classList.add("hidden");
+  trashDrawerContent.classList.add("hidden");
+  dateDrawerLoading.classList.remove("hidden");
+  document.getElementById("dateDrawerEyebrow").textContent = "统一回收站";
+  document.getElementById("dateDrawerTitle").textContent = "回收站";
+  document.getElementById("dateDrawerMeta").textContent = "正在读取已删除的加密内容……";
+
+  try {
+    const data = await api("/api/v1/trash", {}, true);
+    if (requestSequence !== drawerRequestSequence) return;
+    renderTrashList(data);
+    document.getElementById("dateDrawerMeta").textContent = data.total
+      ? "可恢复到原时间范围，也可永久清除"
+      : "已删除内容会集中显示在这里";
+    dateDrawerLoading.classList.add("hidden");
+    trashDrawerContent.classList.remove("hidden");
+  } catch (error) {
+    if (requestSequence !== drawerRequestSequence) return;
+    closeDateDrawerNow();
+    showOperationError(error);
+  }
+}
+
+async function restoreTrashItem(item, button) {
+  setButtonBusy(button, true, "恢复中…");
+  try {
+    await api(`/api/v1/trash/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ revision: item.revision }),
+    }, true);
+    await refreshContentStatuses();
+    renderLifeMapView(true);
+    showToast(`${trashKindCopy(item.kind).label}已恢复到${trashScopeLabel(item)}`, "success");
+    await openTrashDrawer();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function purgeTrashItem(item, button) {
+  const confirmed = await askConfirmation({
+    eyebrow: "永久删除",
+    title: `彻底删除${trashKindCopy(item.kind).label}吗？`,
+    message: `“${item.title}”将从本机加密数据库中永久移除，之后无法恢复。`,
+    confirmLabel: "彻底删除",
+  });
+  if (!confirmed) return;
+  setButtonBusy(button, true, "删除中…");
+  try {
+    await api(`/api/v1/trash/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ revision: item.revision }),
+    }, true);
+    showToast("内容已彻底删除", "success");
+    await openTrashDrawer();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function emptyTrash() {
+  const confirmed = await askConfirmation({
+    eyebrow: "永久删除",
+    title: "清空整个回收站吗？",
+    message: "回收站中的所有事件、记忆和计划都会被永久删除，且无法恢复。",
+    confirmLabel: "清空回收站",
+  });
+  if (!confirmed) return;
+  setButtonBusy(emptyTrashButton, true, "清空中…");
+  try {
+    const result = await api("/api/v1/trash", {
+      method: "DELETE",
+      body: JSON.stringify({ confirm: "EMPTY_TRASH" }),
+    }, true);
+    showToast(`回收站已清空，共彻底删除 ${result.total} 项内容`, "success");
+    await openTrashDrawer();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(emptyTrashButton, false);
+    emptyTrashButton.disabled = !trashList.querySelector(".trash-card");
+  }
+}
+
+function openDateDrawer(isoDate) {
+  return openPeriodDrawer("day", isoDate);
+}
+
+async function startContentEdit(kind, item) {
+  if (hasUnsavedContentChanges() && !(await confirmDiscardChanges())) return;
+  const config = contentFormConfigurations[kind];
+  resetAllContentForms();
+  config.form.dataset.editId = item.id;
+  config.form.dataset.editRevision = String(item.revision);
+  config.form.classList.remove("hidden");
+  config.form.classList.add("is-editing");
+  config.form.querySelector('[name="title"]').value = item.title || "";
+  config.form.querySelector('[name="content"]').value = item.content || "";
+  config.form.querySelector('button[type="submit"]').textContent = "保存修改";
+  config.form.querySelector('button[type="button"]').textContent = "取消编辑";
+  config.toggleButton.textContent = "取消编辑";
+  updateContentSectionVisibility(kind);
+  captureContentFormSnapshot(kind);
+  config.form.querySelector('[name="title"]').focus();
+  config.form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function deleteScopedContent(kind, item, button) {
+  if (!selectedScope || !selectedPeriodKey) return;
+  const config = contentFormConfigurations[kind];
+  const confirmed = await askConfirmation({
+    eyebrow: "移入回收站",
+    title: `删除这条${config.itemLabel}吗？`,
+    message: `“${item.title}”会移入回收站，之后仍可恢复到原时间范围。`,
+    confirmLabel: "移入回收站",
+    tone: "warning",
+  });
+  if (!confirmed) {
+    closeOpenContentMenu({ restoreFocus: true });
+    return;
+  }
+  closeOpenContentMenu();
+
+  setButtonBusy(button, true, "删除中…");
+  try {
+    await api(`${config.endpoint}/${encodeURIComponent(item.id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ revision: item.revision }),
+    }, true);
+
+    if (config.form.dataset.editId === item.id) resetContentForm(kind, true);
+    await refreshContentStatuses();
+    renderLifeMapView(true);
+    showToast(config.deleteMessage, "success");
+    await openPeriodDrawer(selectedScope, selectedPeriodKey);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function closeOpenContentMenu({ restoreFocus = false } = {}) {
+  if (!openContentMenu) return;
+  const trigger = openContentMenuTrigger;
+  openContentMenu.classList.add("hidden");
+  openContentMenu.setAttribute("aria-hidden", "true");
+  trigger?.setAttribute("aria-expanded", "false");
+  openContentMenu = null;
+  openContentMenuTrigger = null;
+  if (restoreFocus && trigger instanceof HTMLElement && document.contains(trigger)) {
+    trigger.focus();
+  }
+}
+
+function toggleContentMenu(menu, trigger) {
+  const shouldOpen = menu.classList.contains("hidden");
+  closeOpenContentMenu();
+  if (!shouldOpen) return;
+  menu.classList.remove("hidden");
+  menu.setAttribute("aria-hidden", "false");
+  trigger.setAttribute("aria-expanded", "true");
+  openContentMenu = menu;
+  openContentMenuTrigger = trigger;
+}
+
+function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _allowAction = true) {
+  const list = document.getElementById(elementId);
+  const config = contentFormConfigurations[kind];
+  if (openContentMenu && list.contains(openContentMenu)) closeOpenContentMenu();
+  list.replaceChildren();
+  config.section.dataset.itemCount = String(items.length);
+  config.heading.textContent = items.length ? `${config.itemLabel} · ${items.length}` : config.itemLabel;
+
+  items.forEach((item) => {
+    const article = document.createElement("article");
+    article.className = `content-card ${cardClass}`.trim();
+
+    const header = document.createElement("div");
+    header.className = "content-card-header";
+
+    const title = document.createElement("h4");
+    title.textContent = item.title;
+    header.appendChild(title);
+
+    const actions = document.createElement("div");
+    actions.className = "content-card-actions";
+
+    const menuId = `content-menu-${kind}-${item.id}`;
+    const moreButton = document.createElement("button");
+    moreButton.type = "button";
+    moreButton.className = "content-more-button";
+    moreButton.textContent = "⋯";
+    moreButton.setAttribute("aria-label", `更多操作：${item.title}`);
+    moreButton.setAttribute("aria-haspopup", "menu");
+    moreButton.setAttribute("aria-expanded", "false");
+    moreButton.setAttribute("aria-controls", menuId);
+
+    const menu = document.createElement("div");
+    menu.id = menuId;
+    menu.className = "content-more-menu hidden";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-hidden", "true");
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "content-menu-item content-edit-button";
+    editButton.textContent = "编辑";
+    editButton.setAttribute("role", "menuitem");
+    editButton.setAttribute("aria-label", `编辑${item.title}`);
+    editButton.addEventListener("click", () => {
+      closeOpenContentMenu();
+      startContentEdit(kind, item);
+    });
+    menu.appendChild(editButton);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "content-menu-item content-delete-button";
+    deleteButton.textContent = "删除";
+    deleteButton.setAttribute("role", "menuitem");
+    deleteButton.setAttribute("aria-label", `删除${item.title}`);
+    deleteButton.addEventListener("click", () => deleteScopedContent(kind, item, deleteButton));
+    menu.appendChild(deleteButton);
+
+    moreButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleContentMenu(menu, moreButton);
+    });
+    menu.addEventListener("click", (event) => event.stopPropagation());
+
+    actions.append(moreButton, menu);
+    header.appendChild(actions);
+    article.appendChild(header);
+
+    if (item.content) {
+      const body = document.createElement("p");
+      body.textContent = item.content;
+      article.appendChild(body);
+    }
+
+    const meta = document.createElement("small");
+    const metaParts = [`创建于 ${formatDateTime(item.created_at)}`];
+    if (item.revision > 1) {
+      metaParts.push(`更新于 ${formatDateTime(item.updated_at)}`);
+      metaParts.push(`版本 ${item.revision}`);
+    }
+    meta.textContent = metaParts.join(" · ");
     article.appendChild(meta);
     list.appendChild(article);
   });
+
+  updateContentSectionVisibility(kind);
 }
 
 function scopeCopy(scope) {
@@ -1276,19 +2331,17 @@ function renderPeriodDetail(detail) {
   }
 
   renderPeriodNavigator(detail);
-  document.getElementById("eventSectionHeading").textContent = `${copy.noun}发生了什么`;
-  document.getElementById("memorySectionHeading").textContent = `我如何记得${copy.noun}`;
-  document.getElementById("planSectionHeading").textContent = `我准备在${copy.noun}做什么`;
-  renderContentList("eventList", detail.events, `${copy.noun}还没有事件。`);
-  renderContentList("memoryList", detail.memories, `${copy.noun}还没有个人记忆。`, "memory-card");
-  renderContentList("planList", detail.plans, `${copy.noun}还没有未来计划。`, "plan-card");
+  renderContentList("eventList", detail.events, `${copy.noun}还没有事件。`, "event");
+  renderContentList("memoryList", detail.memories, `${copy.noun}还没有个人记忆。`, "memory", "memory-card");
+  renderContentList("planList", detail.plans, `${copy.noun}还没有未来计划。`, "plan", "plan-card", detail.plan_allowed);
 
   const planUnavailable = !detail.plan_allowed;
   togglePlanFormButton.disabled = planUnavailable;
-  togglePlanFormButton.textContent = planUnavailable ? "该时间范围已过去" : "＋ 添加计划";
+  togglePlanFormButton.textContent = planUnavailable ? "计划不可新增" : "＋ 添加计划";
   planAvailability.textContent = detail.scope === "day"
     ? "过去日期不能新增未来计划，但此前保存的计划仍会显示。"
     : "已经结束的年份或月份不能新增未来计划，但此前保存的计划仍会显示。";
+  togglePlanFormButton.title = planUnavailable ? planAvailability.textContent : "添加未来计划";
   planAvailability.classList.toggle("hidden", !planUnavailable);
   if (planUnavailable) {
     planForm.reset();
@@ -1308,104 +2361,144 @@ function formatDateTime(value) {
   }).format(parsed);
 }
 
-function toggleEventForm(forceOpen = null) {
-  const shouldOpen = forceOpen === null ? eventForm.classList.contains("hidden") : forceOpen;
-  eventForm.classList.toggle("hidden", !shouldOpen);
-  toggleEventFormButton.textContent = shouldOpen ? "收起表单" : "＋ 添加事件";
-  if (shouldOpen) {
-    toggleMemoryForm(false);
-    togglePlanForm(false);
-    eventForm.querySelector('[name="title"]').focus();
+async function toggleContentForm(kind, forceOpen = null) {
+  const config = contentFormConfigurations[kind];
+  const isEditing = Boolean(config.form.dataset.editId);
+  if (kind === "plan" && config.toggleButton.disabled && !isEditing) return;
+
+  const shouldOpen = forceOpen === null ? config.form.classList.contains("hidden") : forceOpen;
+  if (!shouldOpen) {
+    if (isContentFormDirty(kind) && !(await confirmDiscardChanges())) return;
+    resetContentForm(kind, true);
+    return;
   }
+
+  if (hasUnsavedContentChanges() && !(await confirmDiscardChanges())) return;
+  resetAllContentForms();
+  config.form.classList.remove("hidden");
+  config.toggleButton.textContent = config.openLabel;
+  updateContentSectionVisibility(kind);
+  captureContentFormSnapshot(kind);
+  config.form.querySelector('[name="title"]').focus();
+}
+
+function toggleEventForm(forceOpen = null) {
+  return toggleContentForm("event", forceOpen);
 }
 
 function toggleMemoryForm(forceOpen = null) {
-  const shouldOpen = forceOpen === null ? memoryForm.classList.contains("hidden") : forceOpen;
-  memoryForm.classList.toggle("hidden", !shouldOpen);
-  toggleMemoryFormButton.textContent = shouldOpen ? "收起表单" : "＋ 添加记忆";
-  if (shouldOpen) {
-    toggleEventForm(false);
-    togglePlanForm(false);
-    memoryForm.querySelector('[name="title"]').focus();
-  }
+  return toggleContentForm("memory", forceOpen);
 }
 
 function togglePlanForm(forceOpen = null) {
-  if (togglePlanFormButton.disabled) return;
-  const shouldOpen = forceOpen === null ? planForm.classList.contains("hidden") : forceOpen;
-  planForm.classList.toggle("hidden", !shouldOpen);
-  togglePlanFormButton.textContent = shouldOpen ? "收起表单" : "＋ 添加计划";
-  if (shouldOpen) {
-    toggleEventForm(false);
-    toggleMemoryForm(false);
-    planForm.querySelector('[name="title"]').focus();
-  }
+  return toggleContentForm("plan", forceOpen);
 }
 
 toggleEventFormButton.addEventListener("click", () => toggleEventForm());
-document.getElementById("cancelEventForm").addEventListener("click", () => {
-  eventForm.reset();
-  toggleEventForm(false);
-});
+document.getElementById("cancelEventForm").addEventListener("click", () => toggleContentForm("event", false));
 toggleMemoryFormButton.addEventListener("click", () => toggleMemoryForm());
-document.getElementById("cancelMemoryForm").addEventListener("click", () => {
-  memoryForm.reset();
-  toggleMemoryForm(false);
-});
+document.getElementById("cancelMemoryForm").addEventListener("click", () => toggleContentForm("memory", false));
 togglePlanFormButton.addEventListener("click", () => togglePlanForm());
-document.getElementById("cancelPlanForm").addEventListener("click", () => {
-  planForm.reset();
-  togglePlanForm(false);
+document.getElementById("cancelPlanForm").addEventListener("click", () => toggleContentForm("plan", false));
+trashButton.addEventListener("click", openTrashDrawer);
+refreshTrashButton.addEventListener("click", openTrashDrawer);
+emptyTrashButton.addEventListener("click", emptyTrash);
+document.getElementById("closeDateDrawer").addEventListener("click", requestCloseDateDrawer);
+dateDrawerBackdrop.addEventListener("click", requestCloseDateDrawer);
+document.addEventListener("click", (event) => {
+  if (!openContentMenu) return;
+  const actionContainer = openContentMenu.closest(".content-card-actions");
+  if (!actionContainer?.contains(event.target)) closeOpenContentMenu();
 });
-document.getElementById("closeDateDrawer").addEventListener("click", closeDateDrawer);
-dateDrawerBackdrop.addEventListener("click", closeDateDrawer);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !dateDrawer.classList.contains("hidden")) closeDateDrawer();
+  if (event.key !== "Escape") return;
+  if (openContentMenu) {
+    closeOpenContentMenu({ restoreFocus: true });
+    return;
+  }
+  if (!confirmModal.classList.contains("hidden")) {
+    closeConfirmation(false);
+    return;
+  }
+  if (!resetPinModal.classList.contains("hidden")) {
+    closeResetPinModal();
+    return;
+  }
+  if (!settingsModal.classList.contains("hidden")) {
+    requestCloseSettingsModal();
+    return;
+  }
+  if (!dateDrawer.classList.contains("hidden")) {
+    requestCloseDateDrawer();
+    return;
+  }
+  if (fullPageLifeOpen) requestCloseFullPageLifeView();
 });
 
-async function submitScopedContent({ formNode, endpoint, successMessage }) {
+window.addEventListener("beforeunload", (event) => {
+  if (!hasUnsavedContentChanges() && !hasUnsavedSettingsChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+async function submitScopedContent(kind) {
   if (!selectedScope || !selectedPeriodKey) return;
+  const config = contentFormConfigurations[kind];
+  const formNode = config.form;
   const form = new FormData(formNode);
   const submit = formNode.querySelector('button[type="submit"]');
+  const editId = formNode.dataset.editId || null;
+  const editRevision = Number(formNode.dataset.editRevision || 0);
+  const idleSubmitLabel = submit.textContent;
   submit.disabled = true;
+  submit.classList.add("is-busy");
+  submit.setAttribute("aria-busy", "true");
+  submit.textContent = editId ? "保存修改中…" : "加密保存中…";
   try {
-    await api(endpoint, {
-      method: "POST",
-      body: JSON.stringify({
-        time_scope: selectedScope,
-        period_key: selectedPeriodKey,
-        title: form.get("title"),
-        content: form.get("content") || "",
-      }),
+    const requestBody = editId
+      ? {
+          title: form.get("title"),
+          content: form.get("content") || "",
+          revision: editRevision,
+        }
+      : {
+          time_scope: selectedScope,
+          period_key: selectedPeriodKey,
+          title: form.get("title"),
+          content: form.get("content") || "",
+        };
+    await api(editId ? `${config.endpoint}/${encodeURIComponent(editId)}` : config.endpoint, {
+      method: editId ? "PUT" : "POST",
+      body: JSON.stringify(requestBody),
     }, true);
     await refreshContentStatuses();
     renderLifeMapView(true);
-    formNode.reset();
-    toggleEventForm(false);
-    toggleMemoryForm(false);
-    togglePlanForm(false);
-    showToast(successMessage);
+    resetAllContentForms();
+    showToast(editId ? config.editMessage : config.createMessage, "success");
     await openPeriodDrawer(selectedScope, selectedPeriodKey);
   } catch (error) {
-    showToast(error.message);
+    showOperationError(error);
   } finally {
     submit.disabled = false;
+    submit.classList.remove("is-busy");
+    submit.removeAttribute("aria-busy");
+    if (!formNode.classList.contains("hidden")) submit.textContent = idleSubmitLabel;
   }
 }
 
 eventForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitScopedContent({ formNode: eventForm, endpoint: "/api/v1/events", successMessage: "事件已加密保存" });
+  await submitScopedContent("event");
 });
 
 memoryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitScopedContent({ formNode: memoryForm, endpoint: "/api/v1/memories", successMessage: "记忆已加密保存" });
+  await submitScopedContent("memory");
 });
 
 planForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitScopedContent({ formNode: planForm, endpoint: "/api/v1/plans", successMessage: "未来计划已加密保存" });
+  await submitScopedContent("plan");
 });
 
 bootstrap();

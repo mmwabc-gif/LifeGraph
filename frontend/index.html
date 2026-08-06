@@ -3,20 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.2</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.2">
+  <title>人生图谱 · v0.0.3</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.3">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.2</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.3</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.2</span>
+          <span class="build-badge">v0.0.3</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
+          <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
+          <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
           <button id="lockButton" class="ghost-button hidden" type="button">锁定仓库</button>
         </div>
       </div>
@@ -75,6 +77,7 @@
             <input name="secret" type="password" required autocomplete="current-password">
           </label>
           <button class="primary-button full-width" type="submit">解锁人生图谱</button>
+          <button id="openResetPin" class="text-button full-width" type="button">忘记 PIN？使用恢复凭据重置</button>
         </form>
       </div>
     </section>
@@ -89,7 +92,6 @@
           </div>
           <div class="life-percent">
             <strong id="lifePercent">0%</strong>
-            <span>生命进度</span>
           </div>
         </section>
 
@@ -114,12 +116,15 @@
           <div class="life-map-toolbar-main">
             <div class="life-map-heading">
               <p class="eyebrow">人生图谱视图</p>
-              <h2 id="lifeMapViewTitle">人生总览</h2>
+              <h2 id="lifeMapViewTitle">太阳每天都是新的</h2>
             </div>
-            <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
-              <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">人生</button>
-              <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
-              <button class="life-view-tab" type="button" role="tab" data-life-view="year" aria-selected="false">年</button>
+            <div class="life-map-view-controls">
+              <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
+                <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">日</button>
+                <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
+                <button class="life-view-tab" type="button" role="tab" data-life-view="year" aria-selected="false">年</button>
+              </div>
+              <button id="openFullPageView" class="life-fullpage-button" type="button">全页视图</button>
             </div>
           </div>
           <div class="life-map-description-row">
@@ -163,14 +168,47 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.2 稳定版</p>
-        <h2>三级全范围图谱与时间范围内容</h2>
-        <p>人生、年、月三个视图覆盖完整目标人生范围；事件、记忆和计划既能挂在具体日期，也能直接挂在整月或整年。</p>
+        <p class="eyebrow">v0.0.3 稳定版</p>
+        <h2>内容管理与安全设置闭环</h2>
+        <p>支持内容编辑、软删除、回收站恢复、全页日图，以及姓名、出生日期和 PIN 安全修改。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
         </div>
       </section>
+    </section>
+
+    <section id="fullPageLifeView" class="full-page-life-view hidden" aria-hidden="true" aria-label="全页日期格视图">
+      <header class="full-page-life-header">
+        <div class="full-page-life-heading">
+          <p class="eyebrow">日视图 · 全页</p>
+          <h2>太阳每一天都是新的</h2>
+          <p id="fullPageLifeSummary" class="subtle">完整人生日期连续铺满页面。</p>
+        </div>
+        <div class="full-page-life-header-actions">
+          <div class="legend full-page-life-legend" aria-label="全页图谱状态图例">
+            <span><i class="past-dot"></i>已走过</span>
+            <span><i class="today-dot"></i>今天</span>
+            <span><i class="future-dot"></i>未来</span>
+            <span><i class="event-dot"></i>有事件</span>
+            <span><i class="memory-border"></i>有记忆</span>
+            <span><i class="plan-ring"></i>有计划</span>
+          </div>
+          <button id="fullPageLocateToday" class="ghost-button full-page-control-button" type="button">定位今天</button>
+          <button id="fullPageSettingsButton" class="ghost-button full-page-control-button" type="button">个人设置</button>
+          <button id="closeFullPageView" class="primary-button full-page-control-button" type="button">进入首页</button>
+        </div>
+      </header>
+      <div id="fullPageLifeCanvasWrap" class="full-page-life-canvas-wrap">
+        <canvas id="fullPageLifeCanvas" tabindex="0" aria-label="连续排列的完整人生日期格"></canvas>
+      </div>
+      <div id="fullPageDateTooltip" class="full-page-date-tooltip hidden" aria-hidden="true">
+        <div class="grid-magnifier-heading">
+          <strong id="fullPageDateTooltipTitle">—</strong>
+          <span id="fullPageDateTooltipMeta">—</span>
+        </div>
+        <small>点击格子打开日期详情</small>
+      </div>
     </section>
 
     <div id="hierarchyPointerTooltip" class="hierarchy-pointer-tooltip hidden" aria-hidden="true">
@@ -219,13 +257,17 @@
           <div id="periodChildGrid" class="period-child-grid"></div>
         </section>
 
-        <section class="drawer-section">
-          <div class="drawer-section-title">
-            <div>
-              <p class="eyebrow">正式事件</p>
-              <h3 id="eventSectionHeading">这一天发生了什么</h3>
-            </div>
-            <button id="toggleEventForm" class="secondary-button compact-button" type="button">＋ 添加事件</button>
+        <div id="contentActionBar" class="content-action-bar" role="group" aria-label="添加时间内容">
+          <button id="toggleEventForm" class="content-action-button event-action-button" type="button" aria-expanded="false">＋ 添加事件</button>
+          <button id="toggleMemoryForm" class="content-action-button memory-action-button" type="button" aria-expanded="false">＋ 添加记忆</button>
+          <button id="togglePlanForm" class="content-action-button plan-action-button" type="button" aria-expanded="false">＋ 添加计划</button>
+        </div>
+
+        <p id="planAvailability" class="section-note compact-section-note hidden">过去日期不能新增未来计划，但此前保存的计划仍会显示。</p>
+
+        <section id="eventSection" class="content-kind-section hidden">
+          <div class="content-kind-heading">
+            <h3 id="eventSectionHeading">事件</h3>
           </div>
 
           <form id="eventForm" class="event-form hidden">
@@ -244,13 +286,9 @@
           <div id="eventList" class="content-list"></div>
         </section>
 
-        <section class="drawer-section memory-section">
-          <div class="drawer-section-title">
-            <div>
-              <p class="eyebrow">个人记忆</p>
-              <h3 id="memorySectionHeading">我如何记得这一天</h3>
-            </div>
-            <button id="toggleMemoryForm" class="secondary-button compact-button" type="button">＋ 添加记忆</button>
+        <section id="memorySection" class="content-kind-section hidden">
+          <div class="content-kind-heading">
+            <h3 id="memorySectionHeading">记忆</h3>
           </div>
 
           <form id="memoryForm" class="memory-form hidden">
@@ -269,20 +307,14 @@
           <div id="memoryList" class="content-list memory-list"></div>
         </section>
 
-        <section class="drawer-section plan-section">
-          <div class="drawer-section-title">
-            <div>
-              <p class="eyebrow">未来计划</p>
-              <h3 id="planSectionHeading">我准备在这一天做什么</h3>
-            </div>
-            <button id="togglePlanForm" class="secondary-button compact-button" type="button">＋ 添加计划</button>
+        <section id="planSection" class="content-kind-section hidden">
+          <div class="content-kind-heading">
+            <h3 id="planSectionHeading">计划</h3>
           </div>
-
-          <p id="planAvailability" class="section-note hidden">过去日期不能新增未来计划，但此前保存的计划仍会显示。</p>
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.2">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.3">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -296,7 +328,119 @@
           <div id="planList" class="content-list plan-list"></div>
         </section>
       </div>
+
+      <div id="trashDrawerContent" class="date-drawer-content trash-drawer-content hidden">
+        <section class="trash-toolbar">
+          <div>
+            <p class="eyebrow">已删除内容</p>
+            <h3 id="trashSummary">回收站为空</h3>
+          </div>
+          <div class="trash-toolbar-actions">
+            <button id="refreshTrashButton" class="ghost-button compact-button" type="button">刷新</button>
+            <button id="emptyTrashButton" class="danger-button compact-button" type="button" disabled>清空回收站</button>
+          </div>
+        </section>
+        <p class="section-note">恢复后会回到原来的年份、月份或日期；彻底删除后无法找回。</p>
+        <div id="trashList" class="trash-list"></div>
+      </div>
     </aside>
+
+
+    <div id="confirmModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage" aria-hidden="true">
+      <div class="confirm-card">
+        <p id="confirmEyebrow" class="eyebrow">请确认</p>
+        <h2 id="confirmTitle">确认操作</h2>
+        <p id="confirmMessage" class="confirm-message"></p>
+        <div class="confirm-actions">
+          <button id="confirmCancel" class="ghost-button" type="button">取消</button>
+          <button id="confirmAccept" class="danger-button confirm-accept-button" type="button">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="settingsModal" class="modal settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true">
+      <div class="modal-card settings-card">
+        <header class="settings-header">
+          <div>
+            <p class="eyebrow">个人档案与安全</p>
+            <h2 id="settingsTitle">个人设置</h2>
+          </div>
+          <button id="closeSettings" class="icon-button" type="button" aria-label="关闭个人设置">×</button>
+        </header>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h3>个人档案</h3>
+            <p>姓名与出生日期会加密保存在本地仓库中。</p>
+          </div>
+          <form id="profileSettingsForm" class="form-grid compact-form">
+            <label>姓名
+              <input name="display_name" required maxlength="80" autocomplete="name">
+            </label>
+            <label>出生日期
+              <input name="birth_date" type="date" required>
+            </label>
+            <label class="full-width">当前 PIN（确认保存）
+              <input name="current_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="current-password">
+            </label>
+            <p class="full-width form-note">修改出生日期会重新计算人生范围、进度与今天的位置；已有内容仍保留在原公历时间。</p>
+            <div class="full-width settings-form-actions">
+              <button id="cancelProfileSettings" class="ghost-button" type="button">取消</button>
+              <button class="primary-button" type="submit">保存个人档案</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="settings-section security-settings-section">
+          <div class="settings-section-heading">
+            <h3>修改 PIN</h3>
+            <p>只重新包装同一个主密钥，不会重写事件、记忆和计划。修改成功后需要重新解锁。</p>
+          </div>
+          <form id="changePinForm" class="form-grid compact-form">
+            <label>当前 PIN
+              <input name="current_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="current-password">
+            </label>
+            <label>新 PIN
+              <input name="new_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="new-password">
+            </label>
+            <label class="full-width">再次输入新 PIN
+              <input name="confirm_new_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="new-password">
+            </label>
+            <div class="full-width settings-form-actions">
+              <button class="primary-button" type="submit">修改 PIN 并重新锁定</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+
+    <div id="resetPinModal" class="modal settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="resetPinTitle" aria-hidden="true">
+      <div class="modal-card reset-pin-card">
+        <header class="settings-header">
+          <div>
+            <p class="eyebrow">恢复访问</p>
+            <h2 id="resetPinTitle">使用恢复凭据重置 PIN</h2>
+          </div>
+          <button id="closeResetPin" class="icon-button" type="button" aria-label="关闭重置 PIN">×</button>
+        </header>
+        <p class="settings-intro">恢复凭据只用于解开原主密钥并重新设置本机 PIN，原有加密内容不会改变。</p>
+        <form id="resetPinForm" class="form-grid compact-form">
+          <label class="full-width">恢复凭据
+            <input name="recovery_secret" type="password" minlength="12" maxlength="256" required autocomplete="off">
+          </label>
+          <label>新 PIN
+            <input name="new_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="new-password">
+          </label>
+          <label>再次输入新 PIN
+            <input name="confirm_new_pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" minlength="6" maxlength="12" required autocomplete="new-password">
+          </label>
+          <div class="full-width settings-form-actions">
+            <button id="cancelResetPin" class="ghost-button" type="button">取消</button>
+            <button class="primary-button" type="submit">重置 PIN</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
       <div class="modal-card">
@@ -311,8 +455,8 @@
       </div>
     </div>
 
-    <div id="toast" class="toast hidden"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
-  <script src="/assets/app.js?v=0.0.2"></script>
+  <script src="/assets/app.js?v=0.0.3"></script>
 </body>
 </html>

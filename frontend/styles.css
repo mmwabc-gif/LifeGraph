@@ -1780,3 +1780,1030 @@ body.drawer-open {
   width: 100%;
   text-align: center;
 }
+
+/* LifeGraph v0.0.3.1：事件／记忆／计划编辑最小闭环 */
+.content-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.content-card-header h4 {
+  min-width: 0;
+  margin: 0;
+}
+
+.content-edit-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(49, 92, 77, .22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .72);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.content-edit-button:hover,
+.content-edit-button:focus-visible {
+  border-color: rgba(49, 92, 77, .45);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.event-form.is-editing,
+.memory-form.is-editing,
+.plan-form.is-editing {
+  border-top-color: rgba(49, 92, 77, .36);
+  background: linear-gradient(180deg, rgba(231, 239, 234, .48), rgba(255, 255, 255, 0));
+  border-radius: 12px;
+  padding: 16px 12px 0;
+}
+
+@media (max-width: 620px) {
+  .content-card-header {
+    align-items: center;
+  }
+}
+
+/* LifeGraph v0.0.3.2：事件／记忆／计划软删除闭环 */
+.content-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.content-delete-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(153, 72, 61, .24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .72);
+  color: #914f46;
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.content-delete-button:hover,
+.content-delete-button:focus-visible {
+  border-color: rgba(153, 72, 61, .48);
+  background: rgba(244, 225, 221, .68);
+  outline: none;
+}
+
+@media (max-width: 620px) {
+  .content-card-actions {
+    gap: 5px;
+  }
+
+  .content-edit-button,
+  .content-delete-button {
+    min-height: 28px;
+    padding-inline: 8px;
+  }
+}
+
+
+/* LifeGraph v0.0.3.3：统一回收站与恢复闭环 */
+.trash-drawer-content {
+  gap: 14px;
+}
+
+.trash-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 2px 0 4px;
+}
+
+.trash-toolbar h3 {
+  margin: 3px 0 0;
+  font-size: 1rem;
+}
+
+.trash-toolbar-actions,
+.trash-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.danger-button,
+.trash-purge-button {
+  border: 1px solid rgba(164, 78, 65, 0.34);
+  background: rgba(164, 78, 65, 0.08);
+  color: #8b4035;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.danger-button:hover:not(:disabled),
+.trash-purge-button:hover {
+  background: rgba(164, 78, 65, 0.14);
+}
+
+.danger-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.trash-list {
+  display: grid;
+  gap: 10px;
+}
+
+.trash-card {
+  border: 1px solid rgba(76, 69, 57, 0.14);
+  border-radius: 13px;
+  padding: 12px 13px;
+  background: rgba(255, 253, 247, 0.82);
+}
+
+.trash-card-memory {
+  border-color: rgba(73, 130, 93, 0.25);
+}
+
+.trash-card-plan {
+  border-color: rgba(72, 111, 156, 0.25);
+}
+
+.trash-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trash-card-heading h4 {
+  margin: 5px 0 0;
+  font-size: 0.96rem;
+  line-height: 1.4;
+}
+
+.trash-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.trash-card small {
+  display: block;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.trash-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1;
+  background: rgba(150, 113, 53, 0.12);
+  color: #765925;
+}
+
+.trash-kind-memory {
+  background: rgba(72, 130, 93, 0.12);
+  color: #376d49;
+}
+
+.trash-kind-plan {
+  background: rgba(72, 111, 156, 0.12);
+  color: #3d658f;
+}
+
+.trash-restore-button,
+.trash-purge-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.trash-restore-button {
+  border: 1px solid rgba(67, 112, 77, 0.32);
+  background: rgba(67, 112, 77, 0.09);
+  color: #376844;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.trash-restore-button:hover {
+  background: rgba(67, 112, 77, 0.15);
+}
+
+.trash-empty-copy {
+  min-height: 110px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .trash-toolbar,
+  .trash-card-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trash-toolbar-actions,
+  .trash-card-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* LifeGraph v0.0.3.4：交互收口与版本稳定化 */
+body.confirm-open {
+  overflow: hidden;
+}
+
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(24, 27, 23, .54);
+  backdrop-filter: blur(7px);
+}
+
+.confirm-card {
+  width: min(440px, 100%);
+  border: 1px solid rgba(58, 56, 48, .14);
+  border-radius: 22px;
+  padding: 26px;
+  background: #fffdf8;
+  box-shadow: 0 30px 90px rgba(22, 24, 21, .24);
+}
+
+.confirm-card h2 {
+  margin-bottom: 10px;
+  font-size: 1.32rem;
+}
+
+.confirm-message {
+  margin-bottom: 22px;
+  color: var(--muted);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-accept-button {
+  min-height: 44px;
+  padding: 0 18px;
+  font: inherit;
+  font-weight: 800;
+}
+
+.confirm-modal[data-tone="warning"] .confirm-accept-button {
+  border-color: rgba(171, 112, 37, .34);
+  background: rgba(184, 124, 44, .12);
+  color: #81551e;
+}
+
+button.is-busy {
+  position: relative;
+  cursor: wait;
+}
+
+button.is-busy::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  margin-right: 7px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin .65s linear infinite;
+  opacity: .72;
+}
+
+.toast[data-tone="success"] {
+  background: #244c3c;
+}
+
+.toast[data-tone="error"] {
+  background: #7b3d35;
+}
+
+.content-empty-state {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  min-height: 82px;
+  border: 1px dashed rgba(64, 68, 59, .16);
+  border-radius: 13px;
+  padding: 15px;
+  background: rgba(255, 255, 255, .36);
+}
+
+.content-empty-state .empty-copy {
+  margin: 0;
+}
+
+.content-empty-action {
+  min-height: 34px;
+  padding-inline: 12px;
+  font-size: .78rem;
+}
+
+@media (max-width: 620px) {
+  .confirm-card {
+    padding: 22px 18px;
+    border-radius: 18px;
+  }
+
+  .confirm-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .content-card-header,
+  .trash-card-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .content-card-actions,
+  .trash-card-actions {
+    width: 100%;
+  }
+
+  .content-card-actions button,
+  .trash-card-actions button {
+    flex: 1 1 0;
+    min-height: 36px;
+  }
+
+  .event-form-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .event-form-actions button {
+    width: 100%;
+  }
+}
+
+
+/* LifeGraph v0.0.3.5：日期详情快捷操作栏 */
+.content-action-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.content-action-button {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 14px;
+  padding: 0 10px;
+  background: rgba(224, 235, 229, .82);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+}
+
+.content-action-button:hover:not(:disabled),
+.content-action-button.is-active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 9px 22px rgba(49, 92, 77, .17);
+  transform: translateY(-1px);
+}
+
+.memory-action-button {
+  border-color: rgba(71, 119, 101, .2);
+}
+
+.plan-action-button {
+  border-color: rgba(63, 111, 165, .22);
+  background: rgba(229, 238, 248, .86);
+  color: #3f6fa5;
+}
+
+.content-action-button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+  box-shadow: none;
+  transform: none;
+}
+
+.compact-section-note {
+  margin-top: -6px;
+}
+
+.content-kind-section {
+  padding: 0;
+  background: transparent;
+}
+
+.content-kind-heading {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: 8px;
+}
+
+.content-kind-heading h3 {
+  margin: 0;
+  color: var(--accent);
+  font-size: .88rem;
+  font-weight: 800;
+}
+
+.content-kind-section .event-form,
+.content-kind-section .memory-form,
+.content-kind-section .plan-form {
+  margin-top: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(255, 255, 255, .72);
+}
+
+.content-kind-section .content-list {
+  margin-top: 0;
+}
+
+.content-kind-section .content-list:not(:empty) + * {
+  margin-top: 0;
+}
+
+@media (max-width: 420px) {
+  .content-action-bar {
+    gap: 7px;
+  }
+
+  .content-action-button {
+    min-height: 40px;
+    padding-inline: 6px;
+    font-size: .75rem;
+  }
+}
+
+
+/* LifeGraph v0.0.3.6：内容卡片“...”更多菜单 */
+.content-card {
+  position: relative;
+}
+
+.content-card-actions {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.content-more-button {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(49, 92, 77, .2);
+  border-radius: 999px;
+  padding: 0;
+  background: rgba(255, 255, 255, .76);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.2rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: .04em;
+}
+
+.content-more-button:hover,
+.content-more-button:focus-visible,
+.content-more-button[aria-expanded="true"] {
+  border-color: rgba(49, 92, 77, .42);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.content-more-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 112px;
+  gap: 2px;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 12px;
+  padding: 6px;
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 14px 34px rgba(44, 57, 50, .16);
+}
+
+.content-menu-item.content-edit-button,
+.content-menu-item.content-delete-button {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: left;
+}
+
+.content-menu-item.content-edit-button {
+  color: var(--accent);
+}
+
+.content-menu-item.content-delete-button {
+  color: #914f46;
+}
+
+.content-menu-item.content-edit-button:hover,
+.content-menu-item.content-edit-button:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.content-menu-item.content-delete-button:hover,
+.content-menu-item.content-delete-button:focus-visible {
+  background: rgba(244, 225, 221, .68);
+  outline: none;
+}
+
+@media (max-width: 620px) {
+  .content-card-header {
+    align-items: flex-start;
+    flex-direction: row;
+  }
+
+  .content-card-actions {
+    width: auto;
+  }
+
+  .content-card-actions button {
+    min-height: 34px;
+  }
+
+  .content-more-menu {
+    min-width: 124px;
+  }
+
+  .content-menu-item.content-edit-button,
+  .content-menu-item.content-delete-button {
+    min-height: 40px;
+  }
+}
+
+
+/* LifeGraph v0.0.3.9：连续日期格全页视图 */
+.life-map-view-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.life-fullpage-button {
+  min-height: 48px;
+  border: 1px solid rgba(49,92,77,.2);
+  border-radius: 16px;
+  padding: 0 16px;
+  background: rgba(220,233,226,.72);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: transform .14s ease, background .14s ease, box-shadow .14s ease;
+}
+
+.life-fullpage-button:hover,
+.life-fullpage-button:focus-visible {
+  transform: translateY(-1px);
+  background: var(--accent-soft);
+  box-shadow: 0 8px 20px rgba(49,92,77,.12);
+  outline: none;
+}
+
+html.full-page-life-open,
+body.full-page-life-open {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+html.full-page-life-open {
+  scrollbar-gutter: auto;
+}
+
+.full-page-life-view {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(255,255,255,.82), transparent 34rem),
+    linear-gradient(145deg, #f7f4ed, #f1eee6);
+}
+
+.full-page-life-header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 94px;
+  height: auto;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(36,37,31,.12);
+  background: rgba(251,250,246,.94);
+  box-shadow: 0 10px 30px rgba(54,48,36,.08);
+  backdrop-filter: blur(18px);
+}
+
+.full-page-life-heading {
+  min-width: 0;
+}
+
+.full-page-life-heading .eyebrow {
+  margin-bottom: 2px;
+}
+
+.full-page-life-heading h2 {
+  display: inline;
+  margin: 0 12px 0 0;
+  font-size: 1.45rem;
+}
+
+.full-page-life-heading .subtle {
+  display: inline;
+  margin: 0;
+}
+
+.full-page-life-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.full-page-life-legend {
+  justify-content: flex-end;
+  margin-right: 6px;
+}
+
+.full-page-control-button {
+  min-height: 40px;
+  border-radius: 12px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.full-page-life-canvas-wrap {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.full-page-life-canvas-wrap::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+#fullPageLifeCanvas {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  background: rgba(255,255,255,.34);
+  contain: layout paint;
+}
+
+#fullPageLifeCanvas:focus-visible {
+  outline: 3px solid rgba(49,92,77,.24);
+  outline-offset: -3px;
+}
+
+.full-page-date-tooltip {
+  position: fixed;
+  z-index: 135;
+  width: 244px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  border: 1px solid rgba(31,54,45,.2);
+  border-radius: 16px;
+  background: rgba(251,250,246,.97);
+  box-shadow: 0 16px 44px rgba(35,31,24,.24);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  user-select: none;
+}
+
+.full-page-date-tooltip .grid-magnifier-heading {
+  margin-bottom: 0;
+}
+
+.full-page-date-tooltip small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .68rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .life-map-view-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .life-fullpage-button {
+    min-height: 42px;
+  }
+
+  .full-page-life-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    height: auto;
+    padding: 12px 14px;
+  }
+
+  .full-page-life-heading h2 {
+    display: block;
+    margin: 0;
+    line-height: 1.22;
+    overflow-wrap: anywhere;
+  }
+
+  .full-page-life-heading .subtle {
+    display: block;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  .full-page-life-header-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    width: 100%;
+    align-items: center;
+    gap: 8px 10px;
+  }
+
+  .full-page-life-legend {
+    min-width: 0;
+    margin-right: 0;
+    justify-content: flex-start;
+    gap: 7px 11px;
+  }
+}
+
+@media (max-width: 620px) {
+  .full-page-life-header {
+    gap: 9px;
+    padding: 10px 12px;
+  }
+
+  .full-page-life-heading .eyebrow {
+    font-size: .72rem;
+  }
+
+  .full-page-life-heading h2 {
+    font-size: 1.18rem;
+  }
+
+  .full-page-life-heading .subtle {
+    font-size: .76rem;
+  }
+
+  .full-page-life-header-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .full-page-life-legend {
+    grid-column: 1 / -1;
+    width: 100%;
+    font-size: .72rem;
+  }
+
+  .full-page-control-button {
+    width: 100%;
+    min-height: 38px;
+    padding: 0 10px;
+  }
+}
+
+@media (max-width: 390px) {
+  .full-page-life-legend {
+    gap: 6px 9px;
+  }
+
+  .full-page-life-heading h2 {
+    font-size: 1.08rem;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .full-page-date-tooltip {
+    display: none !important;
+  }
+}
+
+
+/* LifeGraph v0.0.3.15：首页说明字号与生命圆环百分比居中 */
+.hero-sentence {
+  font-size: .82rem;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.life-percent {
+  display: grid;
+  place-items: center;
+}
+
+.life-percent strong {
+  line-height: 1;
+}
+
+@media (max-width: 760px) {
+  .hero-sentence {
+    font-size: .78rem;
+  }
+}
+
+/* LifeGraph v0.0.3.15：个人档案与安全设置 */
+body.settings-open {
+  overflow: hidden;
+}
+
+.text-button {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: center;
+}
+
+.text-button:hover,
+.text-button:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+.settings-modal {
+  z-index: 270;
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+.settings-card {
+  width: min(760px, 100%);
+  max-height: none;
+  overflow: visible;
+}
+
+.reset-pin-card {
+  width: min(560px, 100%);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.settings-header h2 {
+  margin: 0;
+}
+
+.settings-section + .settings-section {
+  margin-top: 28px;
+  border-top: 1px solid rgba(56, 62, 53, .12);
+  padding-top: 26px;
+}
+
+.settings-section-heading {
+  margin-bottom: 16px;
+}
+
+.settings-section-heading h3 {
+  margin-bottom: 5px;
+  font-size: 1.12rem;
+}
+
+.settings-section-heading p,
+.settings-intro {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.settings-intro {
+  margin: -8px 0 20px;
+}
+
+.settings-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px), (max-height: 820px) {
+  .settings-modal {
+    place-items: start center;
+    overflow-y: auto;
+    padding: 10px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .settings-modal::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .settings-card,
+  .reset-pin-card {
+    max-height: none;
+    overflow: visible;
+    border-radius: 20px;
+    padding: 22px 18px;
+  }
+
+  .settings-form-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-form-actions button {
+    width: 100%;
+  }
+}
+
+
+/* LifeGraph v0.0.3.16：首页已走过天数说明字号协调 */
+.hero-sentence {
+  font-size: clamp(.92rem, 1.55vw, 1.05rem);
+}
+
+@media (max-width: 760px) {
+  .hero-sentence {
+    font-size: .9rem;
+  }
+}
+
+
+/* LifeGraph v0.0.3.17：个人设置弹窗自然高度与隐藏式小屏滚动 */

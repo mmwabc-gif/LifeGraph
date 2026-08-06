@@ -20,6 +20,14 @@ _CONTENT_TABLES = {
 }
 
 
+class DatabaseContentNotFound(LookupError):
+    pass
+
+
+class DatabaseRevisionConflict(RuntimeError):
+    pass
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -174,6 +182,59 @@ class Database:
                 (profile_id, nonce, ciphertext, timestamp, timestamp),
             )
 
+
+    def update_profile(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        payload: dict[str, Any],
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        nonce, ciphertext = encrypt_json(master_key, payload, aad=PROFILE_AAD)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE profiles
+                SET nonce=?, ciphertext=?, updated_at=?, revision=revision + 1
+                WHERE id=? AND revision=?
+                """,
+                (nonce, ciphertext, timestamp, profile_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    "SELECT revision FROM profiles WHERE id=?", (profile_id,)
+                ).fetchone()
+                if row is None:
+                    raise DatabaseContentNotFound("个人档案不存在")
+                raise DatabaseRevisionConflict("个人档案已被更新，请刷新后重试")
+        profile = self.load_profile(master_key)
+        if profile is None:  # pragma: no cover - defensive
+            raise DatabaseContentNotFound("个人档案不存在")
+        return profile
+
+    def list_active_period_references(self, *, profile_id: str) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        with self.connect() as connection:
+            for kind, (table, _date_column, _aad_prefix) in _CONTENT_TABLES.items():
+                for row in connection.execute(
+                    f"""
+                    SELECT time_scope, period_key
+                    FROM {table}
+                    WHERE profile_id=? AND deleted_at IS NULL
+                    """,
+                    (profile_id,),
+                ):
+                    rows.append(
+                        {
+                            "kind": kind,
+                            "time_scope": row["time_scope"],
+                            "period_key": row["period_key"],
+                        }
+                    )
+        return rows
+
     def load_profile(self, master_key: bytes) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -293,6 +354,263 @@ class Database:
             )
         return values
 
+    def _update_content(
+        self,
+        master_key: bytes,
+        *,
+        kind: str,
+        content_id: str,
+        profile_id: str,
+        payload: dict[str, Any],
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        table, date_column, aad_prefix = _CONTENT_TABLES[kind]
+        nonce, ciphertext = encrypt_json(
+            master_key,
+            payload,
+            aad=self._aad(aad_prefix, content_id),
+        )
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE {table}
+                SET nonce=?, ciphertext=?, updated_at=?, revision=revision + 1
+                WHERE id=? AND profile_id=? AND deleted_at IS NULL AND revision=?
+                """,
+                (
+                    nonce,
+                    ciphertext,
+                    timestamp,
+                    content_id,
+                    profile_id,
+                    expected_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    f"""
+                    SELECT revision
+                    FROM {table}
+                    WHERE id=? AND profile_id=? AND deleted_at IS NULL
+                    """,
+                    (content_id, profile_id),
+                ).fetchone()
+                if row is None:
+                    raise DatabaseContentNotFound("内容不存在或已经被删除")
+                raise DatabaseRevisionConflict(
+                    f"内容已被其他操作更新，当前版本为 {row['revision']}"
+                )
+
+            row = connection.execute(
+                f"""
+                SELECT id, profile_id, {date_column}, time_scope, period_key,
+                       created_at, updated_at, revision
+                FROM {table}
+                WHERE id=? AND profile_id=?
+                """,
+                (content_id, profile_id),
+            ).fetchone()
+
+        if row is None:
+            raise DatabaseContentNotFound("内容不存在或已经被删除")
+        return {
+            "id": row["id"],
+            "profile_id": row["profile_id"],
+            date_column: row[date_column],
+            "time_scope": row["time_scope"],
+            "period_key": row["period_key"],
+            **payload,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "revision": row["revision"],
+        }
+
+    def _soft_delete_content(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        profile_id: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        table, _, _ = _CONTENT_TABLES[kind]
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE {table}
+                SET deleted_at=?, updated_at=?, revision=revision + 1
+                WHERE id=? AND profile_id=? AND deleted_at IS NULL AND revision=?
+                """,
+                (timestamp, timestamp, content_id, profile_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    f"""
+                    SELECT revision, deleted_at
+                    FROM {table}
+                    WHERE id=? AND profile_id=?
+                    """,
+                    (content_id, profile_id),
+                ).fetchone()
+                if row is None or row["deleted_at"] is not None:
+                    raise DatabaseContentNotFound("内容不存在或已经被删除")
+                raise DatabaseRevisionConflict(
+                    f"内容已被其他操作更新，当前版本为 {row['revision']}"
+                )
+
+            row = connection.execute(
+                f"""
+                SELECT id, updated_at, revision, deleted_at
+                FROM {table}
+                WHERE id=? AND profile_id=?
+                """,
+                (content_id, profile_id),
+            ).fetchone()
+
+        if row is None:
+            raise DatabaseContentNotFound("内容不存在或已经被删除")
+        return {
+            "id": row["id"],
+            "updated_at": row["updated_at"],
+            "revision": row["revision"],
+            "deleted_at": row["deleted_at"],
+        }
+
+    def list_deleted_content(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+    ) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+        with self.connect() as connection:
+            for kind, (table, date_column, aad_prefix) in _CONTENT_TABLES.items():
+                rows = connection.execute(
+                    f"""
+                    SELECT id, profile_id, {date_column}, time_scope, period_key,
+                           nonce, ciphertext, created_at, updated_at, revision, deleted_at
+                    FROM {table}
+                    WHERE profile_id=? AND deleted_at IS NOT NULL
+                    ORDER BY deleted_at DESC, id DESC
+                    """,
+                    (profile_id,),
+                ).fetchall()
+                for row in rows:
+                    payload = decrypt_json(
+                        master_key,
+                        row["nonce"],
+                        row["ciphertext"],
+                        aad=self._aad(aad_prefix, row["id"]),
+                    )
+                    values.append(
+                        {
+                            "kind": kind,
+                            "id": row["id"],
+                            "profile_id": row["profile_id"],
+                            "anchor_date": row[date_column],
+                            date_column: row[date_column],
+                            "time_scope": row["time_scope"],
+                            "period_key": row["period_key"],
+                            **payload,
+                            "created_at": row["created_at"],
+                            "updated_at": row["updated_at"],
+                            "revision": row["revision"],
+                            "deleted_at": row["deleted_at"],
+                        }
+                    )
+        values.sort(key=lambda value: (value["deleted_at"], value["id"]), reverse=True)
+        return values
+
+    def restore_deleted_content(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        profile_id: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        table, _, _ = _CONTENT_TABLES[kind]
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE {table}
+                SET deleted_at=NULL, updated_at=?, revision=revision + 1
+                WHERE id=? AND profile_id=? AND deleted_at IS NOT NULL AND revision=?
+                """,
+                (timestamp, content_id, profile_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    f"SELECT revision, deleted_at FROM {table} WHERE id=? AND profile_id=?",
+                    (content_id, profile_id),
+                ).fetchone()
+                if row is None or row["deleted_at"] is None:
+                    raise DatabaseContentNotFound("回收站内容不存在或已经恢复")
+                raise DatabaseRevisionConflict(
+                    f"内容已被其他操作更新，当前版本为 {row['revision']}"
+                )
+            row = connection.execute(
+                f"SELECT id, updated_at, revision FROM {table} WHERE id=? AND profile_id=?",
+                (content_id, profile_id),
+            ).fetchone()
+        if row is None:
+            raise DatabaseContentNotFound("回收站内容不存在或已经恢复")
+        return {
+            "kind": kind,
+            "id": row["id"],
+            "updated_at": row["updated_at"],
+            "revision": row["revision"],
+            "restored": True,
+        }
+
+    def permanently_delete_content(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        profile_id: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        table, _, _ = _CONTENT_TABLES[kind]
+        with self.connect() as connection:
+            row = connection.execute(
+                f"SELECT revision, deleted_at FROM {table} WHERE id=? AND profile_id=?",
+                (content_id, profile_id),
+            ).fetchone()
+            if row is None or row["deleted_at"] is None:
+                raise DatabaseContentNotFound("回收站内容不存在或已经恢复")
+            if row["revision"] != expected_revision:
+                raise DatabaseRevisionConflict(
+                    f"内容已被其他操作更新，当前版本为 {row['revision']}"
+                )
+            connection.execute(
+                f"DELETE FROM {table} WHERE id=? AND profile_id=? AND deleted_at IS NOT NULL",
+                (content_id, profile_id),
+            )
+        return {
+            "kind": kind,
+            "id": content_id,
+            "permanently_deleted": True,
+        }
+
+    def empty_trash(self, *, profile_id: str) -> dict[str, Any]:
+        counts: dict[str, int] = {}
+        with self.connect() as connection:
+            for kind, (table, _, _) in _CONTENT_TABLES.items():
+                cursor = connection.execute(
+                    f"DELETE FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL",
+                    (profile_id,),
+                )
+                counts[kind] = cursor.rowcount
+        return {
+            "counts": counts,
+            "total": sum(counts.values()),
+            "emptied": True,
+        }
+
     def create_event(
         self,
         master_key: bytes,
@@ -333,6 +651,42 @@ class Database:
     ) -> list[dict[str, Any]]:
         return self.list_events_for_period(
             master_key, profile_id=profile_id, time_scope="day", period_key=event_date
+        )
+
+    def update_event(
+        self,
+        master_key: bytes,
+        *,
+        event_id: str,
+        profile_id: str,
+        payload: dict[str, Any],
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            master_key,
+            kind="event",
+            content_id=event_id,
+            profile_id=profile_id,
+            payload=payload,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
+        )
+
+    def delete_event(
+        self,
+        *,
+        event_id: str,
+        profile_id: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._soft_delete_content(
+            kind="event",
+            content_id=event_id,
+            profile_id=profile_id,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
         )
 
     def create_memory(
@@ -377,6 +731,42 @@ class Database:
             master_key, profile_id=profile_id, time_scope="day", period_key=memory_date
         )
 
+    def update_memory(
+        self,
+        master_key: bytes,
+        *,
+        memory_id: str,
+        profile_id: str,
+        payload: dict[str, Any],
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            master_key,
+            kind="memory",
+            content_id=memory_id,
+            profile_id=profile_id,
+            payload=payload,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
+        )
+
+    def delete_memory(
+        self,
+        *,
+        memory_id: str,
+        profile_id: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._soft_delete_content(
+            kind="memory",
+            content_id=memory_id,
+            profile_id=profile_id,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
+        )
+
     def create_plan(
         self,
         master_key: bytes,
@@ -419,6 +809,42 @@ class Database:
             master_key, profile_id=profile_id, time_scope="day", period_key=plan_date
         )
 
+    def update_plan(
+        self,
+        master_key: bytes,
+        *,
+        plan_id: str,
+        profile_id: str,
+        payload: dict[str, Any],
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._update_content(
+            master_key,
+            kind="plan",
+            content_id=plan_id,
+            profile_id=profile_id,
+            payload=payload,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
+        )
+
+    def delete_plan(
+        self,
+        *,
+        plan_id: str,
+        profile_id: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        return self._soft_delete_content(
+            kind="plan",
+            content_id=plan_id,
+            profile_id=profile_id,
+            expected_revision=expected_revision,
+            timestamp=timestamp,
+        )
+
     @staticmethod
     def _empty_state() -> dict[str, bool]:
         return {"has_event": False, "has_memory": False, "has_plan": False}
@@ -447,15 +873,23 @@ class Database:
                     f"""
                     SELECT {date_column} AS anchor_date, time_scope, period_key
                     FROM {table}
-                    WHERE profile_id=?
-                      AND {date_column} BETWEEN ? AND ?
-                      AND deleted_at IS NULL
+                    WHERE profile_id=? AND deleted_at IS NULL
                     """,
-                    (profile_id, start_date, end_date),
+                    (profile_id,),
                 ).fetchall()
                 for row in rows:
                     scope = row["time_scope"] or "day"
                     key = row["period_key"] or row["anchor_date"]
+                    if scope == "day":
+                        visible = start_date <= key <= end_date
+                    elif scope == "month":
+                        visible = key[:7] <= end_date[:7] and key[:7] >= start_date[:7]
+                    elif scope == "year":
+                        visible = key[:4] <= end_date[:4] and key[:4] >= start_date[:4]
+                    else:
+                        visible = False
+                    if not visible:
+                        continue
                     target_maps: list[tuple[str, str]] = []
                     if scope == "day":
                         target_maps.extend(

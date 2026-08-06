@@ -1,0 +1,16 @@
+{
+  "project": "LifeGraph",
+  "version": "0.0.3",
+  "release_date": "2026-08-06",
+  "database_schema": 3,
+  "tests": 62,
+  "default_view": "full_page_day_grid",
+  "contains_personal_data": false,
+  "artifacts": [
+    "lifegraph-v0.0.3-stable-final-files.zip",
+    "lifegraph-v0.0.3-stable-full-source.zip",
+    "lifegraph-v0.0.3-stable-docs.zip",
+    "人生图谱_v0.0.3_收口归档.md",
+    "GIT_COMMIT_v0.0.3.md"
+  ]
+}
