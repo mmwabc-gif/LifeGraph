@@ -10,7 +10,7 @@ from app.security.vault import VaultManager
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-BUILD_VERSION = "0.0.4"
+BUILD_VERSION = "0.0.5"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -31,7 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def frontend_cache_and_auto_backup(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/assets/"):
+        if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -78,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(api_v1_router)
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:

@@ -111,7 +111,7 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     assert report["schema_version"] == 3
     assert report["encrypted_records_verified"] == 2
     assert report["record_counts"]["event"] == 1
-    assert report["producer_version"] == "0.0.4"
+    assert report["producer_version"] == "0.0.5"
 
     recovery_check = target_client.post(
         "/api/v1/backup/import/check",

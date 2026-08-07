@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.4";
+const frontendBuildVersion = "0.0.5";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -60,6 +60,15 @@ const fullPageLifeCanvas = document.getElementById("fullPageLifeCanvas");
 const fullPageDateTooltip = document.getElementById("fullPageDateTooltip");
 const fullPageDateTooltipTitle = document.getElementById("fullPageDateTooltipTitle");
 const fullPageDateTooltipMeta = document.getElementById("fullPageDateTooltipMeta");
+const quickMemoryHomeButton = document.getElementById("quickMemoryHomeButton");
+const quickMemoryFullPageButton = document.getElementById("quickMemoryFullPageButton");
+const quickMemoryModal = document.getElementById("quickMemoryModal");
+const quickMemoryForm = document.getElementById("quickMemoryForm");
+const quickMemoryDateText = document.getElementById("quickMemoryDateText");
+const closeQuickMemoryButton = document.getElementById("closeQuickMemory");
+const cancelQuickMemoryButton = document.getElementById("cancelQuickMemory");
+let quickMemoryReturnFocus = null;
+let quickMemorySnapshot = "";
 
 function token() {
   return sessionStorage.getItem(tokenKey);
@@ -191,6 +200,326 @@ confirmAccept.addEventListener("click", () => closeConfirmation(true));
 confirmModal.addEventListener("click", (event) => {
   if (event.target === confirmModal) closeConfirmation(false);
 });
+
+const memoryRichEditorIds = {
+  quick: "quickMemoryContent",
+  drawer: "memoryContent",
+};
+
+function richEditorAvailable() {
+  return Boolean(window.tinymce?.init);
+}
+
+function getRichEditor(editorId) {
+  return window.tinymce?.get?.(editorId) || null;
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function plainTextToRichHtml(value) {
+  const normalized = String(value || "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function richHtmlToPlainText(value) {
+  const container = document.createElement("div");
+  container.innerHTML = String(value || "");
+  return (container.textContent || container.innerText || "").replace(/\u00a0/g, " ").trim();
+}
+
+function isRichHtmlEmpty(value) {
+  return !richHtmlToPlainText(value);
+}
+
+function sanitizeRichMemoryHtml(value) {
+  const template = document.createElement("template");
+  template.innerHTML = String(value || "");
+  const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "UL", "OL", "LI", "BLOCKQUOTE", "A", "HR", "CODE", "PRE", "SPAN"]);
+  const allowedLinkSchemes = new Set(["http:", "https:", "mailto:"]);
+
+  function sanitizeNode(node) {
+    if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.textContent || "");
+    if (node.nodeType !== Node.ELEMENT_NODE) return document.createTextNode("");
+    const tag = node.tagName;
+    const children = Array.from(node.childNodes).map(sanitizeNode);
+    if (!allowedTags.has(tag)) {
+      const fragment = document.createDocumentFragment();
+      children.forEach((child) => fragment.appendChild(child));
+      return fragment;
+    }
+    const element = document.createElement(tag.toLowerCase());
+    if (tag === "A") {
+      const href = node.getAttribute("href") || "";
+      try {
+        const parsed = new URL(href, window.location.origin);
+        if (allowedLinkSchemes.has(parsed.protocol)) {
+          element.setAttribute("href", href);
+          element.setAttribute("target", "_blank");
+          element.setAttribute("rel", "noopener noreferrer");
+          const title = node.getAttribute("title");
+          if (title) element.setAttribute("title", title);
+        }
+      } catch (_error) {
+        // Drop invalid links.
+      }
+    }
+    children.forEach((child) => element.appendChild(child));
+    return element;
+  }
+
+  const output = document.createElement("div");
+  Array.from(template.content.childNodes).forEach((node) => output.appendChild(sanitizeNode(node)));
+  return output.innerHTML.trim();
+}
+
+function memoryEditorConfig(editorId, { fallback = false } = {}) {
+  const textarea = document.getElementById(editorId);
+  const isQuickEditor = editorId === memoryRichEditorIds.quick;
+  return {
+    target: textarea,
+    base_url: "/static/tinymce",
+    skin_url: "/static/tinymce/skins/ui/oxide",
+    content_css: "/static/tinymce/skins/content/default/content.min.css",
+    suffix: ".min",
+    license_key: "gpl",
+    icons: "default",
+    theme: "silver",
+    menubar: false,
+    branding: false,
+    promotion: false,
+    statusbar: false,
+    resize: false,
+    height: isQuickEditor ? 320 : 280,
+    min_height: isQuickEditor ? 320 : 280,
+    plugins: fallback ? "" : "lists link code",
+    toolbar: fallback
+      ? "undo redo | bold italic underline | removeformat"
+      : "undo redo | bold italic underline | bullist numlist | link blockquote | removeformat code",
+    toolbar_mode: "sliding",
+    toolbar_location: "top",
+    placeholder: textarea?.getAttribute("placeholder") || "写下这段记忆……",
+    content_style: `
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 16px;
+        line-height: 1.8;
+        color: #25352d;
+        padding: 10px 12px;
+      }
+      p { margin: 0 0 0.8em; }
+      blockquote {
+        margin: 0.8em 0;
+        padding-left: 1em;
+        border-left: 3px solid #b9cdbf;
+        color: #4f6458;
+      }
+      code, pre {
+        font-family: "Cascadia Code", Consolas, monospace;
+        background: #f3f6ef;
+        border-radius: 8px;
+      }
+      pre { padding: 10px 12px; white-space: pre-wrap; }
+    `,
+    setup(editor) {
+      const sync = () => editor.save();
+      editor.on("change input undo redo SetContent NodeChange", sync);
+      editor.on("init", () => {
+        editor.setContent(textarea?.value || "");
+        editor.save();
+        editor.getContainer()?.classList.add("lifegraph-rich-editor-ready");
+      });
+    },
+  };
+}
+
+async function initMemoryRichEditor(editorId, initialHtml = "") {
+  const textarea = document.getElementById(editorId);
+  if (!textarea) return;
+  textarea.value = initialHtml || "";
+  const existing = getRichEditor(editorId);
+  if (existing) {
+    existing.setContent(initialHtml || "");
+    existing.save();
+    return;
+  }
+  if (!richEditorAvailable()) return;
+  try {
+    await window.tinymce.init(memoryEditorConfig(editorId));
+  } catch (error) {
+    console.warn("TinyMCE 完整工具栏初始化失败，已切换为基础工具栏。", error);
+    try {
+      await window.tinymce.init(memoryEditorConfig(editorId, { fallback: true }));
+    } catch (fallbackError) {
+      console.warn("TinyMCE 基础工具栏初始化失败，已保留普通文本输入框。", fallbackError);
+    }
+  }
+}
+
+function destroyMemoryRichEditor(editorId) {
+  const editor = getRichEditor(editorId);
+  if (editor) {
+    editor.save();
+    editor.remove();
+  }
+}
+
+function getMemoryRichEditorContent(editorId) {
+  const editor = getRichEditor(editorId);
+  if (editor) {
+    editor.save();
+    return editor.getContent() || "";
+  }
+  return document.getElementById(editorId)?.value || "";
+}
+
+function focusMemoryRichEditor(editorId) {
+  const editor = getRichEditor(editorId);
+  if (editor) {
+    editor.focus();
+    return;
+  }
+  document.getElementById(editorId)?.focus();
+}
+
+function contentToEditableMemoryHtml(item) {
+  if (item?.content_format === "html") return item.content || "";
+  return plainTextToRichHtml(item?.content || "");
+}
+
+function quickMemoryState() {
+  if (!quickMemoryForm) return { title: "", content: "" };
+  const form = new FormData(quickMemoryForm);
+  return {
+    title: String(form.get("title") || "").trim(),
+    content: getMemoryRichEditorContent(memoryRichEditorIds.quick),
+  };
+}
+
+function captureQuickMemorySnapshot() {
+  quickMemorySnapshot = JSON.stringify(quickMemoryState());
+}
+
+function isQuickMemoryOpen() {
+  return Boolean(quickMemoryModal && !quickMemoryModal.classList.contains("hidden"));
+}
+
+function isQuickMemoryDirty() {
+  if (!isQuickMemoryOpen()) return false;
+  return JSON.stringify(quickMemoryState()) !== quickMemorySnapshot;
+}
+
+function formatQuickMemoryDate(isoDate) {
+  const parsed = parseIsoDate(isoDate);
+  if (Number.isNaN(parsed.getTime())) return isoDate || "今天";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "long",
+  }).format(parsed);
+}
+
+function deriveQuickMemoryTitle(content) {
+  const compact = richHtmlToPlainText(content).replace(/\s+/g, " ").trim();
+  if (!compact) return "今日记忆";
+  return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact;
+}
+
+function openQuickMemoryModal() {
+  if (!quickMemoryModal || !quickMemoryForm) return;
+  if (!currentProgress?.today) {
+    showToast("请先解锁并加载人生图谱。", "error");
+    return;
+  }
+  quickMemoryReturnFocus = document.activeElement;
+  quickMemoryForm.reset();
+  quickMemoryDateText.textContent = `${formatQuickMemoryDate(currentProgress.today)} · 今天`;
+  quickMemoryModal.classList.remove("hidden");
+  quickMemoryModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("quick-memory-open");
+  initMemoryRichEditor(memoryRichEditorIds.quick, "");
+  requestAnimationFrame(() => {
+    captureQuickMemorySnapshot();
+    focusMemoryRichEditor(memoryRichEditorIds.quick);
+  });
+}
+
+function closeQuickMemoryModalNow({ restoreFocus = true } = {}) {
+  if (!quickMemoryModal || !quickMemoryForm) return;
+  destroyMemoryRichEditor(memoryRichEditorIds.quick);
+  quickMemoryForm.reset();
+  quickMemoryModal.classList.add("hidden");
+  quickMemoryModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("quick-memory-open");
+  quickMemorySnapshot = "";
+  if (restoreFocus && quickMemoryReturnFocus instanceof HTMLElement && document.contains(quickMemoryReturnFocus)) {
+    quickMemoryReturnFocus.focus();
+  }
+  quickMemoryReturnFocus = null;
+}
+
+async function requestCloseQuickMemoryModal() {
+  if (isQuickMemoryDirty()) {
+    const confirmed = await askConfirmation({
+      eyebrow: "尚未保存",
+      title: "放弃这条今日小记吗？",
+      message: "窗口里还有未保存的记忆内容。关闭后，这些文字不会保留。",
+      confirmLabel: "放弃记录",
+      tone: "warning",
+    });
+    if (!confirmed) return false;
+  }
+  closeQuickMemoryModalNow();
+  return true;
+}
+
+async function saveQuickMemory(event) {
+  event.preventDefault();
+  if (!currentProgress?.today) return;
+  const formState = quickMemoryState();
+  const content = formState.content.trim();
+  if (isRichHtmlEmpty(content)) {
+    showToast("先写下一点今天的内容吧。", "error");
+    focusMemoryRichEditor(memoryRichEditorIds.quick);
+    return;
+  }
+  const submit = quickMemoryForm.querySelector('button[type="submit"]');
+  setButtonBusy(submit, true, "加密保存中…");
+  try {
+    await api("/api/v1/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        time_scope: "day",
+        period_key: currentProgress.today,
+        title: formState.title || deriveQuickMemoryTitle(content),
+        content,
+        content_format: "html",
+      }),
+    }, true);
+    closeQuickMemoryModalNow({ restoreFocus: false });
+    await refreshContentStatuses();
+    renderLifeMapView(true);
+    if (!dateDrawer?.classList.contains("hidden") && selectedScope && selectedPeriodKey) {
+      await openPeriodDrawer(selectedScope, selectedPeriodKey);
+    }
+    showToast("今日记忆已加密保存", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+}
 
 async function api(path, options = {}, requireAuth = false) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -467,6 +796,14 @@ function closeResetPinModal() {
 
 settingsButton.addEventListener("click", openSettingsModal);
 fullPageSettingsButton.addEventListener("click", openSettingsModal);
+quickMemoryHomeButton?.addEventListener("click", openQuickMemoryModal);
+quickMemoryFullPageButton?.addEventListener("click", openQuickMemoryModal);
+closeQuickMemoryButton?.addEventListener("click", requestCloseQuickMemoryModal);
+cancelQuickMemoryButton?.addEventListener("click", requestCloseQuickMemoryModal);
+quickMemoryForm?.addEventListener("submit", saveQuickMemory);
+quickMemoryModal?.addEventListener("click", (event) => {
+  if (event.target === quickMemoryModal) requestCloseQuickMemoryModal();
+});
 closeSettingsButton.addEventListener("click", requestCloseSettingsModal);
 editProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(true));
 cancelProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(false));
@@ -2340,6 +2677,9 @@ const dateDrawer = document.getElementById("dateDrawer");
 const dateDrawerBackdrop = document.getElementById("dateDrawerBackdrop");
 const dateDrawerLoading = document.getElementById("dateDrawerLoading");
 const dateDrawerContent = document.getElementById("dateDrawerContent");
+const previousContentDateButton = document.getElementById("previousContentDate");
+const nextContentDateButton = document.getElementById("nextContentDate");
+const expandDateDrawerButton = document.getElementById("expandDateDrawer");
 const trashDrawerContent = document.getElementById("trashDrawerContent");
 const trashList = document.getElementById("trashList");
 const trashSummary = document.getElementById("trashSummary");
@@ -2409,22 +2749,30 @@ const contentFormConfigurations = {
 
 const EMPTY_CONTENT_STATE = { has_event: false, has_memory: false, has_plan: false };
 
-function contentFormSnapshot(form) {
-  return JSON.stringify({
+function contentFormValue(kind) {
+  const form = contentFormConfigurations[kind].form;
+  const content = kind === "memory"
+    ? getMemoryRichEditorContent(memoryRichEditorIds.drawer)
+    : form.querySelector('[name="content"]')?.value || "";
+  return {
     title: form.querySelector('[name="title"]')?.value || "",
-    content: form.querySelector('[name="content"]')?.value || "",
-  });
+    content,
+  };
+}
+
+function contentFormSnapshot(kind) {
+  return JSON.stringify(contentFormValue(kind));
 }
 
 function captureContentFormSnapshot(kind) {
   const form = contentFormConfigurations[kind].form;
-  form.dataset.initialSnapshot = contentFormSnapshot(form);
+  form.dataset.initialSnapshot = contentFormSnapshot(kind);
 }
 
 function isContentFormDirty(kind) {
   const form = contentFormConfigurations[kind].form;
   if (form.classList.contains("hidden")) return false;
-  return contentFormSnapshot(form) !== (form.dataset.initialSnapshot || JSON.stringify({ title: "", content: "" }));
+  return contentFormSnapshot(kind) !== (form.dataset.initialSnapshot || JSON.stringify({ title: "", content: "" }));
 }
 
 function hasUnsavedContentChanges() {
@@ -2443,6 +2791,24 @@ async function confirmDiscardChanges() {
 }
 
 let drawerReturnFocus = null;
+let dateDrawerExpanded = false;
+
+function setDateDrawerExpanded(expanded) {
+  dateDrawerExpanded = Boolean(expanded);
+  dateDrawer.classList.toggle("is-expanded", dateDrawerExpanded);
+  expandDateDrawerButton?.setAttribute(
+    "aria-label",
+    dateDrawerExpanded ? "收起日期详情" : "展开日期详情"
+  );
+  if (expandDateDrawerButton) {
+    expandDateDrawerButton.textContent = dateDrawerExpanded ? "↙" : "⛶";
+  }
+}
+
+function toggleDateDrawerExpanded() {
+  if (dateDrawer.classList.contains("hidden")) return;
+  setDateDrawerExpanded(!dateDrawerExpanded);
+}
 
 function setDrawerOpen(open) {
   const wasOpen = !dateDrawer.classList.contains("hidden");
@@ -2474,6 +2840,7 @@ function resetContentForm(kind, hide = true) {
   const config = contentFormConfigurations[kind];
   const submit = config.form.querySelector('button[type="submit"]');
   const cancel = config.form.querySelector('button[type="button"]');
+  if (kind === "memory") destroyMemoryRichEditor(memoryRichEditorIds.drawer);
   config.form.reset();
   config.form.classList.toggle("hidden", hide);
   config.form.classList.remove("is-editing");
@@ -2503,6 +2870,9 @@ function closeDateDrawerNow() {
   selectedDate = null;
   selectedScope = null;
   selectedPeriodKey = null;
+  setDateDrawerExpanded(false);
+  previousContentDateButton.disabled = true;
+  nextContentDateButton.disabled = true;
   dateDrawerContent.classList.add("hidden");
   trashDrawerContent.classList.add("hidden");
   dateDrawerLoading.classList.add("hidden");
@@ -2745,6 +3115,137 @@ function renderPeriodNavigator(detail) {
   appendSelectedWeekCells(detail.period_key, selectedKey);
 }
 
+function periodContentStatusEntries(scope) {
+  const source = scope === "year" ? yearContentStatus : (scope === "month" ? monthContentStatus : contentStatus);
+  return Object.entries(source || {})
+    .filter(([, value]) => value && (value.has_event || value.has_memory || value.has_plan))
+    .map(([key]) => key)
+    .sort();
+}
+
+function updateContentDateNavigation() {
+  if (!selectedScope || !selectedPeriodKey) return;
+  const entries = periodContentStatusEntries(selectedScope);
+  const currentIndex = entries.indexOf(selectedPeriodKey);
+  const previous = currentIndex > 0 ? entries[currentIndex - 1] : null;
+  const next = currentIndex >= 0 && currentIndex < entries.length - 1 ? entries[currentIndex + 1] : null;
+  previousContentDateButton.disabled = !previous;
+  nextContentDateButton.disabled = !next;
+  previousContentDateButton.title = previous ? `切换到 ${previous}` : "没有更早的有内容日期";
+  nextContentDateButton.title = next ? `切换到 ${next}` : "没有更晚的有内容日期";
+}
+
+function drawerNavigationTarget(direction) {
+  if (!selectedScope || !selectedPeriodKey) return null;
+  const entries = periodContentStatusEntries(selectedScope);
+  const index = entries.indexOf(selectedPeriodKey);
+  const targetIndex = index + direction;
+  return targetIndex >= 0 && targetIndex < entries.length ? entries[targetIndex] : null;
+}
+
+async function navigateContentDate(direction, options = {}) {
+  const target = drawerNavigationTarget(direction);
+  if (!target) return false;
+  const opened = await openPeriodDrawer(selectedScope, target);
+  if (opened === false) return false;
+  if (["button", "keyboard"].includes(options.source)) {
+    requestAnimationFrame(() => {
+      dateDrawerContent.scrollTop = 0;
+      dateDrawer.scrollTop = 0;
+    });
+  }
+  return true;
+}
+
+function hasOpenContentForm() {
+  return Object.values(contentFormConfigurations).some((config) => !config.form.classList.contains("hidden"));
+}
+
+function drawerKeyboardNavigationBlocked(event) {
+  if (dateDrawer.classList.contains("hidden")) return true;
+  if (dateDrawerContent.classList.contains("hidden")) return true;
+  if (!selectedScope || !selectedPeriodKey) return true;
+  if (!confirmModal.classList.contains("hidden")) return true;
+  if (!settingsModal.classList.contains("hidden")) return true;
+  if (!resetPinModal.classList.contains("hidden")) return true;
+  if (isQuickMemoryOpen()) return true;
+  if (openContentMenu) return true;
+  if (hasUnsavedContentChanges() || hasOpenContentForm()) return true;
+  const active = document.activeElement;
+  const activeInteractive = active?.closest?.("input, textarea, select, button, a, [contenteditable='true'], .content-card-actions");
+  const eventInteractive = event.target?.closest?.("input, textarea, select, button, a, [contenteditable='true'], .content-card-actions");
+  return Boolean(activeInteractive || eventInteractive);
+}
+
+async function handleDrawerKeyboardNavigation(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return false;
+  if (drawerKeyboardNavigationBlocked(event)) return false;
+  const direction = event.key === "ArrowLeft" ? -1 : 1;
+  if (!drawerNavigationTarget(direction)) return false;
+  event.preventDefault();
+  await navigateContentDate(direction, { source: "keyboard" });
+  return true;
+}
+
+
+function drawerOpenShortcutBlocked(event) {
+  if (!currentProgress) return true;
+  if (views.home.classList.contains("hidden")) return true;
+  if (!dateDrawer.classList.contains("hidden")) return true;
+  if (!confirmModal.classList.contains("hidden")) return true;
+  if (!settingsModal.classList.contains("hidden")) return true;
+  if (!resetPinModal.classList.contains("hidden")) return true;
+  if (!recoveryModal.classList.contains("hidden")) return true;
+  if (isQuickMemoryOpen()) return true;
+  if (openContentMenu) return true;
+  if (hasUnsavedContentChanges() || hasOpenContentForm()) return true;
+
+  const interactiveSelector = "input, textarea, select, button, a, [contenteditable='true'], [role='button'], [role='menuitem']";
+  const active = document.activeElement;
+  const activeInteractive = active?.closest?.(interactiveSelector);
+  const eventInteractive = event.target?.closest?.(interactiveSelector);
+  return Boolean(activeInteractive || eventInteractive);
+}
+
+function drawerShortcutTarget() {
+  if (!currentProgress) return null;
+
+  if (fullPageLifeOpen) {
+    return {
+      scope: "day",
+      periodKey: fullPageViewportAnchorDate() || selectedDate || navigatorDate || currentProgress.today,
+    };
+  }
+
+  if (activeLifeMapView === "year") {
+    const today = parseIsoDate(currentProgress.today);
+    const year = navigatorYear || today.getUTCFullYear();
+    return { scope: "year", periodKey: String(year) };
+  }
+
+  if (activeLifeMapView === "month") {
+    const today = parseIsoDate(currentProgress.today);
+    const year = navigatorYear || today.getUTCFullYear();
+    const month = navigatorMonth || today.getUTCMonth() + 1;
+    return { scope: "month", periodKey: `${year}-${String(month).padStart(2, "0")}` };
+  }
+
+  return {
+    scope: "day",
+    periodKey: navigatorDate || selectedDate || currentProgress.today,
+  };
+}
+
+async function handleDrawerOpenShortcut(event) {
+  if (event.key !== "Enter" || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return false;
+  if (drawerOpenShortcutBlocked(event)) return false;
+  const target = drawerShortcutTarget();
+  if (!target) return false;
+  event.preventDefault();
+  await openPeriodDrawer(target.scope, target.periodKey);
+  return true;
+}
+
 async function openPeriodDrawer(scope, periodKey) {
   if (hasUnsavedContentChanges() && !(await confirmDiscardChanges())) return false;
   selectedScope = scope;
@@ -2770,10 +3271,12 @@ async function openPeriodDrawer(scope, periodKey) {
     const detail = await api(`/api/v1/periods/${encodeURIComponent(scope)}/${encodeURIComponent(periodKey)}`, {}, true);
     if (requestSequence !== drawerRequestSequence || selectedScope !== scope || selectedPeriodKey !== periodKey) return;
     renderPeriodDetail(detail);
+    updateContentDateNavigation();
     dateDrawerLoading.classList.add("hidden");
     dateDrawerContent.classList.remove("hidden");
     renderLifeMapView(true);
     if (fullPageLifeOpen) drawFullPageLifeGrid(true);
+    return true;
   } catch (error) {
     if (requestSequence !== drawerRequestSequence) return;
     closeDateDrawerNow();
@@ -2972,12 +3475,16 @@ async function startContentEdit(kind, item) {
   config.form.classList.remove("hidden");
   config.form.classList.add("is-editing");
   config.form.querySelector('[name="title"]').value = item.title || "";
-  config.form.querySelector('[name="content"]').value = item.content || "";
+  if (kind === "memory") {
+    initMemoryRichEditor(memoryRichEditorIds.drawer, contentToEditableMemoryHtml(item));
+  } else {
+    config.form.querySelector('[name="content"]').value = item.content || "";
+  }
   config.form.querySelector('button[type="submit"]').textContent = "保存修改";
   config.form.querySelector('button[type="button"]').textContent = "取消编辑";
   config.toggleButton.textContent = "取消编辑";
   updateContentSectionVisibility(kind);
-  captureContentFormSnapshot(kind);
+  requestAnimationFrame(() => captureContentFormSnapshot(kind));
   config.form.querySelector('[name="title"]').focus();
   config.form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -3041,6 +3548,30 @@ function toggleContentMenu(menu, trigger) {
   openContentMenuTrigger = trigger;
 }
 
+const MEMORY_COLLAPSE_HEIGHT = 260;
+
+function setMemoryCardCollapsed(article, button, collapsed) {
+  article.classList.toggle("is-memory-collapsed", collapsed);
+  button.textContent = collapsed ? "展开" : "折叠";
+  button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function prepareMemoryCardCollapse(article, body, button) {
+  requestAnimationFrame(() => {
+    const canCollapse = body.scrollHeight > MEMORY_COLLAPSE_HEIGHT + 24;
+    article.classList.toggle("is-memory-collapsible", canCollapse);
+    button.classList.toggle("hidden", !canCollapse);
+    button.setAttribute("aria-hidden", canCollapse ? "false" : "true");
+    if (!canCollapse) {
+      article.classList.remove("is-memory-collapsed");
+      button.textContent = "折叠";
+      button.setAttribute("aria-expanded", "true");
+      return;
+    }
+    setMemoryCardCollapsed(article, button, true);
+  });
+}
+
 function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _allowAction = true) {
   const list = document.getElementById(elementId);
   const config = contentFormConfigurations[kind];
@@ -3062,6 +3593,17 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
 
     const actions = document.createElement("div");
     actions.className = "content-card-actions";
+
+    let collapseButton = null;
+    if (kind === "memory" && item.content) {
+      collapseButton = document.createElement("button");
+      collapseButton.type = "button";
+      collapseButton.className = "memory-collapse-button hidden";
+      collapseButton.textContent = "折叠";
+      collapseButton.setAttribute("aria-hidden", "true");
+      collapseButton.setAttribute("aria-expanded", "true");
+      collapseButton.setAttribute("aria-label", `折叠或展开记忆：${item.title}`);
+    }
 
     const menuId = `content-menu-${kind}-${item.id}`;
     const moreButton = document.createElement("button");
@@ -3106,14 +3648,35 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
     });
     menu.addEventListener("click", (event) => event.stopPropagation());
 
+    if (collapseButton) actions.appendChild(collapseButton);
     actions.append(moreButton, menu);
     header.appendChild(actions);
     article.appendChild(header);
 
+    let memoryBody = null;
     if (item.content) {
-      const body = document.createElement("p");
-      body.textContent = item.content;
-      article.appendChild(body);
+      if (kind === "memory" && item.content_format === "html") {
+        const body = document.createElement("div");
+        body.className = "memory-rich-content memory-content-body";
+        body.innerHTML = sanitizeRichMemoryHtml(item.content);
+        article.appendChild(body);
+        memoryBody = body;
+      } else {
+        const body = document.createElement("p");
+        body.className = kind === "memory" ? "content-plain-text memory-content-body" : "content-plain-text";
+        body.textContent = item.content;
+        article.appendChild(body);
+        if (kind === "memory") memoryBody = body;
+      }
+    }
+
+    if (collapseButton && memoryBody) {
+      collapseButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeOpenContentMenu();
+        setMemoryCardCollapsed(article, collapseButton, !article.classList.contains("is-memory-collapsed"));
+      });
+      prepareMemoryCardCollapse(article, memoryBody, collapseButton);
     }
 
     const meta = document.createElement("small");
@@ -3194,8 +3757,9 @@ async function toggleContentForm(kind, forceOpen = null) {
   resetAllContentForms();
   config.form.classList.remove("hidden");
   config.toggleButton.textContent = config.openLabel;
+  if (kind === "memory") initMemoryRichEditor(memoryRichEditorIds.drawer, "");
   updateContentSectionVisibility(kind);
-  captureContentFormSnapshot(kind);
+  requestAnimationFrame(() => captureContentFormSnapshot(kind));
   config.form.querySelector('[name="title"]').focus();
 }
 
@@ -3221,13 +3785,20 @@ trashButton.addEventListener("click", openTrashDrawer);
 refreshTrashButton.addEventListener("click", openTrashDrawer);
 emptyTrashButton.addEventListener("click", emptyTrash);
 document.getElementById("closeDateDrawer").addEventListener("click", requestCloseDateDrawer);
+expandDateDrawerButton?.addEventListener("click", toggleDateDrawerExpanded);
+previousContentDateButton?.addEventListener("click", () => navigateContentDate(-1, { source: "button" }));
+nextContentDateButton?.addEventListener("click", () => navigateContentDate(1, { source: "button" }));
 dateDrawerBackdrop.addEventListener("click", requestCloseDateDrawer);
 document.addEventListener("click", (event) => {
   if (!openContentMenu) return;
   const actionContainer = openContentMenu.closest(".content-card-actions");
   if (!actionContainer?.contains(event.target)) closeOpenContentMenu();
 });
-document.addEventListener("keydown", (event) => {
+document.addEventListener("keydown", async (event) => {
+  if (await handleDrawerOpenShortcut(event)) return;
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    if (await handleDrawerKeyboardNavigation(event)) return;
+  }
   if (event.key !== "Escape") return;
   if (openContentMenu) {
     closeOpenContentMenu({ restoreFocus: true });
@@ -3241,19 +3812,27 @@ document.addEventListener("keydown", (event) => {
     closeResetPinModal();
     return;
   }
+  if (isQuickMemoryOpen()) {
+    requestCloseQuickMemoryModal();
+    return;
+  }
   if (!settingsModal.classList.contains("hidden")) {
     requestCloseSettingsModal();
     return;
   }
   if (!dateDrawer.classList.contains("hidden")) {
-    requestCloseDateDrawer();
+    if (dateDrawerExpanded) {
+      setDateDrawerExpanded(false);
+    } else {
+      requestCloseDateDrawer();
+    }
     return;
   }
   if (fullPageLifeOpen) requestCloseFullPageLifeView();
 });
 
 window.addEventListener("beforeunload", (event) => {
-  if (!hasUnsavedContentChanges() && !hasUnsavedSettingsChanges()) return;
+  if (!hasUnsavedContentChanges() && !hasUnsavedSettingsChanges() && !isQuickMemoryDirty()) return;
   event.preventDefault();
   event.returnValue = "";
 });
@@ -3263,6 +3842,7 @@ async function submitScopedContent(kind) {
   const config = contentFormConfigurations[kind];
   const formNode = config.form;
   const form = new FormData(formNode);
+  const formValue = contentFormValue(kind);
   const submit = formNode.querySelector('button[type="submit"]');
   const editId = formNode.dataset.editId || null;
   const editRevision = Number(formNode.dataset.editRevision || 0);
@@ -3274,15 +3854,17 @@ async function submitScopedContent(kind) {
   try {
     const requestBody = editId
       ? {
-          title: form.get("title"),
-          content: form.get("content") || "",
+          title: formValue.title,
+          content: formValue.content || "",
+          ...(kind === "memory" ? { content_format: "html" } : {}),
           revision: editRevision,
         }
       : {
           time_scope: selectedScope,
           period_key: selectedPeriodKey,
-          title: form.get("title"),
-          content: form.get("content") || "",
+          title: formValue.title,
+          content: formValue.content || "",
+          ...(kind === "memory" ? { content_format: "html" } : {}),
         };
     await api(editId ? `${config.endpoint}/${encodeURIComponent(editId)}` : config.endpoint, {
       method: editId ? "PUT" : "POST",

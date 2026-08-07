@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lifegraph-stage0"
-version = "0.0.4"
+version = "0.0.5"
 description = "人生图谱本地优先加密时间与记忆系统"
 readme = "README.md"
 requires-python = ">=3.10"

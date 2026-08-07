@@ -6,8 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .html_sanitizer import sanitize_rich_html
+
 
 TimeScope = Literal["day", "month", "year"]
+ContentFormat = Literal["plain", "html"]
 
 
 class InitializeRequest(BaseModel):
@@ -137,6 +140,7 @@ class ScopedContentRequest(BaseModel):
     period_key: str | None = Field(default=None, max_length=10)
     title: str = Field(min_length=1, max_length=120)
     content: str = Field(default="", max_length=20_000)
+    content_format: ContentFormat = "plain"
 
     @field_validator("title")
     @classmethod
@@ -146,10 +150,10 @@ class ScopedContentRequest(BaseModel):
             raise ValueError("标题不能为空")
         return cleaned
 
-    @field_validator("content")
-    @classmethod
-    def clean_content(cls, value: str) -> str:
-        return value.strip()
+    @model_validator(mode="after")
+    def clean_body_content(self) -> "ScopedContentRequest":
+        self.content = sanitize_rich_html(self.content) if self.content_format == "html" else self.content.strip()
+        return self
 
     @field_validator("period_key")
     @classmethod
@@ -181,6 +185,7 @@ class ScopedContentRequest(BaseModel):
 class ContentUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     content: str = Field(default="", max_length=20_000)
+    content_format: ContentFormat = "plain"
     revision: int = Field(ge=1)
 
     @field_validator("title")
@@ -191,10 +196,10 @@ class ContentUpdateRequest(BaseModel):
             raise ValueError("标题不能为空")
         return cleaned
 
-    @field_validator("content")
-    @classmethod
-    def clean_content(cls, value: str) -> str:
-        return value.strip()
+    @model_validator(mode="after")
+    def clean_body_content(self) -> "ContentUpdateRequest":
+        self.content = sanitize_rich_html(self.content) if self.content_format == "html" else self.content.strip()
+        return self
 
 
 class ContentDeleteRequest(BaseModel):

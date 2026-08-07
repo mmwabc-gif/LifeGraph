@@ -99,7 +99,7 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["format"] == "lifegraph-lifevault"
         assert manifest["format_version"] == 1
-        assert manifest["producer"]["version"] == "0.0.4"
+        assert manifest["producer"]["version"] == "0.0.5"
         assert manifest["repository"]["schema_version"] == 3
         assert manifest["integrity"]["encrypted_records_verified"] == 3
         for entry in manifest["files"]:

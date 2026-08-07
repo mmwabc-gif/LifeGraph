@@ -132,7 +132,7 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
 def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     return envelope(
         {
-            "version": "0.0.4",
+            "version": "0.0.5",
             "initialized": vault.is_initialized,
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
@@ -399,7 +399,7 @@ def check_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
 @router.get("/backup/export", dependencies=[Depends(require_session)])
 def export_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> Response:
     try:
-        artifact = vault.export_lifevault(app_version="0.0.4")
+        artifact = vault.export_lifevault(app_version="0.0.5")
     except VaultError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -481,7 +481,7 @@ async def import_backup(
                 credential_method=credential_method,
                 credential_secret=credential_secret,
                 confirm=confirm,
-                app_version="0.0.4",
+                app_version="0.0.5",
             )
         )
     except CredentialError as exc:
@@ -677,6 +677,7 @@ def create_memory(
             period_key=payload.period_key,
             title=payload.title,
             content=payload.content,
+            content_format=payload.content_format,
         )
         return envelope(memory)
     except DateOutOfLifeRange as exc:
@@ -699,6 +700,7 @@ def update_memory(
                 memory_id=memory_id,
                 title=payload.title,
                 content=payload.content,
+                content_format=payload.content_format,
                 revision=payload.revision,
             )
         )

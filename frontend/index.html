@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.3</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.4">
+  <title>人生图谱 · v0.0.5</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.5">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.3</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.5</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.3</span>
+          <span class="build-badge">v0.0.5</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -119,6 +119,7 @@
               <h2 id="lifeMapViewTitle">太阳每天都是新的</h2>
             </div>
             <div class="life-map-view-controls">
+              <button id="quickMemoryHomeButton" class="quick-memory-entry-button" type="button">记一记</button>
               <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
                 <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">日</button>
                 <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
@@ -168,9 +169,9 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.3 稳定版</p>
-        <h2>内容管理与安全设置闭环</h2>
-        <p>支持内容编辑、软删除、回收站恢复、全页日图，以及姓名、出生日期和 PIN 安全修改。</p>
+        <p class="eyebrow">v0.0.5</p>
+        <h2>记一记快捷记录</h2>
+        <p>在首页和全页日图中直接记录今天的个人记忆，保存后自动刷新日期格状态。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
@@ -194,6 +195,7 @@
             <span><i class="memory-border"></i>有记忆</span>
             <span><i class="plan-ring"></i>有计划</span>
           </div>
+          <button id="quickMemoryFullPageButton" class="quick-memory-entry-button full-page-control-button" type="button">记一记</button>
           <button id="fullPageLocateToday" class="ghost-button full-page-control-button" type="button">定位今天</button>
           <button id="fullPageSettingsButton" class="ghost-button full-page-control-button" type="button">个人设置</button>
           <button id="closeFullPageView" class="primary-button full-page-control-button" type="button">进入首页</button>
@@ -236,9 +238,14 @@
           <h2 id="dateDrawerTitle">—</h2>
           <p id="dateDrawerMeta" class="drawer-meta">—</p>
         </div>
+        <button id="expandDateDrawer" class="icon-button drawer-expand-button" type="button" aria-label="展开日期详情">⛶</button>
         <button id="closeDateDrawer" class="icon-button" type="button" aria-label="关闭时间范围详情">×</button>
       </header>
 
+      <nav id="contentDateNavigation" class="content-date-navigation" aria-label="有内容日期切换">
+        <button id="previousContentDate" class="drawer-nav-button" type="button" disabled>← 上一个</button>
+        <button id="nextContentDate" class="drawer-nav-button" type="button" disabled>下一个 →</button>
+      </nav>
       <div id="dateDrawerLoading" class="drawer-loading hidden">
         <div class="spinner"></div>
         <p>正在读取加密内容……</p>
@@ -296,7 +303,7 @@
               <input name="title" required maxlength="120" placeholder="例如：第一次真正感到项目成形">
             </label>
             <label>记忆内容
-              <textarea name="content" maxlength="20000" rows="5" placeholder="记录当时的感受、细节或后来形成的理解（可留空）"></textarea>
+              <textarea id="memoryContent" name="content" maxlength="20000" rows="6" placeholder="记录当时的感受、细节或后来形成的理解（可留空）"></textarea>
             </label>
             <div class="event-form-actions">
               <button id="cancelMemoryForm" class="ghost-button" type="button">取消</button>
@@ -314,7 +321,7 @@
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.3">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.5">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -627,6 +634,28 @@
       </div>
     </div>
 
+
+    <div id="quickMemoryModal" class="modal quick-memory-modal hidden" role="dialog" aria-modal="true" aria-labelledby="quickMemoryTitle" aria-describedby="quickMemoryDateText" aria-hidden="true">
+      <div class="modal-card quick-memory-card">
+        <header class="quick-memory-header">
+          <div>
+            <p class="eyebrow">今日小记</p>
+            <h2 id="quickMemoryTitle">记一记</h2>
+            <p id="quickMemoryDateText" class="quick-memory-date">—</p>
+          </div>
+          <button id="closeQuickMemory" class="icon-button" type="button" aria-label="关闭记一记">×</button>
+        </header>
+        <form id="quickMemoryForm" class="form-grid compact-form quick-memory-form">
+          <input class="full-width quick-memory-title-input" name="title" maxlength="120" placeholder="标题（可选）" autocomplete="off">
+          <textarea id="quickMemoryContent" class="full-width quick-memory-content-input" name="content" required maxlength="20000" rows="10" placeholder="今天想记什么？写下今天发生的事、看到的风景，或者此刻想留下的一句话。"></textarea>
+          <div class="full-width quick-memory-actions">
+            <button id="cancelQuickMemory" class="ghost-button" type="button">取消</button>
+            <button class="primary-button" type="submit">保存记忆</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
       <div class="modal-card">
         <p class="eyebrow">仅显示一次</p>
@@ -642,6 +671,7 @@
 
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
-  <script src="/assets/app.js?v=0.0.4"></script>
+  <script src="/static/tinymce/tinymce.min.js"></script>
+  <script src="/assets/app.js?v=0.0.5"></script>
 </body>
 </html>

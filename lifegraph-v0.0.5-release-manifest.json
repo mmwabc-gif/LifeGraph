@@ -1,0 +1,18 @@
+{
+  "name": "LifeGraph",
+  "version": "0.0.5",
+  "released_at": "2026-08-08T01:05:00+08:00",
+  "schema_version": 3,
+  "frontend_version": "0.0.5",
+  "backend_version": "0.0.5",
+  "features": [
+    "quick_memory",
+    "fullscreen_drawer",
+    "content_date_navigation",
+    "keyboard_shortcuts",
+    "tinymce_rich_memory",
+    "long_memory_collapse"
+  ],
+  "requires_tinymce_path": "frontend/static/tinymce/tinymce.min.js",
+  "tests": "98 passed"
+}

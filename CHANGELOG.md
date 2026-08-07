@@ -1,5 +1,53 @@
 # CHANGELOG
 
+## v0.0.5 - 2026-08-08
+
+### Added
+
+- 抽屉页记忆卡片支持长内容自动折叠；
+- 当记忆正文超过阈值时，在右上角“...”更多菜单左侧显示【展开】按钮；
+- 展开后按钮切换为【折叠】，可在不进入编辑状态的情况下快速收起长记忆；
+- 普通右侧抽屉和全屏详情页共用同一套折叠逻辑。
+
+### Changed
+
+- 长记忆默认折叠展示，减少抽屉阅读时被单条内容占满的问题；
+- 记忆卡片操作区调整为“折叠/展开 + 更多操作”的并列布局；
+- 短记忆不显示折叠按钮，保持卡片简洁。
+
+### Verification
+
+```text
+98 passed
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.5.1 - 2026-08-07
+
+### Added
+
+- 首页日／月／年视图上方新增「记一记」快捷入口；
+- 全页日图顶部新增「记一记」快捷入口；
+- 新增居中的今日记忆二级窗口，可直接记录当前日期的个人记忆；
+- 标题可选，未填写标题时会自动从正文前 28 个字符生成标题；
+- 保存后立即刷新日、月、年内容状态和全页日期格标记。
+
+### Changed
+
+- 前端、后端、API、备份清单生产者和 Python 包版本升级为 `0.0.5.1`；
+- 记录流程不再必须先打开右侧日期详情抽屉，适合随手留下当天小记；
+- 数据库 schema 继续保持 v3，无需迁移。
+
+### Verification
+
+```text
+92 passed
+JavaScript syntax check passed
+Python compile check passed
+Quick memory modal and today-memory save flow passed
+```
+
 ## v0.0.4 - 2026-08-07
 
 ### Added

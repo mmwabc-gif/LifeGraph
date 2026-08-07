@@ -1297,6 +1297,7 @@ class VaultManager:
         memory_date: str,
         title: str,
         content: str,
+        content_format: str = "plain",
         time_scope: str = "day",
         period_key: str | None = None,
     ) -> dict[str, Any]:
@@ -1311,7 +1312,7 @@ class VaultManager:
                 memory_date=memory_date,
                 time_scope=time_scope,
                 period_key=period_key or memory_date,
-                payload={"title": title, "content": content},
+                payload={"title": title, "content": content, "content_format": content_format},
                 timestamp=now,
             )
 
@@ -1335,6 +1336,7 @@ class VaultManager:
         title: str,
         content: str,
         revision: int,
+        content_format: str = "plain",
     ) -> dict[str, Any]:
         return self._update_content(
             kind="memory",
@@ -1342,6 +1344,7 @@ class VaultManager:
             title=title,
             content=content,
             revision=revision,
+            content_format=content_format,
         )
 
     def delete_memory(self, *, memory_id: str, revision: int) -> dict[str, Any]:
@@ -1438,6 +1441,7 @@ class VaultManager:
         title: str,
         content: str,
         revision: int,
+        content_format: str | None = None,
     ) -> dict[str, Any]:
         with self._mutex:
             master_key = self.require_master_key()
@@ -1445,13 +1449,16 @@ class VaultManager:
             now = datetime.now(dt_timezone.utc).isoformat()
             method = getattr(self.database, f"update_{kind}")
             id_name = f"{kind}_id"
+            payload = {"title": title, "content": content}
+            if content_format is not None:
+                payload["content_format"] = content_format
             try:
                 return method(
                     master_key,
                     **{
                         id_name: content_id,
                         "profile_id": profile["id"],
-                        "payload": {"title": title, "content": content},
+                        "payload": payload,
                         "expected_revision": revision,
                         "timestamp": now,
                     },

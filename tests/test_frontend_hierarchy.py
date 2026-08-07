@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.4"' in javascript
+    assert 'const frontendBuildVersion = "0.0.5"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -274,7 +274,7 @@ def test_content_cards_support_encrypted_editing_flow() -> None:
     assert 'toggleContentForm("event", false)' in javascript
     assert 'toggleContentForm("memory", false)' in javascript
     assert 'toggleContentForm("plan", false)' in javascript
-    assert 'captureContentFormSnapshot(kind);' in javascript
+    assert 'requestAnimationFrame(() => captureContentFormSnapshot(kind));' in javascript
     assert '.content-edit-button {' in css
     assert '.event-form.is-editing,' in css
 
@@ -283,7 +283,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.4"' in javascript
+    assert 'const frontendBuildVersion = "0.0.5"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -462,6 +462,32 @@ def test_settings_groups_are_visually_separated_and_profile_starts_read_only() -
     assert '.profile-summary-list {' in stylesheet
 
 
+def test_quick_memory_entry_is_available_on_home_and_full_page() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="quickMemoryHomeButton"' in html
+    assert 'id="quickMemoryFullPageButton"' in html
+    assert html.count('>记一记</button>') >= 2
+    assert 'id="quickMemoryModal"' in html
+    assert 'id="quickMemoryForm"' in html
+    assert 'id="quickMemoryDateText"' in html
+    assert '今天想记什么' in html
+    assert 'quickMemoryHomeButton?.addEventListener("click", openQuickMemoryModal);' in javascript
+    assert 'quickMemoryFullPageButton?.addEventListener("click", openQuickMemoryModal);' in javascript
+    assert 'async function saveQuickMemory(event)' in javascript
+    assert 'time_scope: "day"' in javascript
+    assert 'period_key: currentProgress.today' in javascript
+    assert 'api("/api/v1/memories"' in javascript
+    assert 'deriveQuickMemoryTitle(content)' in javascript
+    assert 'isQuickMemoryDirty()' in javascript
+    assert '今日记忆已加密保存' in javascript
+    assert 'LifeGraph v0.0.5.4.2：记一记快捷入口与今日记忆二级窗口' in stylesheet
+    assert '.quick-memory-modal {' in stylesheet
+    assert '.quick-memory-entry-button {' in stylesheet
+
+
 def test_auto_backup_settings_and_history_ui_is_available() -> None:
     html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -513,3 +539,63 @@ def test_recovery_rotation_and_security_summary_ui_is_available() -> None:
     assert '.security-audit-item {' in stylesheet
     assert '#recoveryModal {' in stylesheet
     assert 'z-index: 330;' in stylesheet
+
+
+def test_date_drawer_fullscreen_expand_ui_is_available() -> None:
+    html = (PROJECT_ROOT / "frontend/index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend/app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend/styles.css").read_text(encoding="utf-8")
+
+    assert 'id="expandDateDrawer"' in html
+    assert 'aria-label="展开日期详情"' in html
+    assert 'const expandDateDrawerButton = document.getElementById("expandDateDrawer");' in javascript
+    assert 'function setDateDrawerExpanded(expanded)' in javascript
+    assert 'dateDrawer.classList.toggle("is-expanded", dateDrawerExpanded);' in javascript
+    assert 'expandDateDrawerButton?.addEventListener("click", toggleDateDrawerExpanded);' in javascript
+    assert '.date-drawer.is-expanded {' in stylesheet
+
+
+def test_drawer_navigation_uses_keyboard_arrows_instead_of_wheel() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'handleDrawerKeyboardNavigation' in javascript
+    assert 'event.key === "ArrowLeft"' in javascript
+    assert 'event.key === "ArrowRight"' in javascript
+    assert 'addEventListener("wheel"' not in javascript
+    assert 'handleDrawerContentWheel' not in javascript
+    assert 'drawerScrollHint' not in javascript
+    assert 'drawer-scroll-hint' not in css
+    assert 'drawerScrollHint' not in html
+
+
+def test_alt_enter_opens_current_drawer_context() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'async function handleDrawerOpenShortcut(event)' in javascript
+    assert 'event.key !== "Enter" || !event.altKey' in javascript
+    assert 'function drawerShortcutTarget()' in javascript
+    assert 'fullPageViewportAnchorDate() || selectedDate || navigatorDate || currentProgress.today' in javascript
+    assert 'activeLifeMapView === "year"' in javascript
+    assert 'activeLifeMapView === "month"' in javascript
+    assert 'await openPeriodDrawer(target.scope, target.periodKey)' in javascript
+    assert 'if (await handleDrawerOpenShortcut(event)) return;' in javascript
+
+
+def test_memory_rich_text_editor_ui_is_wired() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<script src="/static/tinymce/tinymce.min.js"></script>' in html
+    assert 'id="quickMemoryContent"' in html
+    assert 'id="memoryContent"' in html
+    assert 'function initMemoryRichEditor(editorId, initialHtml = "")' in javascript
+    assert 'base_url: "/static/tinymce"' in javascript
+    assert 'license_key: "gpl"' in javascript
+    assert 'content_format: "html"' in javascript
+    assert 'sanitizeRichMemoryHtml(item.content)' in javascript
+    assert 'memory-rich-content' in javascript
+    assert 'v0.0.5.4.2 TinyMCE memory rich text' in stylesheet
+    assert '.memory-rich-content {' in stylesheet

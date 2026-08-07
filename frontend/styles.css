@@ -2278,8 +2278,10 @@ button.is-busy::before {
 
 .content-card-actions {
   position: relative;
-  display: block;
+  display: flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
 }
 
 .content-more-button {
@@ -2306,6 +2308,35 @@ button.is-busy::before {
   border-color: rgba(49, 92, 77, .42);
   background: var(--accent-soft);
   outline: none;
+}
+
+.memory-collapse-button {
+  display: inline-grid;
+  min-width: 52px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(49, 92, 77, .18);
+  border-radius: 999px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, .78);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.memory-collapse-button:hover,
+.memory-collapse-button:focus-visible {
+  border-color: rgba(49, 92, 77, .42);
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.memory-collapse-button.hidden {
+  display: none;
 }
 
 .content-more-menu {
@@ -3459,5 +3490,572 @@ body.settings-open {
   .profile-summary-actions,
   .profile-summary-actions button {
     width: 100%;
+  }
+}
+
+
+/* LifeGraph v0.0.5.4.2：记一记快捷入口与今日记忆二级窗口 */
+.quick-memory-entry-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid rgba(49, 92, 77, .18);
+  border-radius: 14px;
+  padding: 0 17px;
+  background: linear-gradient(135deg, rgba(49, 92, 77, .95), rgba(66, 121, 99, .92));
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(49, 92, 77, .18);
+  cursor: pointer;
+  font: inherit;
+  font-size: .92rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.quick-memory-entry-button:hover,
+.quick-memory-entry-button:focus-visible {
+  transform: translateY(-1px);
+  outline: none;
+  box-shadow: 0 12px 28px rgba(49, 92, 77, .22);
+}
+
+.quick-memory-modal {
+  z-index: 310;
+}
+
+body.quick-memory-open {
+  overflow: hidden;
+}
+
+.quick-memory-card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+}
+
+.quick-memory-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.quick-memory-header h2 {
+  margin: 0 0 5px;
+}
+
+.quick-memory-date {
+  margin: 0;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.5;
+}
+
+.quick-memory-form {
+  max-width: none;
+}
+
+.quick-memory-form textarea {
+  min-height: 178px;
+  resize: vertical;
+}
+
+.quick-memory-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .life-map-view-controls {
+    align-items: stretch;
+  }
+
+  .quick-memory-entry-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 620px) {
+  .quick-memory-card {
+    max-height: calc(100vh - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 24px;
+  }
+
+  .quick-memory-actions {
+    display: grid;
+  }
+}
+
+
+/* LifeGraph v0.0.5.2：日期详情抽屉全屏阅读模式 */
+.date-drawer.is-expanded {
+  width: 100vw;
+  border-left: none;
+  padding: 32px clamp(24px, 5vw, 72px);
+}
+
+.date-drawer.is-expanded .date-drawer-header {
+  margin-left: calc(clamp(24px, 5vw, 72px) * -1);
+  margin-right: calc(clamp(24px, 5vw, 72px) * -1);
+  padding-left: clamp(24px, 5vw, 72px);
+  padding-right: clamp(24px, 5vw, 72px);
+}
+
+.drawer-expand-button {
+  margin-left: auto;
+}
+
+.date-drawer.is-expanded .date-drawer-content {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+@media (max-width: 620px) {
+  .date-drawer.is-expanded {
+    padding: 20px;
+  }
+
+  .date-drawer.is-expanded .date-drawer-header {
+    margin-left: -20px;
+    margin-right: -20px;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+/* LifeGraph v0.0.5.2.1：桌面端记一记窗口尺寸优化 */
+.quick-memory-card {
+  width: min(760px, 100%);
+}
+
+.quick-memory-form textarea {
+  min-height: 240px;
+}
+
+.quick-memory-form input,
+.quick-memory-form textarea {
+  font-size: 1rem;
+}
+
+@media (min-width: 900px) {
+  .quick-memory-card {
+    width: min(820px, calc(100vw - 80px));
+  }
+}
+
+/* LifeGraph v0.0.5.2.2：记一记关闭确认层级修复 */
+.confirm-modal {
+  z-index: 400;
+}
+
+
+/* LifeGraph v0.0.5.3：详情抽屉内容日期快速切换 */
+.content-date-navigation {
+  position: fixed;
+  right: 28px;
+  bottom: 22px;
+  z-index: 172;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(464px, calc(100vw - 92px));
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  background: none;
+}
+
+.drawer-nav-button {
+  min-width: 118px;
+  min-height: 42px;
+  border: 1px solid rgba(36,37,31,.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,.9);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 14px 38px rgba(35,31,24,.18);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+
+.drawer-nav-button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.drawer-nav-button:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+  box-shadow: 0 10px 26px rgba(35,31,24,.1);
+}
+
+.date-drawer-content {
+  padding-bottom: 88px;
+}
+
+.date-drawer.is-expanded .content-date-navigation {
+  left: clamp(24px, 5vw, 72px);
+  right: clamp(24px, 5vw, 72px);
+  width: auto;
+  max-width: none;
+  margin: 0;
+}
+
+@media (max-width: 620px) {
+  .content-date-navigation,
+  .date-drawer.is-expanded .content-date-navigation {
+    left: 20px;
+    right: 20px;
+    bottom: 16px;
+    width: auto;
+  }
+
+  .drawer-nav-button {
+    min-width: 104px;
+    min-height: 40px;
+    font-size: .88rem;
+  }
+}
+
+
+/* v0.0.5.4.2 TinyMCE memory rich text */
+.quick-memory-card .tox,
+.memory-form .tox {
+  border: 1px solid rgba(64, 96, 72, 0.22);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
+}
+
+.quick-memory-card .tox .tox-toolbar,
+.quick-memory-card .tox .tox-toolbar__primary,
+.memory-form .tox .tox-toolbar,
+.memory-form .tox .tox-toolbar__primary {
+  background: rgba(247, 250, 243, 0.96);
+}
+
+.quick-memory-card .tox .tox-edit-area__iframe,
+.memory-form .tox .tox-edit-area__iframe {
+  background: rgba(255, 255, 252, 0.98);
+}
+
+.memory-rich-content {
+  color: #2f4036;
+  font-size: 0.96rem;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.memory-rich-content p {
+  margin: 0 0 0.85em;
+}
+
+.memory-rich-content p:last-child,
+.memory-rich-content ul:last-child,
+.memory-rich-content ol:last-child,
+.memory-rich-content blockquote:last-child,
+.memory-rich-content pre:last-child {
+  margin-bottom: 0;
+}
+
+.memory-rich-content ul,
+.memory-rich-content ol {
+  margin: 0.4em 0 0.9em 1.35em;
+  padding: 0;
+}
+
+.memory-rich-content li {
+  margin: 0.18em 0;
+}
+
+.memory-rich-content blockquote {
+  margin: 0.8em 0;
+  padding: 0.12em 0 0.12em 0.9em;
+  border-left: 3px solid rgba(80, 128, 92, 0.32);
+  color: #51675b;
+  background: rgba(245, 249, 240, 0.72);
+  border-radius: 0 12px 12px 0;
+}
+
+.memory-rich-content code,
+.memory-rich-content pre {
+  font-family: "Cascadia Code", Consolas, "SFMono-Regular", monospace;
+  background: rgba(241, 246, 235, 0.92);
+  border-radius: 8px;
+}
+
+.memory-rich-content code {
+  padding: 0.08em 0.32em;
+}
+
+.memory-rich-content pre {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.memory-rich-content a {
+  color: #2f7d55;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.content-plain-text {
+  white-space: pre-wrap;
+}
+
+/* v0.0.5.4.1 TinyMCE 工具栏可见性修复 */
+.quick-memory-card .tox .tox-editor-header,
+.memory-form .tox .tox-editor-header {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: relative;
+  z-index: 2;
+  border-bottom: 1px solid rgba(64, 96, 72, 0.14);
+  background: rgba(247, 250, 243, 0.98);
+}
+
+.quick-memory-card .tox .tox-toolbar-overlord,
+.quick-memory-card .tox .tox-toolbar,
+.quick-memory-card .tox .tox-toolbar__primary,
+.memory-form .tox .tox-toolbar-overlord,
+.memory-form .tox .tox-toolbar,
+.memory-form .tox .tox-toolbar__primary {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  min-height: 42px;
+  background: rgba(247, 250, 243, 0.98) !important;
+}
+
+.quick-memory-card .tox .tox-tbtn,
+.memory-form .tox .tox-tbtn {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.quick-memory-card .tox .tox-tbtn svg,
+.memory-form .tox .tox-tbtn svg {
+  display: block !important;
+}
+
+
+/* v0.0.5.4.2 TinyMCE 编辑器宽度与单行工具栏优化 */
+.date-drawer {
+  width: min(680px, calc(100vw - 36px));
+}
+
+.quick-memory-form,
+.memory-form {
+  width: 100%;
+}
+
+.quick-memory-form .tox,
+.quick-memory-form .tox-tinymce,
+.memory-form .tox,
+.memory-form .tox-tinymce {
+  width: 100% !important;
+  max-width: 100%;
+  grid-column: 1 / -1;
+}
+
+.quick-memory-card .tox .tox-toolbar-overlord,
+.quick-memory-card .tox .tox-toolbar,
+.quick-memory-card .tox .tox-toolbar__primary,
+.memory-form .tox .tox-toolbar-overlord,
+.memory-form .tox .tox-toolbar,
+.memory-form .tox .tox-toolbar__primary {
+  flex-wrap: nowrap !important;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.quick-memory-card .tox .tox-toolbar-overlord::-webkit-scrollbar,
+.quick-memory-card .tox .tox-toolbar::-webkit-scrollbar,
+.quick-memory-card .tox .tox-toolbar__primary::-webkit-scrollbar,
+.memory-form .tox .tox-toolbar-overlord::-webkit-scrollbar,
+.memory-form .tox .tox-toolbar::-webkit-scrollbar,
+.memory-form .tox .tox-toolbar__primary::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-memory-card .tox .tox-toolbar__group,
+.memory-form .tox .tox-toolbar__group {
+  flex-wrap: nowrap !important;
+  flex-shrink: 0;
+  padding-inline: 4px;
+}
+
+.quick-memory-card .tox .tox-tbtn,
+.memory-form .tox .tox-tbtn {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  margin: 2px 1px;
+}
+
+.quick-memory-card .tox .tox-edit-area,
+.memory-form .tox .tox-edit-area {
+  width: 100%;
+}
+
+.quick-memory-card .tox {
+  min-height: 420px;
+}
+
+@media (min-width: 900px) {
+  .quick-memory-card {
+    width: min(940px, calc(100vw - 80px));
+  }
+}
+
+@media (max-width: 760px) {
+  .date-drawer {
+    width: min(100vw, calc(100vw - 20px));
+  }
+
+  .quick-memory-card .tox .tox-tbtn,
+  .memory-form .tox .tox-tbtn {
+    width: 34px;
+    min-width: 34px;
+  }
+}
+
+/* v0.0.5.4.2：加宽抽屉后同步底部悬浮导航宽度 */
+.content-date-navigation {
+  width: min(624px, calc(100vw - 92px));
+}
+
+/* LifeGraph v0.0.5.5.2：记一记长文本编辑不再顶开弹窗 */
+.quick-memory-card {
+  display: flex;
+  flex-direction: column;
+  width: min(940px, calc(100vw - 80px));
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+
+.quick-memory-header {
+  flex: 0 0 auto;
+}
+
+.quick-memory-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, auto) auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.quick-memory-form::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-memory-form .quick-memory-title-input,
+.quick-memory-form .tox,
+.quick-memory-form .tox-tinymce,
+.quick-memory-actions {
+  grid-column: 1 / -1;
+}
+
+.quick-memory-card .tox,
+.quick-memory-card .tox-tinymce {
+  height: clamp(280px, calc(100dvh - 420px), 420px) !important;
+  min-height: 0 !important;
+  max-height: clamp(280px, calc(100dvh - 420px), 420px) !important;
+}
+
+.quick-memory-card .tox .tox-editor-container,
+.quick-memory-card .tox .tox-edit-area {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.quick-memory-card .tox .tox-edit-area__iframe {
+  height: 100% !important;
+}
+
+.quick-memory-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: 18px;
+  padding-top: 18px;
+  background: linear-gradient(180deg, rgba(255, 253, 248, 0), #fffdf8 32%, #fffdf8 100%);
+  z-index: 3;
+}
+
+@media (max-width: 760px) {
+  .quick-memory-card {
+    width: min(100%, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .quick-memory-card .tox,
+  .quick-memory-card .tox-tinymce {
+    height: clamp(240px, calc(100dvh - 390px), 340px) !important;
+    max-height: clamp(240px, calc(100dvh - 390px), 340px) !important;
+  }
+}
+
+
+/* v0.0.5 记忆长内容折叠 */
+.memory-card .memory-content-body {
+  position: relative;
+  transition: max-height .18s ease;
+}
+
+.memory-card.is-memory-collapsible.is-memory-collapsed .memory-content-body {
+  max-height: 260px;
+  overflow: hidden;
+}
+
+.memory-card.is-memory-collapsible.is-memory-collapsed .memory-content-body::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 72px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(246, 250, 244, .98));
+}
+
+.memory-card.is-memory-collapsible:not(.is-memory-collapsed) .memory-content-body {
+  max-height: none;
+  overflow: visible;
+}
+
+.memory-card.is-memory-collapsible .content-card-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-radius: 12px;
+  padding-bottom: 6px;
+  background: linear-gradient(180deg, rgba(246, 250, 244, .96), rgba(246, 250, 244, .78));
+}
+
+@media (max-width: 620px) {
+  .memory-collapse-button {
+    min-width: 48px;
+    height: 32px;
+    padding-inline: 10px;
+    font-size: .74rem;
   }
 }

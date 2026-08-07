@@ -82,14 +82,14 @@ def test_auto_backup_policy_creates_initial_backup_and_history(tmp_path: Path) -
     item = history.json()["data"]["items"][0]
     assert item["valid"] is True
     assert item["schema_version"] == 3
-    assert item["producer_version"] == "0.0.4"
+    assert item["producer_version"] == "0.0.5"
 
     downloaded = client.get(
         f"/api/v1/backup/auto/history/{item['filename']}", headers=headers
     )
     assert downloaded.status_code == 200
     package = inspect_lifevault_package(downloaded.content)
-    assert package.manifest["producer"]["version"] == "0.0.4"
+    assert package.manifest["producer"]["version"] == "0.0.5"
     assert "自动备份测试者".encode("utf-8") not in downloaded.content
     assert "首个事件".encode("utf-8") not in downloaded.content
     metadata = json.loads(package.metadata_bytes.decode("utf-8"))
