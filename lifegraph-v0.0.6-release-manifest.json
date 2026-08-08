@@ -1,0 +1,18 @@
+{
+  "name": "LifeGraph",
+  "version": "0.0.6",
+  "released_at": "2026-08-08T12:15:00+08:00",
+  "schema_version": 4,
+  "frontend_version": "0.0.6",
+  "backend_version": "0.0.6",
+  "features": [
+    "memory_tags",
+    "memory_search",
+    "date_range_filter",
+    "tag_intersection_filter",
+    "memory_map_tag_highlight",
+    "tag_management"
+  ],
+  "requires_tinymce_path": "frontend/static/tinymce/tinymce.min.js",
+  "tests": "112 passed"
+}

@@ -235,3 +235,29 @@ class PlanCreateRequest(ScopedContentRequest):
     def validate_target(self) -> "PlanCreateRequest":
         self.validate_scope_key(self.plan_date)
         return self
+
+
+class TagCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    color: str | None = Field(default=None, max_length=20)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("标签名称不能为空")
+        return value
+
+
+class TagUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    color: str | None = Field(default=None, max_length=20)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("标签名称不能为空")
+        return value

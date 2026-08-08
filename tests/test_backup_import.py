@@ -108,10 +108,10 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     assert checked.status_code == 200
     report = checked.json()["data"]
     assert report["valid"] is True
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert report["encrypted_records_verified"] == 2
     assert report["record_counts"]["event"] == 1
-    assert report["producer_version"] == "0.0.5"
+    assert report["producer_version"] == "0.0.6"
 
     recovery_check = target_client.post(
         "/api/v1/backup/import/check",
@@ -153,7 +153,7 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     restored_report = restored.json()["data"]
     assert restored_report["restored"] is True
     assert restored_report["locked"] is True
-    assert restored_report["restored_schema_version"] == 3
+    assert restored_report["restored_schema_version"] == 4
 
     # The old session is revoked after repository replacement.
     assert target_client.get("/api/v1/profile", headers=target_headers).status_code == 401

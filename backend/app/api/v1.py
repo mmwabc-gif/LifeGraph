@@ -22,11 +22,14 @@ from app.models import (
     RecoveryCredentialChangeRequest,
     TrashClearRequest,
     UnlockRequest,
+    TagCreateRequest,
+    TagUpdateRequest,
 )
 from app.security.vault import (
     ContentNotFound,
     ContentRevisionConflict,
     CredentialError,
+    TagConflict,
     VaultError,
     VaultManager,
 )
@@ -99,6 +102,13 @@ def revision_conflict_error(exc: ContentRevisionConflict) -> HTTPException:
     )
 
 
+def tag_conflict_error(exc: TagConflict) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": "TAG_NAME_CONFLICT", "message": str(exc)},
+    )
+
+
 def credential_error(exc: CredentialError, code: str = "INVALID_CREDENTIAL") -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -111,6 +121,11 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
     description = resolve_period(profile_value, scope, period_key)
     events = vault.list_events_for_period(scope, period_key)
     memories = vault.list_memories_for_period(scope, period_key)
+    memory_tags = vault.list_memory_tags_for_memories(
+        memory_ids=[memory["id"] for memory in memories]
+    )
+    for memory in memories:
+        memory["tags"] = memory_tags.get(memory["id"], [])
     plans = vault.list_plans_for_period(scope, period_key)
     description.update(
         {
@@ -132,7 +147,7 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
 def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     return envelope(
         {
-            "version": "0.0.5",
+            "version": vault.app_version,
             "initialized": vault.is_initialized,
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
@@ -399,7 +414,7 @@ def check_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
 @router.get("/backup/export", dependencies=[Depends(require_session)])
 def export_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> Response:
     try:
-        artifact = vault.export_lifevault(app_version="0.0.5")
+        artifact = vault.export_lifevault(app_version=vault.app_version)
     except VaultError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -481,7 +496,7 @@ async def import_backup(
                 credential_method=credential_method,
                 credential_secret=credential_secret,
                 confirm=confirm,
-                app_version="0.0.5",
+                app_version=vault.app_version,
             )
         )
     except CredentialError as exc:
@@ -727,6 +742,160 @@ def delete_memory(
     except VaultError as exc:
         raise locked_error(exc) from exc
 
+
+
+
+@router.get("/memories/search", dependencies=[Depends(require_session)])
+def search_memories(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    q: Annotated[str, Query(max_length=120)] = "",
+    tag_id: Annotated[list[str] | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_SEARCH_RANGE", "message": "开始日期不能晚于结束日期"},
+        )
+    try:
+        return envelope(
+            vault.search_memories(
+                query=q,
+                tag_ids=tag_id or [],
+                date_from=date_from.isoformat() if date_from else None,
+                date_to=date_to.isoformat() if date_to else None,
+                limit=limit,
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/memories/tag-map", dependencies=[Depends(require_session)])
+def memory_tag_map(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    start: Annotated[date, Query()],
+    end: Annotated[date, Query()],
+    tag_id: Annotated[list[str] | None, Query()] = None,
+) -> dict:
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_DATE_RANGE", "message": "开始日期不能晚于结束日期"},
+        )
+    if (end - start).days > 55_000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "DATE_RANGE_TOO_LARGE", "message": "日期范围过大"},
+        )
+    if not tag_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "TAG_FILTER_REQUIRED", "message": "请至少选择一个标签"},
+        )
+    try:
+        return envelope(
+            vault.get_memory_tag_map(
+                tag_ids=tag_id,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/tags", dependencies=[Depends(require_session)])
+def list_tags(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.list_tags())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/tags", dependencies=[Depends(require_session)])
+def create_tag(
+    payload: TagCreateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.create_tag(name=payload.name, color=payload.color))
+    except TagConflict as exc:
+        raise tag_conflict_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/tags/{tag_id}", dependencies=[Depends(require_session)])
+def update_tag(
+    tag_id: str,
+    payload: TagUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.update_tag(tag_id=tag_id, name=payload.name, color=payload.color))
+    except TagConflict as exc:
+        raise tag_conflict_error(exc) from exc
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/tags/{tag_id}", dependencies=[Depends(require_session)])
+def delete_tag(
+    tag_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_tag(tag_id=tag_id))
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/memories/{memory_id}/tags", dependencies=[Depends(require_session)])
+def list_memory_tags(
+    memory_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.list_memory_tags(memory_id=memory_id))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/memories/{memory_id}/tags/{tag_id}", dependencies=[Depends(require_session)])
+def attach_memory_tag(
+    memory_id: str,
+    tag_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.attach_memory_tag(memory_id=memory_id, tag_id=tag_id)
+        return envelope({"attached": True})
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/memories/{memory_id}/tags/{tag_id}", dependencies=[Depends(require_session)])
+def detach_memory_tag(
+    memory_id: str,
+    tag_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.detach_memory_tag(memory_id=memory_id, tag_id=tag_id)
+        return envelope({"detached": True})
+    except VaultError as exc:
+        raise locked_error(exc) from exc
 
 @router.post("/plans", dependencies=[Depends(require_session)])
 def create_plan(

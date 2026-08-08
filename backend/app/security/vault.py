@@ -70,12 +70,16 @@ class ContentRevisionConflict(VaultError):
     pass
 
 
+class TagConflict(VaultError):
+    pass
+
+
 class VaultManager:
     def __init__(
         self,
         data_dir: Path,
         session_ttl_seconds: int = 1800,
-        app_version: str = "0.0.4",
+        app_version: str = "0.0.6",
     ) -> None:
         self.data_dir = data_dir
         self.metadata_path = data_dir / "vault.json"
@@ -1329,6 +1333,43 @@ class VaultManager:
     def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
         return self.list_memories_for_period("day", memory_date)
 
+    def search_memories(
+        self,
+        *,
+        query: str = "",
+        tag_ids: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.search_memories(
+            master_key,
+            profile_id=profile["id"],
+            query=query,
+            tag_ids=tag_ids,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+
+    def get_memory_tag_map(
+        self,
+        *,
+        tag_ids: list[str],
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        return self.database.get_memory_tag_map(
+            profile_id=profile["id"],
+            tag_ids=tag_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
     def update_memory(
         self,
         *,
@@ -1349,6 +1390,96 @@ class VaultManager:
 
     def delete_memory(self, *, memory_id: str, revision: int) -> dict[str, Any]:
         return self._delete_content(kind="memory", content_id=memory_id, revision=revision)
+
+    def _ensure_tag_name_available(
+        self,
+        *,
+        profile_id: str,
+        name: str,
+        exclude_tag_id: str | None = None,
+    ) -> None:
+        normalized = name.strip().casefold()
+        for tag in self.database.list_tags(profile_id=profile_id):
+            if exclude_tag_id and tag["id"] == exclude_tag_id:
+                continue
+            if str(tag["name"]).strip().casefold() == normalized:
+                raise TagConflict(f"标签 #{name.strip()} 已存在")
+
+    def create_tag(self, *, name: str, color: str | None = None) -> dict[str, Any]:
+        with self._mutex:
+            profile = self.get_profile()
+            clean_name = name.strip()
+            self._ensure_tag_name_available(profile_id=profile["id"], name=clean_name)
+            now = datetime.now(dt_timezone.utc).isoformat()
+            return self.database.create_tag(
+                profile_id=profile["id"],
+                tag_id=str(uuid.uuid4()),
+                name=clean_name,
+                color=color,
+                timestamp=now,
+            )
+
+    def list_tags(self) -> list[dict[str, Any]]:
+        profile = self.get_profile()
+        return self.database.list_tags(profile_id=profile["id"])
+
+    def update_tag(
+        self, *, tag_id: str, name: str, color: str | None = None
+    ) -> dict[str, Any]:
+        with self._mutex:
+            profile = self.get_profile()
+            clean_name = name.strip()
+            self._ensure_tag_name_available(
+                profile_id=profile["id"],
+                name=clean_name,
+                exclude_tag_id=tag_id,
+            )
+            now = datetime.now(dt_timezone.utc).isoformat()
+            try:
+                return self.database.update_tag(
+                    profile_id=profile["id"],
+                    tag_id=tag_id,
+                    name=clean_name,
+                    color=color,
+                    timestamp=now,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+
+    def delete_tag(self, *, tag_id: str) -> dict[str, Any]:
+        with self._mutex:
+            profile = self.get_profile()
+            try:
+                return self.database.delete_tag(profile_id=profile["id"], tag_id=tag_id)
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+
+    def attach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+        profile = self.get_profile()
+        now = datetime.now(dt_timezone.utc).isoformat()
+        attached = self.database.attach_memory_tag(
+            profile_id=profile["id"], memory_id=memory_id, tag_id=tag_id, timestamp=now
+        )
+        if not attached:
+            raise ContentNotFound("记忆或标签不存在")
+
+    def detach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+        profile = self.get_profile()
+        self.database.detach_memory_tag(
+            profile_id=profile["id"], memory_id=memory_id, tag_id=tag_id
+        )
+
+    def list_memory_tags(self, *, memory_id: str) -> list[dict[str, Any]]:
+        profile = self.get_profile()
+        return self.database.list_memory_tags(profile_id=profile["id"], memory_id=memory_id)
+
+    def list_memory_tags_for_memories(
+        self, *, memory_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        profile = self.get_profile()
+        return self.database.list_memory_tags_for_memories(
+            profile_id=profile["id"], memory_ids=memory_ids
+        )
 
     def create_plan(
         self,

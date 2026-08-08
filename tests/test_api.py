@@ -13,6 +13,19 @@ def make_client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def test_release_version_is_consistent(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["version"] == "0.0.6"
+
+    status = client.get("/api/v1/system/status")
+    assert status.status_code == 200
+    assert status.json()["data"]["version"] == "0.0.6"
+
+
+
 def test_initialize_lock_and_unlock(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 

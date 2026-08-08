@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.5</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.5">
+  <title>人生图谱 · v0.0.6</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.6">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.5</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.6</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.5</span>
+          <span class="build-badge">v0.0.6</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -120,6 +120,8 @@
             </div>
             <div class="life-map-view-controls">
               <button id="quickMemoryHomeButton" class="quick-memory-entry-button" type="button">记一记</button>
+              <button id="memorySearchHomeButton" class="memory-search-entry-button" type="button">搜索</button>
+              <button id="memoryMapFilterHomeButton" class="memory-map-filter-entry-button" type="button">标签筛选</button>
               <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
                 <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">日</button>
                 <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
@@ -136,6 +138,7 @@
               <span><i class="future-dot"></i>未来</span>
               <span><i class="event-dot"></i>有事件</span>
               <span><i class="memory-border"></i>有记忆</span>
+              <span><i class="tag-filter-dot"></i>标签命中</span>
               <span><i class="plan-ring"></i>有计划</span>
             </div>
           </div>
@@ -169,9 +172,9 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.5</p>
-        <h2>记一记快捷记录</h2>
-        <p>在首页和全页日图中直接记录今天的个人记忆，保存后自动刷新日期格状态。</p>
+        <p class="eyebrow">v0.0.6</p>
+        <h2>搜索、筛选与标签</h2>
+        <p>为记忆建立标签，通过关键词、日期范围和标签快速查找，并在整个人生图谱中高亮相关时间。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
@@ -193,9 +196,12 @@
             <span><i class="future-dot"></i>未来</span>
             <span><i class="event-dot"></i>有事件</span>
             <span><i class="memory-border"></i>有记忆</span>
+            <span><i class="tag-filter-dot"></i>标签命中</span>
             <span><i class="plan-ring"></i>有计划</span>
           </div>
           <button id="quickMemoryFullPageButton" class="quick-memory-entry-button full-page-control-button" type="button">记一记</button>
+          <button id="memorySearchFullPageButton" class="memory-search-entry-button full-page-control-button" type="button">搜索</button>
+          <button id="memoryMapFilterFullPageButton" class="memory-map-filter-entry-button full-page-control-button" type="button">标签筛选</button>
           <button id="fullPageLocateToday" class="ghost-button full-page-control-button" type="button">定位今天</button>
           <button id="fullPageSettingsButton" class="ghost-button full-page-control-button" type="button">个人设置</button>
           <button id="closeFullPageView" class="primary-button full-page-control-button" type="button">进入首页</button>
@@ -305,6 +311,20 @@
             <label>记忆内容
               <textarea id="memoryContent" name="content" maxlength="20000" rows="6" placeholder="记录当时的感受、细节或后来形成的理解（可留空）"></textarea>
             </label>
+            <div class="memory-tag-field" data-tag-selector="drawer">
+              <div class="memory-tag-field-header">
+                <span>标签</span>
+                <button id="toggleMemoryTagPicker" class="memory-tag-add-button" type="button" aria-expanded="false">＋ 添加标签</button>
+              </div>
+              <div id="memorySelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
+              <div id="memoryTagPicker" class="memory-tag-picker hidden">
+                <div id="memoryTagOptions" class="memory-tag-option-list"></div>
+                <div class="memory-tag-create-row">
+                  <input id="memoryNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
+                  <button id="createMemoryTag" class="ghost-button" type="button">新建并选中</button>
+                </div>
+              </div>
+            </div>
             <div class="event-form-actions">
               <button id="cancelMemoryForm" class="ghost-button" type="button">取消</button>
               <button class="primary-button" type="submit">保存记忆</button>
@@ -321,7 +341,7 @@
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.5">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.6">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -369,7 +389,7 @@
       <div class="modal-card settings-card">
         <header class="settings-header">
           <div>
-            <p class="eyebrow">档案 · 安全 · 备份</p>
+            <p class="eyebrow">档案 · 整理 · 安全 · 备份</p>
             <h2 id="settingsTitle">个人设置</h2>
           </div>
           <button id="closeSettings" class="icon-button" type="button" aria-label="关闭个人设置">×</button>
@@ -420,6 +440,36 @@
                     <button class="primary-button" type="submit">保存个人档案</button>
                   </div>
                 </form>
+              </section>
+            </div>
+          </section>
+
+          <section class="settings-group settings-group-tags" aria-labelledby="tagSettingsGroupTitle">
+            <header class="settings-group-header">
+              <span class="settings-group-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h7l9 9-6 6-9-9V5Zm4 4h.01"/></svg>
+              </span>
+              <div>
+                <h3 id="tagSettingsGroupTitle">标签管理</h3>
+                <p>统一查看记忆标签、使用数量，并进行新建、重命名或删除。</p>
+              </div>
+            </header>
+            <div class="settings-group-content">
+              <section class="settings-section tag-management-section">
+                <div class="settings-section-heading tag-management-heading">
+                  <div>
+                    <h4>记忆标签</h4>
+                    <p>删除标签只会移除标签关联，不会删除任何记忆正文。</p>
+                  </div>
+                  <span id="tagManagementSummary" class="tag-management-summary">正在读取…</span>
+                </div>
+                <div class="tag-management-create-row">
+                  <input id="tagManagementNewName" maxlength="40" autocomplete="off" placeholder="新标签名称，例如：家庭、旅行、工作">
+                  <button id="createManagedTag" class="primary-button" type="button">新建标签</button>
+                </div>
+                <div id="tagManagementList" class="tag-management-list" aria-live="polite">
+                  <p class="tag-management-empty">正在读取标签…</p>
+                </div>
               </section>
             </div>
           </section>
@@ -635,6 +685,71 @@
     </div>
 
 
+
+    <div id="memoryMapFilterModal" class="modal memory-map-filter-modal hidden" role="dialog" aria-modal="true" aria-labelledby="memoryMapFilterTitle" aria-hidden="true">
+      <div class="modal-card memory-map-filter-card">
+        <header class="memory-map-filter-header">
+          <div>
+            <p class="eyebrow">地图筛选</p>
+            <h2 id="memoryMapFilterTitle">按标签突出人生日期</h2>
+            <p class="memory-map-filter-hint">选择一个或多个标签；多选时只突出同时包含全部所选标签的记忆所在时间范围。</p>
+          </div>
+          <button id="closeMemoryMapFilter" class="icon-button" type="button" aria-label="关闭地图标签筛选">×</button>
+        </header>
+        <form id="memoryMapFilterForm" class="memory-map-filter-form">
+          <div id="memoryMapFilterTagOptions" class="memory-map-filter-tag-options" aria-label="可筛选标签"></div>
+          <div class="memory-map-filter-footer">
+            <p id="memoryMapFilterSummary" class="memory-map-filter-summary">当前未启用标签筛选。</p>
+            <div class="memory-map-filter-actions">
+              <button id="clearMemoryMapFilter" class="ghost-button" type="button">清除筛选</button>
+              <button class="primary-button" type="submit">应用筛选</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="memorySearchModal" class="modal memory-search-modal hidden" role="dialog" aria-modal="true" aria-labelledby="memorySearchTitle" aria-hidden="true">
+      <div class="modal-card memory-search-card">
+        <header class="memory-search-header">
+          <div>
+            <p class="eyebrow">搜索 · 筛选</p>
+            <h2 id="memorySearchTitle">搜索记忆</h2>
+            <p class="memory-search-hint">关键词会在解锁后检索加密记忆的标题与正文，搜索内容不会写入数据库。</p>
+          </div>
+          <button id="closeMemorySearch" class="icon-button" type="button" aria-label="关闭记忆搜索">×</button>
+        </header>
+        <form id="memorySearchForm" class="memory-search-form">
+          <label class="memory-search-keyword">关键词
+            <input id="memorySearchQuery" name="q" maxlength="120" autocomplete="off" placeholder="搜索标题或正文，例如：毕业、旅行、第一次">
+          </label>
+          <div class="memory-search-date-grid">
+            <label>开始日期
+              <input id="memorySearchDateFrom" name="date_from" type="date">
+            </label>
+            <label>结束日期
+              <input id="memorySearchDateTo" name="date_to" type="date">
+            </label>
+          </div>
+          <fieldset class="memory-search-tags">
+            <legend>标签筛选 <span>（多选时需同时包含）</span></legend>
+            <div id="memorySearchTagOptions" class="memory-search-tag-options"></div>
+          </fieldset>
+          <div class="memory-search-actions">
+            <button id="resetMemorySearch" class="ghost-button" type="button">重置</button>
+            <button class="primary-button" type="submit">搜索记忆</button>
+          </div>
+        </form>
+        <section class="memory-search-results-section" aria-live="polite">
+          <div class="memory-search-results-heading">
+            <strong id="memorySearchSummary">输入条件后开始搜索</strong>
+            <span id="memorySearchLimitHint" class="hidden">仅显示前 100 条</span>
+          </div>
+          <div id="memorySearchResults" class="memory-search-results"></div>
+        </section>
+      </div>
+    </div>
+
     <div id="quickMemoryModal" class="modal quick-memory-modal hidden" role="dialog" aria-modal="true" aria-labelledby="quickMemoryTitle" aria-describedby="quickMemoryDateText" aria-hidden="true">
       <div class="modal-card quick-memory-card">
         <header class="quick-memory-header">
@@ -648,6 +763,20 @@
         <form id="quickMemoryForm" class="form-grid compact-form quick-memory-form">
           <input class="full-width quick-memory-title-input" name="title" maxlength="120" placeholder="标题（可选）" autocomplete="off">
           <textarea id="quickMemoryContent" class="full-width quick-memory-content-input" name="content" required maxlength="20000" rows="10" placeholder="今天想记什么？写下今天发生的事、看到的风景，或者此刻想留下的一句话。"></textarea>
+          <div class="full-width memory-tag-field quick-memory-tag-field" data-tag-selector="quick">
+            <div class="memory-tag-field-header">
+              <span>标签</span>
+              <button id="toggleQuickMemoryTagPicker" class="memory-tag-add-button" type="button" aria-expanded="false">＋ 添加标签</button>
+            </div>
+            <div id="quickMemorySelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
+            <div id="quickMemoryTagPicker" class="memory-tag-picker hidden">
+              <div id="quickMemoryTagOptions" class="memory-tag-option-list"></div>
+              <div class="memory-tag-create-row">
+                <input id="quickMemoryNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
+                <button id="createQuickMemoryTag" class="ghost-button" type="button">新建并选中</button>
+              </div>
+            </div>
+          </div>
           <div class="full-width quick-memory-actions">
             <button id="cancelQuickMemory" class="ghost-button" type="button">取消</button>
             <button class="primary-button" type="submit">保存记忆</button>
@@ -672,6 +801,6 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/static/tinymce/tinymce.min.js"></script>
-  <script src="/assets/app.js?v=0.0.5"></script>
+  <script src="/assets/app.js?v=0.0.6"></script>
 </body>
 </html>

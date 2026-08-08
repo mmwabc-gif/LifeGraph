@@ -1,8 +1,20 @@
-# 人生图谱 LifeGraph v0.0.5
+# 人生图谱 LifeGraph v0.0.6
 
-人生图谱是一个以生命时间为骨架、以本地加密仓库保存事件、记忆与计划的个人数字档案系统。v0.0.5 完成内容体验阶段收口：新增「记一记」快捷记录、日期详情抽屉全屏阅读、上下有内容日期导航、桌面快捷键、TinyMCE 富文本记忆，以及长记忆折叠/展开阅读能力。
+人生图谱是一个以生命时间为骨架、以本地加密仓库保存事件、记忆与计划的个人数字档案系统。v0.0.6 在 v0.0.5 的记录与阅读闭环上加入记忆搜索、时间范围筛选、标签系统、地图标签高亮和标签管理，让已经记录的人生内容开始具备“查找、分类、筛选、回看”的整理能力。
 
-## v0.0.5 当前能力
+## v0.0.6 当前能力
+
+### 搜索、筛选与标签
+
+- 记忆支持多个标签，可在「记一记」和日期详情中的新增/编辑记忆时直接选择、取消或新建标签；
+- 记忆卡片正文下方展示标签，旧记忆保持兼容；
+- 首页和全页视图提供【搜索】，支持标题/正文关键词、开始/结束日期和多个标签组合条件；
+- 多标签搜索和地图筛选采用“同时包含”的交集逻辑；
+- 搜索结果可直接打开对应年/月/日详情并定位到目标记忆；
+- 首页和全页视图提供【标签筛选】，筛选后日/月/年三级图谱保持完整人生结构，只突出命中格并弱化其他格；
+- 个人设置提供【标签管理】，可查看标签使用次数、新建、重命名和删除；
+- 删除标签只解除标签关联，不删除任何记忆；
+- `Ctrl + K` 可快速打开记忆搜索。
 
 ### 快捷导航与详情阅读
 
@@ -165,10 +177,10 @@ python scripts\run_dev.py
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-v0.0.5 当前基线：
+v0.0.6 当前基线：
 
 ```text
-98 passed
+112 passed
 ```
 
 测试覆盖初始化与解锁、加密与密钥包装、时区与进度、schema 迁移、年／月／日内容新增编辑删除、回收站、个人档案修改、PIN 修改与恢复密钥重置、一致性快照、`.lifevault` 清单校验、恢复演练、自动导入、恢复前安全备份、本地自动备份周期、历史保留、下载删除、备份健康状态、超期判定、落盘文件快速验证、损坏识别、恢复密钥轮换、密钥槽摘要、安全审计兼容和异目录恢复。
@@ -193,7 +205,7 @@ data/.gitkeep
 LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 ```
 
-从 v0.0.1 或 v0.0.2 升级时，数据库会非破坏性迁移到 schema v3，已有加密档案和内容不会被重写为明文。
+从 v0.0.1—v0.0.5 升级时，数据库会非破坏性迁移到 schema v4；v4 新增标签与记忆标签关联表，已有加密档案和内容不会被重写为明文。
 
 ## 主要 API
 
@@ -208,6 +220,10 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 - 更换恢复密钥：`POST /api/v1/auth/change-recovery`
 - 密钥槽与安全审计摘要：`GET /api/v1/security/summary`
 - 日期详情：`GET /api/v1/dates/{date}`
+- 标签：`GET|POST /api/v1/tags`、`PUT|DELETE /api/v1/tags/{tag_id}`
+- 记忆标签：`GET /api/v1/memories/{memory_id}/tags`、`POST|DELETE /api/v1/memories/{memory_id}/tags/{tag_id}`
+- 记忆搜索：`GET /api/v1/memories/search`
+- 地图标签命中：`GET /api/v1/memories/tag-map`
 - 时间范围详情：`GET /api/v1/periods/{scope}/{period_key}`
 - 新增内容：`POST /api/v1/events|memories|plans`
 - 编辑内容：`PUT /api/v1/events|memories|plans/{content_id}`
@@ -229,6 +245,10 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 
 ## 版本文档
 
+- `docs/ACCEPTANCE_v0.0.6.md`
+- `docs/STABLE_RELEASE_v0.0.6.md`
+- `docs/GIT_COMMIT_v0.0.6.md`
+- `docs/人生图谱_v0.0.6_收口归档.md`
 - `docs/ACCEPTANCE_v0.0.4.md`
 - `docs/STABLE_RELEASE_v0.0.4.md`
 - `docs/GIT_COMMIT_v0.0.4.md`
@@ -248,7 +268,7 @@ LIFEGRAPH_DATA_DIR=D:\LifeGraphData
 
 ## 当前边界
 
-v0.0.5 暂不包含照片和附件、文件扫描、农历、浏览器插件、多设备同步及云端协作；Markdown 已暂缓，后续可改为独立导入流程。
+v0.0.6 暂不包含照片和附件、文件扫描、农历、浏览器插件、多设备同步及云端协作；标签和全文搜索当前以记忆为第一类内容，事件与计划的统一整理留待后续阶段；Markdown 已暂缓，后续可改为独立导入流程。
 
 
 ## v0.0.5.1 富文本记忆

@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.5";
+const frontendBuildVersion = "0.0.6";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -62,6 +62,36 @@ const fullPageDateTooltipTitle = document.getElementById("fullPageDateTooltipTit
 const fullPageDateTooltipMeta = document.getElementById("fullPageDateTooltipMeta");
 const quickMemoryHomeButton = document.getElementById("quickMemoryHomeButton");
 const quickMemoryFullPageButton = document.getElementById("quickMemoryFullPageButton");
+const memorySearchHomeButton = document.getElementById("memorySearchHomeButton");
+const memorySearchFullPageButton = document.getElementById("memorySearchFullPageButton");
+const memorySearchModal = document.getElementById("memorySearchModal");
+const memorySearchForm = document.getElementById("memorySearchForm");
+const memorySearchQuery = document.getElementById("memorySearchQuery");
+const memorySearchDateFrom = document.getElementById("memorySearchDateFrom");
+const memorySearchDateTo = document.getElementById("memorySearchDateTo");
+const memorySearchTagOptions = document.getElementById("memorySearchTagOptions");
+const memorySearchResults = document.getElementById("memorySearchResults");
+const memorySearchSummary = document.getElementById("memorySearchSummary");
+const memorySearchLimitHint = document.getElementById("memorySearchLimitHint");
+const closeMemorySearchButton = document.getElementById("closeMemorySearch");
+const resetMemorySearchButton = document.getElementById("resetMemorySearch");
+const memoryMapFilterHomeButton = document.getElementById("memoryMapFilterHomeButton");
+const memoryMapFilterFullPageButton = document.getElementById("memoryMapFilterFullPageButton");
+const memoryMapFilterModal = document.getElementById("memoryMapFilterModal");
+const memoryMapFilterForm = document.getElementById("memoryMapFilterForm");
+const memoryMapFilterTagOptions = document.getElementById("memoryMapFilterTagOptions");
+const memoryMapFilterSummary = document.getElementById("memoryMapFilterSummary");
+const closeMemoryMapFilterButton = document.getElementById("closeMemoryMapFilter");
+const clearMemoryMapFilterButton = document.getElementById("clearMemoryMapFilter");
+let memorySearchReturnFocus = null;
+let memorySearchRequestSequence = 0;
+const selectedMemorySearchTagIds = new Set();
+let memoryMapFilterReturnFocus = null;
+let memoryMapFilterRequestSequence = 0;
+let memoryMapFilterRevision = 0;
+const selectedMemoryMapTagIds = new Set();
+const draftMemoryMapTagIds = new Set();
+let memoryMapTagMatches = { dates: new Set(), months: new Set(), years: new Set(), memoryCount: 0 };
 const quickMemoryModal = document.getElementById("quickMemoryModal");
 const quickMemoryForm = document.getElementById("quickMemoryForm");
 const quickMemoryDateText = document.getElementById("quickMemoryDateText");
@@ -69,6 +99,14 @@ const closeQuickMemoryButton = document.getElementById("closeQuickMemory");
 const cancelQuickMemoryButton = document.getElementById("cancelQuickMemory");
 let quickMemoryReturnFocus = null;
 let quickMemorySnapshot = "";
+let availableMemoryTags = [];
+let memoryTagsLoadPromise = null;
+const selectedMemoryTagIds = {
+  quick: new Set(),
+  drawer: new Set(),
+};
+
+updateMemoryMapFilterEntryButtons();
 
 function token() {
   return sessionStorage.getItem(tokenKey);
@@ -87,6 +125,7 @@ function showView(name) {
     closeDateDrawerNow();
     closeFullPageLifeViewNow();
     closeSettingsModalNow();
+    closeMemoryMapFilterModalNow({ restoreFocus: false });
   }
 }
 
@@ -123,6 +162,8 @@ function friendlyErrorMessage(error) {
     BACKUP_RESTORE_FAILED: "备份恢复失败，当前仓库未被替换。",
     BACKUP_TOO_LARGE: "备份文件超过 512 MB 限制。",
     AUTO_BACKUP_VERIFY_FAILED: "最近备份验证失败。",
+    INVALID_SEARCH_RANGE: "搜索开始日期不能晚于结束日期。",
+    TAG_NAME_CONFLICT: "已经存在同名标签，请换一个名称。",
   };
   return messages[error?.code] || error?.message || "操作失败，请稍后重试。";
 }
@@ -397,12 +438,216 @@ function contentToEditableMemoryHtml(item) {
   return plainTextToRichHtml(item?.content || "");
 }
 
+function memoryTagElements(mode) {
+  const isQuick = mode === "quick";
+  return {
+    selected: document.getElementById(isQuick ? "quickMemorySelectedTags" : "memorySelectedTags"),
+    picker: document.getElementById(isQuick ? "quickMemoryTagPicker" : "memoryTagPicker"),
+    options: document.getElementById(isQuick ? "quickMemoryTagOptions" : "memoryTagOptions"),
+    toggle: document.getElementById(isQuick ? "toggleQuickMemoryTagPicker" : "toggleMemoryTagPicker"),
+    input: document.getElementById(isQuick ? "quickMemoryNewTagName" : "memoryNewTagName"),
+    create: document.getElementById(isQuick ? "createQuickMemoryTag" : "createMemoryTag"),
+  };
+}
+
+function memoryTagNameKey(value) {
+  return String(value || "").trim().toLocaleLowerCase("zh-CN");
+}
+
+function renderMemoryTagSelector(mode) {
+  const elements = memoryTagElements(mode);
+  if (!elements.selected || !elements.options) return;
+  const selectedIds = selectedMemoryTagIds[mode];
+  elements.selected.replaceChildren();
+
+  const selectedTags = availableMemoryTags.filter((tag) => selectedIds.has(tag.id));
+  if (!selectedTags.length) {
+    const empty = document.createElement("span");
+    empty.className = "memory-tag-empty";
+    empty.textContent = "尚未添加标签";
+    elements.selected.appendChild(empty);
+  } else {
+    selectedTags.forEach((tag) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "memory-tag-chip is-selected";
+      chip.textContent = `#${tag.name} ×`;
+      chip.title = `移除标签：${tag.name}`;
+      chip.addEventListener("click", () => {
+        selectedIds.delete(tag.id);
+        renderMemoryTagSelector(mode);
+      });
+      elements.selected.appendChild(chip);
+    });
+  }
+
+  elements.options.replaceChildren();
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("p");
+    empty.className = "memory-tag-picker-empty";
+    empty.textContent = "还没有标签，可以在下方新建。";
+    elements.options.appendChild(empty);
+    return;
+  }
+
+  availableMemoryTags.forEach((tag) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "memory-tag-option";
+    option.classList.toggle("is-selected", selectedIds.has(tag.id));
+    option.setAttribute("aria-pressed", selectedIds.has(tag.id) ? "true" : "false");
+    option.textContent = `#${tag.name}`;
+    option.addEventListener("click", () => {
+      if (selectedIds.has(tag.id)) selectedIds.delete(tag.id);
+      else selectedIds.add(tag.id);
+      renderMemoryTagSelector(mode);
+    });
+    elements.options.appendChild(option);
+  });
+}
+
+function setMemoryTagSelection(mode, tags = []) {
+  selectedMemoryTagIds[mode] = new Set((tags || []).map((tag) => typeof tag === "string" ? tag : tag.id).filter(Boolean));
+  renderMemoryTagSelector(mode);
+}
+
+function resetMemoryTagSelector(mode) {
+  const elements = memoryTagElements(mode);
+  selectedMemoryTagIds[mode] = new Set();
+  if (elements.picker) elements.picker.classList.add("hidden");
+  if (elements.toggle) elements.toggle.setAttribute("aria-expanded", "false");
+  if (elements.input) elements.input.value = "";
+  renderMemoryTagSelector(mode);
+}
+
+function pruneUnavailableMemoryTagSelections() {
+  const validIds = new Set(availableMemoryTags.map((tag) => tag.id));
+  for (const selectedIds of [
+    selectedMemoryTagIds.quick,
+    selectedMemoryTagIds.drawer,
+    selectedMemorySearchTagIds,
+    selectedMemoryMapTagIds,
+    draftMemoryMapTagIds,
+  ]) {
+    for (const tagId of [...selectedIds]) {
+      if (!validIds.has(tagId)) selectedIds.delete(tagId);
+    }
+  }
+}
+
+function renderAllMemoryTagControls() {
+  pruneUnavailableMemoryTagSelections();
+  renderMemoryTagSelector("quick");
+  renderMemoryTagSelector("drawer");
+  renderMemorySearchTagOptions();
+  renderMemoryMapFilterTagOptions();
+  updateMemoryMapFilterEntryButtons();
+  updateMemoryMapFilterSummary();
+  renderTagManagement();
+}
+
+async function loadMemoryTags({ force = false } = {}) {
+  if (!force && availableMemoryTags.length) return availableMemoryTags;
+  if (!force && memoryTagsLoadPromise) return memoryTagsLoadPromise;
+  memoryTagsLoadPromise = api("/api/v1/tags", {}, true)
+    .then((tags) => {
+      availableMemoryTags = Array.isArray(tags) ? tags : [];
+      renderAllMemoryTagControls();
+      return availableMemoryTags;
+    })
+    .finally(() => {
+      memoryTagsLoadPromise = null;
+    });
+  return memoryTagsLoadPromise;
+}
+
+function toggleMemoryTagPicker(mode) {
+  const elements = memoryTagElements(mode);
+  if (!elements.picker || !elements.toggle) return;
+  const shouldOpen = elements.picker.classList.contains("hidden");
+  elements.picker.classList.toggle("hidden", !shouldOpen);
+  elements.toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+  if (shouldOpen) {
+    loadMemoryTags().catch(showOperationError);
+    requestAnimationFrame(() => elements.input?.focus());
+  }
+}
+
+async function createAndSelectMemoryTag(mode) {
+  const elements = memoryTagElements(mode);
+  const name = String(elements.input?.value || "").trim();
+  if (!name) {
+    showToast("请输入标签名称。", "error");
+    elements.input?.focus();
+    return;
+  }
+  const existing = availableMemoryTags.find((tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name));
+  if (existing) {
+    selectedMemoryTagIds[mode].add(existing.id);
+    if (elements.input) elements.input.value = "";
+    renderMemoryTagSelector(mode);
+    showToast(`已选中标签 #${existing.name}`, "success");
+    return;
+  }
+
+  setButtonBusy(elements.create, true, "新建中…");
+  try {
+    const tag = await api("/api/v1/tags", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }, true);
+    availableMemoryTags.push(tag);
+    availableMemoryTags.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    selectedMemoryTagIds[mode].add(tag.id);
+    if (elements.input) elements.input.value = "";
+    renderAllMemoryTagControls();
+    showToast(`标签 #${tag.name} 已创建`, "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(elements.create, false);
+  }
+}
+
+async function syncMemoryTags(memoryId, selectedIds) {
+  const currentTags = await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags`, {}, true);
+  const currentIds = new Set((currentTags || []).map((tag) => tag.id));
+  const desiredIds = new Set(selectedIds || []);
+  const toAttach = [...desiredIds].filter((tagId) => !currentIds.has(tagId));
+  const toDetach = [...currentIds].filter((tagId) => !desiredIds.has(tagId));
+
+  for (const tagId of toAttach) {
+    await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags/${encodeURIComponent(tagId)}`, {
+      method: "POST",
+    }, true);
+  }
+  for (const tagId of toDetach) {
+    await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags/${encodeURIComponent(tagId)}`, {
+      method: "DELETE",
+    }, true);
+  }
+}
+
+function appendMemoryTagBadges(article, tags = []) {
+  if (!tags?.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "memory-tag-readonly-list";
+  tags.forEach((tag) => {
+    const badge = document.createElement("span");
+    badge.className = "memory-tag-readonly";
+    badge.textContent = `#${tag.name}`;
+    wrap.appendChild(badge);
+  });
+  article.appendChild(wrap);
+}
+
 function quickMemoryState() {
   if (!quickMemoryForm) return { title: "", content: "" };
   const form = new FormData(quickMemoryForm);
   return {
     title: String(form.get("title") || "").trim(),
     content: getMemoryRichEditorContent(memoryRichEditorIds.quick),
+    tagIds: [...selectedMemoryTagIds.quick].sort(),
   };
 }
 
@@ -436,7 +681,7 @@ function deriveQuickMemoryTitle(content) {
   return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact;
 }
 
-function openQuickMemoryModal() {
+async function openQuickMemoryModal() {
   if (!quickMemoryModal || !quickMemoryForm) return;
   if (!currentProgress?.today) {
     showToast("请先解锁并加载人生图谱。", "error");
@@ -444,10 +689,16 @@ function openQuickMemoryModal() {
   }
   quickMemoryReturnFocus = document.activeElement;
   quickMemoryForm.reset();
+  resetMemoryTagSelector("quick");
   quickMemoryDateText.textContent = `${formatQuickMemoryDate(currentProgress.today)} · 今天`;
   quickMemoryModal.classList.remove("hidden");
   quickMemoryModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("quick-memory-open");
+  try {
+    await loadMemoryTags();
+  } catch (error) {
+    showOperationError(error);
+  }
   initMemoryRichEditor(memoryRichEditorIds.quick, "");
   requestAnimationFrame(() => {
     captureQuickMemorySnapshot();
@@ -459,6 +710,7 @@ function closeQuickMemoryModalNow({ restoreFocus = true } = {}) {
   if (!quickMemoryModal || !quickMemoryForm) return;
   destroyMemoryRichEditor(memoryRichEditorIds.quick);
   quickMemoryForm.reset();
+  resetMemoryTagSelector("quick");
   quickMemoryModal.classList.add("hidden");
   quickMemoryModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("quick-memory-open");
@@ -497,7 +749,7 @@ async function saveQuickMemory(event) {
   const submit = quickMemoryForm.querySelector('button[type="submit"]');
   setButtonBusy(submit, true, "加密保存中…");
   try {
-    await api("/api/v1/memories", {
+    const memory = await api("/api/v1/memories", {
       method: "POST",
       body: JSON.stringify({
         time_scope: "day",
@@ -507,6 +759,7 @@ async function saveQuickMemory(event) {
         content_format: "html",
       }),
     }, true);
+    await syncMemoryTags(memory.id, selectedMemoryTagIds.quick);
     closeQuickMemoryModalNow({ restoreFocus: false });
     await refreshContentStatuses();
     renderLifeMapView(true);
@@ -519,6 +772,356 @@ async function saveQuickMemory(event) {
   } finally {
     setButtonBusy(submit, false);
   }
+}
+
+
+function isMemorySearchOpen() {
+  return Boolean(memorySearchModal && !memorySearchModal.classList.contains("hidden"));
+}
+
+function memorySearchScopeLabel(item) {
+  if (item.time_scope === "year") return `${item.period_key} · 年度记忆`;
+  if (item.time_scope === "month") return `${item.period_key} · 月份记忆`;
+  return `${item.period_key} · 日期记忆`;
+}
+
+function plainTextFromMemoryContent(content = "", format = "plain") {
+  if (!content) return "";
+  if (format !== "html") return content.replace(/\s+/g, " ").trim();
+  const template = document.createElement("template");
+  template.innerHTML = sanitizeRichMemoryHtml(content);
+  return (template.content.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function memorySearchSnippet(item) {
+  const text = plainTextFromMemoryContent(item.content || "", item.content_format || "plain");
+  if (!text) return "暂无正文";
+  return text.length > 150 ? `${text.slice(0, 150)}…` : text;
+}
+
+function renderMemorySearchTagOptions() {
+  if (!memorySearchTagOptions) return;
+  memorySearchTagOptions.replaceChildren();
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("span");
+    empty.className = "memory-search-tag-empty";
+    empty.textContent = "暂无标签，可先在记忆编辑中创建。";
+    memorySearchTagOptions.appendChild(empty);
+    return;
+  }
+  availableMemoryTags.forEach((tag) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "memory-search-tag-chip";
+    button.classList.toggle("is-selected", selectedMemorySearchTagIds.has(tag.id));
+    button.setAttribute("aria-pressed", selectedMemorySearchTagIds.has(tag.id) ? "true" : "false");
+    button.textContent = `#${tag.name}`;
+    button.addEventListener("click", () => {
+      if (selectedMemorySearchTagIds.has(tag.id)) selectedMemorySearchTagIds.delete(tag.id);
+      else selectedMemorySearchTagIds.add(tag.id);
+      renderMemorySearchTagOptions();
+    });
+    memorySearchTagOptions.appendChild(button);
+  });
+}
+
+function clearMemorySearchResults(message = "输入条件后开始搜索") {
+  memorySearchRequestSequence += 1;
+  memorySearchResults?.replaceChildren();
+  if (memorySearchSummary) memorySearchSummary.textContent = message;
+  memorySearchLimitHint?.classList.add("hidden");
+}
+
+function resetMemorySearchFilters() {
+  memorySearchForm?.reset();
+  selectedMemorySearchTagIds.clear();
+  renderMemorySearchTagOptions();
+  clearMemorySearchResults();
+  memorySearchQuery?.focus();
+}
+
+function closeMemorySearchModalNow({ restoreFocus = true } = {}) {
+  if (!isMemorySearchOpen()) return;
+  memorySearchRequestSequence += 1;
+  memorySearchModal.classList.add("hidden");
+  memorySearchModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("memory-search-open");
+  if (restoreFocus && memorySearchReturnFocus instanceof HTMLElement && document.contains(memorySearchReturnFocus)) {
+    memorySearchReturnFocus.focus();
+  }
+  memorySearchReturnFocus = null;
+}
+
+async function openMemorySearchModal() {
+  if (!memorySearchModal || !currentProfile) return;
+  if (isMemoryMapFilterOpen()) closeMemoryMapFilterModalNow({ restoreFocus: false });
+  memorySearchReturnFocus = document.activeElement;
+  memorySearchModal.classList.remove("hidden");
+  memorySearchModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("memory-search-open");
+  try {
+    await loadMemoryTags();
+    renderMemorySearchTagOptions();
+  } catch (error) {
+    showOperationError(error);
+  }
+  requestAnimationFrame(() => memorySearchQuery?.focus());
+}
+
+function focusMemorySearchTarget(memoryId) {
+  requestAnimationFrame(() => {
+    const selector = `[data-content-kind="memory"][data-content-id="${CSS.escape(memoryId)}"]`;
+    const card = document.querySelector(selector);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("search-target-flash");
+    window.setTimeout(() => card.classList.remove("search-target-flash"), 1800);
+  });
+}
+
+async function openMemorySearchResult(item) {
+  closeMemorySearchModalNow({ restoreFocus: false });
+  const opened = await openPeriodDrawer(item.time_scope, item.period_key);
+  if (opened !== false) focusMemorySearchTarget(item.id);
+}
+
+function renderMemorySearchResultsData(data) {
+  memorySearchResults.replaceChildren();
+  const items = data?.items || [];
+  memorySearchSummary.textContent = items.length ? `找到 ${items.length} 条记忆` : "没有找到符合条件的记忆";
+  memorySearchLimitHint.classList.toggle("hidden", !data?.has_more);
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "memory-search-empty";
+    empty.textContent = "可以换一个关键词、减少标签条件，或放宽日期范围。";
+    memorySearchResults.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "memory-search-result-card";
+    button.addEventListener("click", () => openMemorySearchResult(item));
+
+    const top = document.createElement("div");
+    top.className = "memory-search-result-top";
+    const title = document.createElement("strong");
+    title.textContent = item.title || "未命名记忆";
+    const scope = document.createElement("span");
+    scope.textContent = memorySearchScopeLabel(item);
+    top.append(title, scope);
+
+    const snippet = document.createElement("p");
+    snippet.textContent = memorySearchSnippet(item);
+    button.append(top, snippet);
+
+    if (item.tags?.length) {
+      const tags = document.createElement("div");
+      tags.className = "memory-search-result-tags";
+      item.tags.forEach((tag) => {
+        const badge = document.createElement("span");
+        badge.textContent = `#${tag.name}`;
+        tags.appendChild(badge);
+      });
+      button.appendChild(tags);
+    }
+    memorySearchResults.appendChild(button);
+  });
+}
+
+async function runMemorySearch() {
+  if (!memorySearchForm) return;
+  const submit = memorySearchForm.querySelector('button[type="submit"]');
+  if (memorySearchDateFrom.value && memorySearchDateTo.value && memorySearchDateFrom.value > memorySearchDateTo.value) {
+    showToast("开始日期不能晚于结束日期", "error");
+    memorySearchDateFrom.focus();
+    return;
+  }
+  const params = new URLSearchParams();
+  const query = memorySearchQuery.value.trim();
+  if (query) params.set("q", query);
+  if (memorySearchDateFrom.value) params.set("date_from", memorySearchDateFrom.value);
+  if (memorySearchDateTo.value) params.set("date_to", memorySearchDateTo.value);
+  selectedMemorySearchTagIds.forEach((tagId) => params.append("tag_id", tagId));
+  params.set("limit", "100");
+
+  const requestSequence = ++memorySearchRequestSequence;
+  setButtonBusy(submit, true, "搜索中…");
+  memorySearchSummary.textContent = "正在搜索加密记忆……";
+  memorySearchResults.replaceChildren();
+  memorySearchLimitHint.classList.add("hidden");
+  try {
+    const data = await api(`/api/v1/memories/search?${params.toString()}`, {}, true);
+    if (requestSequence !== memorySearchRequestSequence || !isMemorySearchOpen()) return;
+    renderMemorySearchResultsData(data);
+  } catch (error) {
+    if (requestSequence !== memorySearchRequestSequence) return;
+    showOperationError(error);
+    clearMemorySearchResults("搜索失败，请调整条件后重试");
+  } finally {
+    setButtonBusy(submit, false);
+  }
+}
+
+function isMemoryMapFilterOpen() {
+  return Boolean(memoryMapFilterModal && !memoryMapFilterModal.classList.contains("hidden"));
+}
+
+function memoryMapFilterIsActive() {
+  return selectedMemoryMapTagIds.size > 0;
+}
+
+function updateMemoryMapFilterEntryButtons() {
+  const count = selectedMemoryMapTagIds.size;
+  const text = count ? `标签筛选 · ${count}` : "标签筛选";
+  [memoryMapFilterHomeButton, memoryMapFilterFullPageButton].forEach((button) => {
+    if (!button) return;
+    button.textContent = text;
+    button.classList.toggle("is-active", count > 0);
+    button.setAttribute("aria-pressed", count > 0 ? "true" : "false");
+  });
+}
+
+function memoryMapFilterSummaryText() {
+  if (!memoryMapFilterIsActive()) return "当前未启用标签筛选。";
+  const tagNames = availableMemoryTags
+    .filter((tag) => selectedMemoryMapTagIds.has(tag.id))
+    .map((tag) => `#${tag.name}`);
+  const label = tagNames.length ? tagNames.join(" + ") : `${selectedMemoryMapTagIds.size} 个标签`;
+  return `${label} · 命中 ${memoryMapTagMatches.memoryCount} 条记忆，覆盖 ${memoryMapTagMatches.dates.size} 天、${memoryMapTagMatches.months.size} 月、${memoryMapTagMatches.years.size} 年。`;
+}
+
+function updateMemoryMapFilterSummary() {
+  if (memoryMapFilterSummary) memoryMapFilterSummary.textContent = memoryMapFilterSummaryText();
+}
+
+function renderMemoryMapFilterTagOptions() {
+  if (!memoryMapFilterTagOptions) return;
+  memoryMapFilterTagOptions.replaceChildren();
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("p");
+    empty.className = "memory-map-filter-empty";
+    empty.textContent = "还没有标签。可以先在“记一记”或记忆编辑中创建标签。";
+    memoryMapFilterTagOptions.appendChild(empty);
+    return;
+  }
+  availableMemoryTags.forEach((tag) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "memory-map-filter-tag-chip";
+    button.classList.toggle("is-selected", draftMemoryMapTagIds.has(tag.id));
+    button.setAttribute("aria-pressed", draftMemoryMapTagIds.has(tag.id) ? "true" : "false");
+    button.textContent = `#${tag.name}`;
+    button.addEventListener("click", () => {
+      if (draftMemoryMapTagIds.has(tag.id)) draftMemoryMapTagIds.delete(tag.id);
+      else draftMemoryMapTagIds.add(tag.id);
+      renderMemoryMapFilterTagOptions();
+    });
+    memoryMapFilterTagOptions.appendChild(button);
+  });
+}
+
+function setMemoryMapTagMatchData(data = {}) {
+  memoryMapTagMatches = {
+    dates: new Set(data.dates || []),
+    months: new Set(data.months || []),
+    years: new Set(data.years || []),
+    memoryCount: Number(data.memory_count || 0),
+  };
+  memoryMapFilterRevision += 1;
+  lifeGridSignature = "";
+  fullPageGridSignature = "";
+}
+
+function redrawMemoryMapFilterState() {
+  renderLifeMapView(true);
+  if (fullPageLifeOpen) drawFullPageLifeGrid(true);
+}
+
+async function refreshMemoryMapTagMatches({ redraw = true } = {}) {
+  if (!currentProgress || !memoryMapFilterIsActive()) {
+    setMemoryMapTagMatchData();
+    updateMemoryMapFilterEntryButtons();
+    updateMemoryMapFilterSummary();
+    if (redraw) redrawMemoryMapFilterState();
+    return;
+  }
+  const params = new URLSearchParams({
+    start: currentProgress.birth_date,
+    end: currentProgress.target_date,
+  });
+  selectedMemoryMapTagIds.forEach((tagId) => params.append("tag_id", tagId));
+  const requestSequence = ++memoryMapFilterRequestSequence;
+  const data = await api(`/api/v1/memories/tag-map?${params.toString()}`, {}, true);
+  if (requestSequence !== memoryMapFilterRequestSequence) return;
+  setMemoryMapTagMatchData(data);
+  updateMemoryMapFilterEntryButtons();
+  updateMemoryMapFilterSummary();
+  if (redraw) redrawMemoryMapFilterState();
+}
+
+function closeMemoryMapFilterModalNow({ restoreFocus = true } = {}) {
+  if (!memoryMapFilterModal) return;
+  memoryMapFilterModal.classList.add("hidden");
+  memoryMapFilterModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("memory-map-filter-open");
+  draftMemoryMapTagIds.clear();
+  if (restoreFocus && memoryMapFilterReturnFocus instanceof HTMLElement && document.contains(memoryMapFilterReturnFocus)) {
+    memoryMapFilterReturnFocus.focus();
+  }
+  memoryMapFilterReturnFocus = null;
+}
+
+async function openMemoryMapFilterModal() {
+  if (!memoryMapFilterModal || !currentProfile) return;
+  if (isMemorySearchOpen()) closeMemorySearchModalNow({ restoreFocus: false });
+  memoryMapFilterReturnFocus = document.activeElement;
+  draftMemoryMapTagIds.clear();
+  selectedMemoryMapTagIds.forEach((tagId) => draftMemoryMapTagIds.add(tagId));
+  memoryMapFilterModal.classList.remove("hidden");
+  memoryMapFilterModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("memory-map-filter-open");
+  try {
+    await loadMemoryTags();
+    renderMemoryMapFilterTagOptions();
+    updateMemoryMapFilterSummary();
+  } catch (error) {
+    showOperationError(error);
+  }
+}
+
+async function applyMemoryMapTagFilter() {
+  selectedMemoryMapTagIds.clear();
+  draftMemoryMapTagIds.forEach((tagId) => selectedMemoryMapTagIds.add(tagId));
+  try {
+    await refreshMemoryMapTagMatches();
+    if (memoryMapFilterIsActive()) showToast(memoryMapFilterSummaryText(), "success");
+    else showToast("已清除地图标签筛选", "success");
+    closeMemoryMapFilterModalNow();
+  } catch (error) {
+    showOperationError(error);
+  }
+}
+
+async function clearMemoryMapTagFilter() {
+  draftMemoryMapTagIds.clear();
+  selectedMemoryMapTagIds.clear();
+  memoryMapFilterRequestSequence += 1;
+  setMemoryMapTagMatchData();
+  renderMemoryMapFilterTagOptions();
+  updateMemoryMapFilterEntryButtons();
+  updateMemoryMapFilterSummary();
+  redrawMemoryMapFilterState();
+  showToast("已清除地图标签筛选", "success");
+}
+
+function memoryMapScopeMatches(scope, key) {
+  if (!memoryMapFilterIsActive()) return false;
+  if (scope === "day") return memoryMapTagMatches.dates.has(key);
+  if (scope === "month") return memoryMapTagMatches.months.has(key);
+  if (scope === "year") return memoryMapTagMatches.years.has(key);
+  return false;
 }
 
 async function api(path, options = {}, requireAuth = false) {
@@ -549,6 +1152,10 @@ const profileDisplayNameValue = document.getElementById("profileDisplayNameValue
 const profileBirthDateValue = document.getElementById("profileBirthDateValue");
 const editProfileSettingsButton = document.getElementById("editProfileSettings");
 const cancelProfileSettingsButton = document.getElementById("cancelProfileSettings");
+const tagManagementSummary = document.getElementById("tagManagementSummary");
+const tagManagementList = document.getElementById("tagManagementList");
+const tagManagementNewName = document.getElementById("tagManagementNewName");
+const createManagedTagButton = document.getElementById("createManagedTag");
 const changePinForm = document.getElementById("changePinForm");
 const recoveryCredentialForm = document.getElementById("recoveryCredentialForm");
 const customRecoveryFields = document.getElementById("customRecoveryFields");
@@ -631,6 +1238,215 @@ function setProfileSettingsEditMode(editing, { focus = true } = {}) {
       : editProfileSettingsButton;
     target?.focus({ preventScroll: true });
   });
+}
+
+function tagUsageLabel(tag) {
+  const count = Number(tag?.memory_count || 0);
+  return `${count} 条记忆`;
+}
+
+function renderTagManagementEditRow(row, tag) {
+  row.replaceChildren();
+  row.classList.add("is-editing");
+
+  const input = document.createElement("input");
+  input.className = "tag-management-edit-input";
+  input.maxLength = 40;
+  input.value = tag.name;
+  input.setAttribute("aria-label", `重命名标签 ${tag.name}`);
+
+  const meta = document.createElement("span");
+  meta.className = "tag-management-count";
+  meta.textContent = tagUsageLabel(tag);
+
+  const actions = document.createElement("div");
+  actions.className = "tag-management-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "text-button";
+  cancel.textContent = "取消";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary-button tag-management-save-button";
+  save.textContent = "保存";
+  actions.append(cancel, save);
+  row.append(input, meta, actions);
+
+  const cancelEdit = () => renderTagManagement();
+  const saveEdit = async () => {
+    const name = input.value.trim();
+    if (!name) {
+      showToast("请输入标签名称。", "error");
+      input.focus();
+      return;
+    }
+    const duplicate = availableMemoryTags.find(
+      (item) => item.id !== tag.id && memoryTagNameKey(item.name) === memoryTagNameKey(name)
+    );
+    if (duplicate) {
+      showToast("已经存在同名标签。", "error");
+      input.focus();
+      input.select();
+      return;
+    }
+    setButtonBusy(save, true, "保存中…");
+    try {
+      const updated = await api(`/api/v1/tags/${encodeURIComponent(tag.id)}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, color: tag.color || null }),
+      }, true);
+      await loadMemoryTags({ force: true });
+      showToast(`标签已重命名为 #${updated.name}`, "success");
+    } catch (error) {
+      showOperationError(error);
+      setButtonBusy(save, false);
+    }
+  };
+
+  cancel.addEventListener("click", cancelEdit);
+  save.addEventListener("click", saveEdit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEdit();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      saveEdit();
+    }
+  });
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
+}
+
+async function deleteManagedTag(tag) {
+  const count = Number(tag?.memory_count || 0);
+  const confirmed = await askConfirmation({
+    eyebrow: "删除标签",
+    title: `删除 #${tag.name}？`,
+    message: count
+      ? `这个标签当前用于 ${count} 条记忆。删除后记忆正文仍会保留，只移除标签关联。`
+      : "这个标签当前没有关联记忆。删除后无法恢复标签本身。",
+    confirmLabel: "删除标签",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+
+  const affectedMapFilter = selectedMemoryMapTagIds.has(tag.id);
+
+  try {
+    await api(`/api/v1/tags/${encodeURIComponent(tag.id)}`, { method: "DELETE" }, true);
+    selectedMemoryTagIds.quick.delete(tag.id);
+    selectedMemoryTagIds.drawer.delete(tag.id);
+    selectedMemorySearchTagIds.delete(tag.id);
+    selectedMemoryMapTagIds.delete(tag.id);
+    draftMemoryMapTagIds.delete(tag.id);
+    await loadMemoryTags({ force: true });
+    if (affectedMapFilter) await refreshMemoryMapTagMatches();
+    showToast(`标签 #${tag.name} 已删除`, "success");
+  } catch (error) {
+    showOperationError(error);
+  }
+}
+
+function renderTagManagement() {
+  if (!tagManagementList || !tagManagementSummary) return;
+  const totalUsage = availableMemoryTags.reduce(
+    (sum, tag) => sum + Number(tag.memory_count || 0),
+    0,
+  );
+  tagManagementSummary.textContent = `${availableMemoryTags.length} 个标签 · ${totalUsage} 次使用`;
+  tagManagementList.replaceChildren();
+
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("p");
+    empty.className = "tag-management-empty";
+    empty.textContent = "还没有标签，可以在上方新建。";
+    tagManagementList.appendChild(empty);
+    return;
+  }
+
+  availableMemoryTags.forEach((tag) => {
+    const row = document.createElement("div");
+    row.className = "tag-management-row";
+    row.dataset.tagId = tag.id;
+
+    const identity = document.createElement("div");
+    identity.className = "tag-management-identity";
+    const name = document.createElement("strong");
+    name.textContent = `#${tag.name}`;
+    const count = document.createElement("span");
+    count.className = "tag-management-count";
+    count.textContent = tagUsageLabel(tag);
+    identity.append(name, count);
+
+    const actions = document.createElement("div");
+    actions.className = "tag-management-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "text-button";
+    edit.textContent = "重命名";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button danger-text-button";
+    remove.textContent = "删除";
+    edit.addEventListener("click", () => renderTagManagementEditRow(row, tag));
+    remove.addEventListener("click", () => deleteManagedTag(tag));
+    actions.append(edit, remove);
+    row.append(identity, actions);
+    tagManagementList.appendChild(row);
+  });
+}
+
+async function createManagedTag() {
+  const name = String(tagManagementNewName?.value || "").trim();
+  if (!name) {
+    showToast("请输入标签名称。", "error");
+    tagManagementNewName?.focus();
+    return;
+  }
+  const existing = availableMemoryTags.find(
+    (tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name)
+  );
+  if (existing) {
+    showToast(`标签 #${existing.name} 已存在`, "error");
+    tagManagementNewName?.focus();
+    tagManagementNewName?.select();
+    return;
+  }
+
+  setButtonBusy(createManagedTagButton, true, "新建中…");
+  try {
+    const tag = await api("/api/v1/tags", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }, true);
+    if (tagManagementNewName) tagManagementNewName.value = "";
+    await loadMemoryTags({ force: true });
+    showToast(`标签 #${tag.name} 已创建`, "success");
+    tagManagementNewName?.focus();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(createManagedTagButton, false);
+  }
+}
+
+async function loadTagManagement() {
+  if (tagManagementSummary) tagManagementSummary.textContent = "正在读取…";
+  if (tagManagementList) {
+    tagManagementList.innerHTML = '<p class="tag-management-empty">正在读取标签…</p>';
+  }
+  try {
+    await loadMemoryTags({ force: true });
+  } catch (error) {
+    if (tagManagementSummary) tagManagementSummary.textContent = "读取失败";
+    if (tagManagementList) {
+      tagManagementList.innerHTML = '<p class="tag-management-empty">标签读取失败，请稍后重试。</p>';
+    }
+    showOperationError(error);
+  }
 }
 
 function autoBackupFormState() {
@@ -732,7 +1548,7 @@ async function openSettingsModal() {
   settingsModal.classList.remove("hidden");
   settingsModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  await Promise.all([loadAutoBackupPanel(), loadSecuritySummary()]);
+  await Promise.all([loadAutoBackupPanel(), loadSecuritySummary(), loadTagManagement()]);
   requestAnimationFrame(() => {
     const target = profileSettingsEditing
       ? profileSettingsForm?.elements.display_name
@@ -801,12 +1617,25 @@ quickMemoryFullPageButton?.addEventListener("click", openQuickMemoryModal);
 closeQuickMemoryButton?.addEventListener("click", requestCloseQuickMemoryModal);
 cancelQuickMemoryButton?.addEventListener("click", requestCloseQuickMemoryModal);
 quickMemoryForm?.addEventListener("submit", saveQuickMemory);
+document.getElementById("toggleQuickMemoryTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("quick"));
+document.getElementById("createQuickMemoryTag")?.addEventListener("click", () => createAndSelectMemoryTag("quick"));
+document.getElementById("quickMemoryNewTagName")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createAndSelectMemoryTag("quick");
+});
 quickMemoryModal?.addEventListener("click", (event) => {
   if (event.target === quickMemoryModal) requestCloseQuickMemoryModal();
 });
 closeSettingsButton.addEventListener("click", requestCloseSettingsModal);
 editProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(true));
 cancelProfileSettingsButton?.addEventListener("click", () => setProfileSettingsEditMode(false));
+createManagedTagButton?.addEventListener("click", createManagedTag);
+tagManagementNewName?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createManagedTag();
+});
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal) requestCloseSettingsModal();
 });
@@ -1622,6 +2451,16 @@ async function loadHome({ enterFullPage = false } = {}) {
     monthContentStatus = statusResult.months || {};
     yearContentStatus = statusResult.years || {};
     contentStatusRevision += 1;
+    if (memoryMapFilterIsActive()) {
+      await loadMemoryTags(true);
+      const knownTagIds = new Set(availableMemoryTags.map((tag) => tag.id));
+      [...selectedMemoryMapTagIds].forEach((tagId) => {
+        if (!knownTagIds.has(tagId)) selectedMemoryMapTagIds.delete(tagId);
+      });
+      if (memoryMapFilterIsActive()) await refreshMemoryMapTagMatches({ redraw: false });
+      else setMemoryMapTagMatchData();
+    }
+    updateMemoryMapFilterEntryButtons();
     statusBadge.textContent = "加密仓库已解锁";
     document.getElementById("welcomeTitle").textContent = profile.display_name;
     document.getElementById("todayText").textContent = `${progress.today} · ${progress.timezone}`;
@@ -1674,8 +2513,10 @@ async function refreshContentStatuses() {
   monthContentStatus = statusResult.months || {};
   yearContentStatus = statusResult.years || {};
   contentStatusRevision += 1;
+  if (memoryMapFilterIsActive()) await refreshMemoryMapTagMatches({ redraw: false });
   lifeGridSignature = "";
   fullPageGridSignature = "";
+  renderLifeMapView(true);
   if (fullPageLifeOpen) drawFullPageLifeGrid(true);
 }
 
@@ -1974,7 +2815,7 @@ function classifyHierarchyCell(cell, startDate, endDate, selected = false) {
   if (selected) cell.classList.add("is-selected");
 }
 
-function createHierarchyCell({ label, ariaLabel, hoverText, startDate, endDate, state, selected = false, disabled = false, onClick }) {
+function createHierarchyCell({ label, ariaLabel, hoverText, startDate, endDate, state, selected = false, disabled = false, tagFilterMatch = null, onClick }) {
   const cell = document.createElement("button");
   cell.type = "button";
   cell.className = "hierarchy-cell";
@@ -1990,6 +2831,11 @@ function createHierarchyCell({ label, ariaLabel, hoverText, startDate, endDate, 
 
   classifyHierarchyCell(cell, startDate, endDate, selected);
   appendHierarchyMarkers(cell, state);
+  if (memoryMapFilterIsActive()) {
+    cell.classList.toggle("is-tag-filter-match", tagFilterMatch === true);
+    cell.classList.toggle("is-tag-filter-muted", tagFilterMatch !== true);
+    if (tagFilterMatch === true) cell.setAttribute("data-tag-filter-match", "true");
+  }
   if (!disabled) {
     const resolvedHoverText = hoverText || fullAriaLabel;
     cell.addEventListener("mouseenter", (event) => showHierarchyPointerTooltip(event, resolvedHoverText));
@@ -2029,6 +2875,7 @@ function renderYearGrid() {
       endDate: rangeEnd,
       state,
       selected: year === navigatorYear,
+      tagFilterMatch: memoryMapScopeMatches("year", String(year)),
       onClick: () => {
         navigatorYear = year;
         normalizeNavigatorMonth();
@@ -2065,6 +2912,7 @@ function renderMonthGrid() {
         endDate: rangeEnd,
         state,
         selected: year === navigatorYear && month === navigatorMonth,
+        tagFilterMatch: memoryMapScopeMatches("month", periodKey),
         onClick: () => {
           navigatorYear = year;
           navigatorMonth = month;
@@ -2173,7 +3021,7 @@ function drawFullPageLifeGrid(force = false) {
   const rows = Math.ceil(totalDays / columns);
   const cssHeight = Math.ceil(padding * 2 + rows * stride - gap);
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  const signature = [cssWidth, cssHeight, dpr, currentProgress.birth_date, currentProgress.today, currentProgress.target_date, contentStatusRevision, selectedDate].join(":");
+  const signature = [cssWidth, cssHeight, dpr, currentProgress.birth_date, currentProgress.today, currentProgress.target_date, contentStatusRevision, memoryMapFilterRevision, selectedDate].join(":");
 
   if (!force && signature === fullPageGridSignature) return;
   fullPageGridSignature = signature;
@@ -2241,6 +3089,18 @@ function drawFullPageLifeGrid(force = false) {
       ctx.fillStyle = eventColor;
       ctx.fill();
     }
+
+    if (memoryMapFilterIsActive()) {
+      const isTagMatch = memoryMapScopeMatches("day", isoDate);
+      if (!isTagMatch) {
+        ctx.fillStyle = "rgba(250,249,245,.66)";
+        ctx.fillRect(x, y, cellSize, cellSize);
+      } else {
+        ctx.strokeStyle = "#7a5aa6";
+        ctx.lineWidth = Math.max(1.1, cellSize * .14);
+        ctx.strokeRect(x - .5, y - .5, cellSize + 1, cellSize + 1);
+      }
+    }
   }
 
   fullPageLifeCanvas._fullPageGrid = {
@@ -2255,7 +3115,9 @@ function drawFullPageLifeGrid(force = false) {
     cssHeight,
     dpr,
   };
-  fullPageLifeSummary.textContent = `完整人生共 ${totalDays.toLocaleString()} 天，日期连续排列；悬停查看日期，点击打开右侧详情。`;
+  fullPageLifeSummary.textContent = memoryMapFilterIsActive()
+    ? `完整人生共 ${totalDays.toLocaleString()} 天；当前标签筛选命中 ${memoryMapTagMatches.dates.size} 个具体日期，未命中日期已弱化显示。`
+    : `完整人生共 ${totalDays.toLocaleString()} 天，日期连续排列；悬停查看日期，点击打开右侧详情。`;
 }
 
 function resolveFullPageDateFromPointer(event) {
@@ -2393,6 +3255,7 @@ function drawLifeGrid(progress, force = false) {
     progress.today,
     progress.target_age,
     contentStatusRevision,
+    memoryMapFilterRevision,
   ].join(":");
 
   if (!force && signature === lifeGridSignature) return;
@@ -2487,6 +3350,18 @@ function drawLifeGrid(progress, force = false) {
         ctx.arc(x + cellDrawWidth / 2, y + cellHeight / 2, radius, 0, Math.PI * 2);
         ctx.fillStyle = eventColor;
         ctx.fill();
+      }
+
+      if (memoryMapFilterIsActive()) {
+        const isTagMatch = memoryMapScopeMatches("day", dateKey);
+        if (!isTagMatch) {
+          ctx.fillStyle = "rgba(250,249,245,.66)";
+          ctx.fillRect(x, y, cellDrawWidth, cellHeight);
+        } else {
+          ctx.strokeStyle = "#7a5aa6";
+          ctx.lineWidth = Math.max(0.72, Math.min(1.08, cellWidth * .38));
+          ctx.strokeRect(x - .08, y - .08, cellDrawWidth + .16, cellHeight + .16);
+        }
       }
     }
     hitMap.push({ age, start, days, y, rowHeight });
@@ -2757,6 +3632,7 @@ function contentFormValue(kind) {
   return {
     title: form.querySelector('[name="title"]')?.value || "",
     content,
+    ...(kind === "memory" ? { tagIds: [...selectedMemoryTagIds.drawer].sort() } : {}),
   };
 }
 
@@ -2839,9 +3715,10 @@ function updateContentSectionVisibility(kind) {
 function resetContentForm(kind, hide = true) {
   const config = contentFormConfigurations[kind];
   const submit = config.form.querySelector('button[type="submit"]');
-  const cancel = config.form.querySelector('button[type="button"]');
+  const cancel = config.form.querySelector('.event-form-actions button[type="button"]');
   if (kind === "memory") destroyMemoryRichEditor(memoryRichEditorIds.drawer);
   config.form.reset();
+  if (kind === "memory") resetMemoryTagSelector("drawer");
   config.form.classList.toggle("hidden", hide);
   config.form.classList.remove("is-editing");
   delete config.form.dataset.editId;
@@ -3169,6 +4046,7 @@ function drawerKeyboardNavigationBlocked(event) {
   if (!settingsModal.classList.contains("hidden")) return true;
   if (!resetPinModal.classList.contains("hidden")) return true;
   if (isQuickMemoryOpen()) return true;
+  if (isMemoryMapFilterOpen()) return true;
   if (openContentMenu) return true;
   if (hasUnsavedContentChanges() || hasOpenContentForm()) return true;
   const active = document.activeElement;
@@ -3476,12 +4354,18 @@ async function startContentEdit(kind, item) {
   config.form.classList.add("is-editing");
   config.form.querySelector('[name="title"]').value = item.title || "";
   if (kind === "memory") {
+    try {
+      await loadMemoryTags();
+    } catch (error) {
+      showOperationError(error);
+    }
+    setMemoryTagSelection("drawer", item.tags || []);
     initMemoryRichEditor(memoryRichEditorIds.drawer, contentToEditableMemoryHtml(item));
   } else {
     config.form.querySelector('[name="content"]').value = item.content || "";
   }
   config.form.querySelector('button[type="submit"]').textContent = "保存修改";
-  config.form.querySelector('button[type="button"]').textContent = "取消编辑";
+  config.form.querySelector('.event-form-actions button[type="button"]').textContent = "取消编辑";
   config.toggleButton.textContent = "取消编辑";
   updateContentSectionVisibility(kind);
   requestAnimationFrame(() => captureContentFormSnapshot(kind));
@@ -3583,6 +4467,8 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
   items.forEach((item) => {
     const article = document.createElement("article");
     article.className = `content-card ${cardClass}`.trim();
+    article.dataset.contentKind = kind;
+    article.dataset.contentId = item.id;
 
     const header = document.createElement("div");
     header.className = "content-card-header";
@@ -3679,6 +4565,8 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
       prepareMemoryCardCollapse(article, memoryBody, collapseButton);
     }
 
+    if (kind === "memory") appendMemoryTagBadges(article, item.tags || []);
+
     const meta = document.createElement("small");
     const metaParts = [`创建于 ${formatDateTime(item.created_at)}`];
     if (item.revision > 1) {
@@ -3757,7 +4645,15 @@ async function toggleContentForm(kind, forceOpen = null) {
   resetAllContentForms();
   config.form.classList.remove("hidden");
   config.toggleButton.textContent = config.openLabel;
-  if (kind === "memory") initMemoryRichEditor(memoryRichEditorIds.drawer, "");
+  if (kind === "memory") {
+    resetMemoryTagSelector("drawer");
+    try {
+      await loadMemoryTags();
+    } catch (error) {
+      showOperationError(error);
+    }
+    initMemoryRichEditor(memoryRichEditorIds.drawer, "");
+  }
   updateContentSectionVisibility(kind);
   requestAnimationFrame(() => captureContentFormSnapshot(kind));
   config.form.querySelector('[name="title"]').focus();
@@ -3775,10 +4671,41 @@ function togglePlanForm(forceOpen = null) {
   return toggleContentForm("plan", forceOpen);
 }
 
+memoryMapFilterHomeButton?.addEventListener("click", openMemoryMapFilterModal);
+memoryMapFilterFullPageButton?.addEventListener("click", openMemoryMapFilterModal);
+closeMemoryMapFilterButton?.addEventListener("click", () => closeMemoryMapFilterModalNow());
+clearMemoryMapFilterButton?.addEventListener("click", clearMemoryMapTagFilter);
+memoryMapFilterModal?.addEventListener("click", (event) => {
+  if (event.target === memoryMapFilterModal) closeMemoryMapFilterModalNow();
+});
+memoryMapFilterForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await applyMemoryMapTagFilter();
+});
+
+memorySearchHomeButton?.addEventListener("click", openMemorySearchModal);
+memorySearchFullPageButton?.addEventListener("click", openMemorySearchModal);
+closeMemorySearchButton?.addEventListener("click", () => closeMemorySearchModalNow());
+resetMemorySearchButton?.addEventListener("click", resetMemorySearchFilters);
+memorySearchModal?.addEventListener("click", (event) => {
+  if (event.target === memorySearchModal) closeMemorySearchModalNow();
+});
+memorySearchForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runMemorySearch();
+});
+
 toggleEventFormButton.addEventListener("click", () => toggleEventForm());
 document.getElementById("cancelEventForm").addEventListener("click", () => toggleContentForm("event", false));
 toggleMemoryFormButton.addEventListener("click", () => toggleMemoryForm());
 document.getElementById("cancelMemoryForm").addEventListener("click", () => toggleContentForm("memory", false));
+document.getElementById("toggleMemoryTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("drawer"));
+document.getElementById("createMemoryTag")?.addEventListener("click", () => createAndSelectMemoryTag("drawer"));
+document.getElementById("memoryNewTagName")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createAndSelectMemoryTag("drawer");
+});
 togglePlanFormButton.addEventListener("click", () => togglePlanForm());
 document.getElementById("cancelPlanForm").addEventListener("click", () => toggleContentForm("plan", false));
 trashButton.addEventListener("click", openTrashDrawer);
@@ -3795,6 +4722,21 @@ document.addEventListener("click", (event) => {
   if (!actionContainer?.contains(event.target)) closeOpenContentMenu();
 });
 document.addEventListener("keydown", async (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !event.altKey && !event.shiftKey) {
+    if (
+      !views.home.classList.contains("hidden") && currentProfile &&
+      !isQuickMemoryOpen() && !isMemorySearchOpen() && !isMemoryMapFilterOpen() &&
+      confirmModal.classList.contains("hidden") &&
+      settingsModal.classList.contains("hidden") &&
+      resetPinModal.classList.contains("hidden") &&
+      recoveryModal.classList.contains("hidden") &&
+      dateDrawer.classList.contains("hidden")
+    ) {
+      event.preventDefault();
+      await openMemorySearchModal();
+      return;
+    }
+  }
   if (await handleDrawerOpenShortcut(event)) return;
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     if (await handleDrawerKeyboardNavigation(event)) return;
@@ -3810,6 +4752,14 @@ document.addEventListener("keydown", async (event) => {
   }
   if (!resetPinModal.classList.contains("hidden")) {
     closeResetPinModal();
+    return;
+  }
+  if (isMemoryMapFilterOpen()) {
+    closeMemoryMapFilterModalNow();
+    return;
+  }
+  if (isMemorySearchOpen()) {
+    closeMemorySearchModalNow();
     return;
   }
   if (isQuickMemoryOpen()) {
@@ -3866,10 +4816,13 @@ async function submitScopedContent(kind) {
           content: formValue.content || "",
           ...(kind === "memory" ? { content_format: "html" } : {}),
         };
-    await api(editId ? `${config.endpoint}/${encodeURIComponent(editId)}` : config.endpoint, {
+    const savedItem = await api(editId ? `${config.endpoint}/${encodeURIComponent(editId)}` : config.endpoint, {
       method: editId ? "PUT" : "POST",
       body: JSON.stringify(requestBody),
     }, true);
+    if (kind === "memory") {
+      await syncMemoryTags(savedItem.id, selectedMemoryTagIds.drawer);
+    }
     await refreshContentStatuses();
     renderLifeMapView(true);
     resetAllContentForms();

@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.5"' in javascript
+    assert 'const frontendBuildVersion = "0.0.6"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -283,7 +283,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.5"' in javascript
+    assert 'const frontendBuildVersion = "0.0.6"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -445,7 +445,7 @@ def test_settings_groups_are_visually_separated_and_profile_starts_read_only() -
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     stylesheet = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert html.count('class="settings-group ') == 3
+    assert html.count('class="settings-group ') == 4
     assert 'id="profileSettingsGroupTitle">个人档案</h3>' in html
     assert 'id="securitySettingsGroupTitle">安全设置</h3>' in html
     assert 'id="backupSettingsGroupTitle">备份与迁移</h3>' in html
@@ -599,3 +599,60 @@ def test_memory_rich_text_editor_ui_is_wired() -> None:
     assert 'memory-rich-content' in javascript
     assert 'v0.0.5.4.2 TinyMCE memory rich text' in stylesheet
     assert '.memory-rich-content {' in stylesheet
+
+
+def test_memory_map_tag_filter_controls_and_highlight_hooks_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "memoryMapFilterHomeButton",
+        "memoryMapFilterFullPageButton",
+        "memoryMapFilterModal",
+        "memoryMapFilterForm",
+        "memoryMapFilterTagOptions",
+        "memoryMapFilterSummary",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert 'async function refreshMemoryMapTagMatches' in javascript
+    assert '/api/v1/memories/tag-map?' in javascript
+    assert 'memoryMapScopeMatches("day", dateKey)' in javascript
+    assert 'memoryMapScopeMatches("month", periodKey)' in javascript
+    assert 'memoryMapScopeMatches("year", String(year))' in javascript
+    assert '.hierarchy-cell.is-tag-filter-muted' in css
+    assert '.hierarchy-cell.is-tag-filter-match' in css
+
+
+def test_memory_map_filter_event_binding_uses_defined_handler():
+    app_js = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert "async function openMemoryMapFilterModal()" in app_js
+    assert 'addEventListener("click", openMemoryMapFilterModal)' in app_js
+    assert "openMemoryMapTagFilterModal" not in app_js
+
+
+def test_tag_management_settings_ui_and_handlers_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "tagSettingsGroupTitle",
+        "tagManagementSummary",
+        "tagManagementNewName",
+        "createManagedTag",
+        "tagManagementList",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert 'async function createManagedTag()' in javascript
+    assert 'function renderTagManagement()' in javascript
+    assert 'function renderTagManagementEditRow(row, tag)' in javascript
+    assert 'async function deleteManagedTag(tag)' in javascript
+    assert 'method: "PUT"' in javascript
+    assert 'method: "DELETE"' in javascript
+    assert '.tag-management-list {' in css
+    assert '.tag-management-row {' in css
+    assert 'const frontendBuildVersion = "0.0.6";' in javascript
+    assert '/assets/app.js?v=0.0.6' in html
