@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.6"' in javascript
+    assert 'const frontendBuildVersion = "0.0.7"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -83,13 +83,18 @@ def test_period_drawer_supports_year_month_and_day_content() -> None:
 def test_view_tab_order_is_life_month_year() -> None:
     html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
-    assert '<h2 id="lifeMapViewTitle">太阳每天都是新的</h2>' in html
-    assert 'data-life-view="life" aria-selected="true">日</button>' in html
+    assert '<h2 id="lifeMapViewTitle">月视图</h2>' in html
+    assert 'data-life-view="life" aria-selected="false">日</button>' in html
+    assert 'data-life-view="month" aria-selected="true">月</button>' in html
 
     life_pos = html.index('data-life-view="life"')
     month_pos = html.index('data-life-view="month"')
     year_pos = html.index('data-life-view="year"')
     assert life_pos < month_pos < year_pos
+
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert 'let activeLifeMapView = "month";' in javascript
+    assert 'activeLifeMapView = "month";' in javascript
 
 
 def test_locator_buttons_are_removed_and_legend_shares_description_row() -> None:
@@ -283,7 +288,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.6"' in javascript
+    assert 'const frontendBuildVersion = "0.0.7"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -360,7 +365,7 @@ def test_home_uses_completed_day_count_consistently() -> None:
     assert 'lifeDayMetric.textContent = progress.life.elapsed_days.toLocaleString();' in javascript
     assert 'lifeDayMetric.textContent = progress.life_day_number.toLocaleString();' not in javascript
     assert 'lifeMapViewTitle.textContent = "太阳每天都是新的";' in javascript
-    assert '<h2 id="lifeMapViewTitle">太阳每天都是新的</h2>' in html
+    assert '<h2 id="lifeMapViewTitle">月视图</h2>' in html
 
 
 def test_home_hero_copy_and_life_ring_percentage_are_centered():
@@ -617,12 +622,14 @@ def test_memory_map_tag_filter_controls_and_highlight_hooks_are_present() -> Non
         assert f'id="{element_id}"' in html
 
     assert 'async function refreshMemoryMapTagMatches' in javascript
-    assert '/api/v1/memories/tag-map?' in javascript
+    assert '/api/v1/content/tag-map?' in javascript
     assert 'memoryMapScopeMatches("day", dateKey)' in javascript
     assert 'memoryMapScopeMatches("month", periodKey)' in javascript
     assert 'memoryMapScopeMatches("year", String(year))' in javascript
     assert '.hierarchy-cell.is-tag-filter-muted' in css
     assert '.hierarchy-cell.is-tag-filter-match' in css
+    assert '事件、记忆或计划所在时间范围' in html
+    assert 'memoryMapTagMatches.contentCount' in javascript
 
 
 def test_memory_map_filter_event_binding_uses_defined_handler():
@@ -654,5 +661,273 @@ def test_tag_management_settings_ui_and_handlers_are_present() -> None:
     assert 'method: "DELETE"' in javascript
     assert '.tag-management-list {' in css
     assert '.tag-management-row {' in css
-    assert 'const frontendBuildVersion = "0.0.6";' in javascript
-    assert '/assets/app.js?v=0.0.6' in html
+    assert 'const frontendBuildVersion = "0.0.7";' in javascript
+    assert '/assets/app.js?v=0.0.7' in html
+
+
+def test_unified_content_center_ui_and_handlers_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "contentCenterHomeButton",
+        "contentCenterFullPageButton",
+        "contentCenterModal",
+        "contentCenterForm",
+        "contentCenterQuery",
+        "contentCenterDateFrom",
+        "contentCenterDateTo",
+        "contentCenterSort",
+        "contentCenterTagOptions",
+        "contentCenterResults",
+        "contentCenterSummary",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert "async function openContentCenterModal()" in javascript
+    assert "async function runContentCenterBrowse()" in javascript
+    assert "/api/v1/content/search?" in javascript
+    assert "selectedContentCenterTagIds.forEach" in javascript
+    assert "function renderContentCenterTagOptions()" in javascript
+    assert "focusContentCenterTarget(item.kind, item.id)" in javascript
+    assert 'addEventListener("click", openContentCenterModal)' in javascript
+    assert ".content-center-card {" in css
+    assert ".content-center-result-card {" in css
+    assert ".content-center-tag-chip {" in css
+
+
+def test_unified_search_ui_and_handlers_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<h2 id="memorySearchTitle">统一搜索</h2>' in html
+    for value in ("event", "memory", "plan"):
+        assert f'name="search_kind" value="{value}" checked' in html
+    assert "function selectedMemorySearchKinds()" in javascript
+    assert "/api/v1/content/search?" in javascript
+    assert "focusMemorySearchTarget(item.kind, item.id)" in javascript
+    assert "memory-search-kind-badge" in javascript
+    assert ".memory-search-kind-options {" in css
+    assert ".memory-search-kind-badge.is-event" in css
+
+
+def test_event_and_plan_forms_share_unified_tag_controls() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    for element_id in (
+        "toggleEventTagPicker",
+        "eventSelectedTags",
+        "eventTagPicker",
+        "eventTagOptions",
+        "eventNewTagName",
+        "createEventTag",
+        "togglePlanTagPicker",
+        "planSelectedTags",
+        "planTagPicker",
+        "planTagOptions",
+        "planNewTagName",
+        "createPlanTag",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert 'event: new Set()' in javascript
+    assert 'plan: new Set()' in javascript
+    assert 'function tagModeForKind(kind)' in javascript
+    assert 'async function syncContentTags(kind, contentId, selectedIds)' in javascript
+    assert '/api/v1/content/${encodeURIComponent(kind)}/${encodeURIComponent(contentId)}/tags' in javascript
+    assert 'if (item.tags?.length) {' in javascript
+
+
+def test_content_center_quick_tag_organizer_is_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="contentCenterTitle">浏览事件、记忆与计划</h2>' in html
+    assert "async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags)" in javascript
+    assert "function closeContentCenterQuickTagEditor" in javascript
+    assert 'tagButton.textContent = "整理标签"' in javascript
+    assert 'method: "PUT"' in javascript
+    assert 'body: JSON.stringify({ tag_ids: [...draftIds] })' in javascript
+    assert ".content-center-quick-tag-editor {" in css
+    assert ".content-center-quick-tag-chip {" in css
+    assert ".content-center-result-main {" in css
+
+
+def test_content_center_quick_tag_hotfix_and_drawer_return_are_present() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'save.textContent = "保存标签"' in javascript
+    assert 'save.disabled = true' in javascript
+    assert 'function suspendContentCenterForDrawer(trigger = null)' in javascript
+    assert 'function resumeContentCenterAfterDrawer()' in javascript
+    assert 'contentCenterResults.scrollTop = resumeState.scrollTop || 0' in javascript
+    assert 'resumeContentCenterAfterDrawer();' in javascript
+    assert 'top.append(titleLead, topActions);' in javascript
+    assert 'main.append(snippet);' in javascript
+    assert 'card.append(top, main, readonlyTags);' in javascript
+    assert '.content-center-quick-tag-heading-actions {' in css
+    assert 'padding: 0 12px 10px;' in css
+
+
+def test_content_center_results_keep_card_height_and_scroll_internally():
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    assert ".content-center-results {" in css
+    assert "flex: 1 1 auto;" in css
+    assert "overflow-y: auto;" in css
+    assert "grid-auto-rows: max-content;" in css
+    assert "align-content: start;" in css
+    assert ".content-center-results > .content-center-result-card" in css
+
+
+def test_content_center_bulk_tag_organizer_is_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "contentCenterBatchToolbar",
+        "contentCenterSelectAll",
+        "contentCenterSelectedCount",
+        "contentCenterBulkTags",
+        "contentCenterClearSelection",
+        "contentCenterBatchTagEditor",
+        "contentCenterBatchTagOptions",
+        "contentCenterApplyBatchTags",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert "const selectedContentCenterItems = new Map();" in javascript
+    assert "async function openContentCenterBatchTagEditor()" in javascript
+    assert "async function applyContentCenterBatchTags()" in javascript
+    assert 'api("/api/v1/content/bulk/tags"' in javascript
+    assert 'operation === "add"' in javascript
+    assert 'data-content-center-select-key' in javascript
+    assert ".content-center-batch-toolbar {" in css
+    assert ".content-center-batch-tag-editor {" in css
+
+
+def test_content_center_prioritizes_result_viewport_space() -> None:
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "/* LifeGraph v0.0.7.7.1：内容中心空间利用优化 */" in css
+    assert "height: min(96vh, 940px);" in css
+    assert 'grid-template-areas:' in css
+    assert '"quick"' in css
+    assert '"filters"' in css
+    assert '"tags"' in css
+    assert "@media (max-height: 760px) and (min-width: 721px)" in css
+    assert ".content-center-hint {\n    display: none;" in css
+
+
+
+def test_content_center_quick_filter_row_keeps_kind_switches_beside_keyword() -> None:
+    index = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    quick_row_start = index.index('<div class="content-center-quick-row">')
+    quick_row_end = index.index('</div>\n          <div class="content-center-filter-grid">', quick_row_start)
+    quick_row = index[quick_row_start:quick_row_end]
+
+    assert 'id="contentCenterQuery"' in quick_row
+    assert 'class="content-center-kinds"' in quick_row
+    assert 'value="event"' in quick_row
+    assert 'value="memory"' in quick_row
+    assert 'value="plan"' in quick_row
+    assert 'id="resetContentCenter"' not in quick_row
+    assert '.content-center-quick-row {' in css
+    assert '.content-center-kind-options {\n  flex-wrap: nowrap;' in css
+
+
+def test_content_center_filter_labels_sit_before_controls_on_desktop() -> None:
+    index = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for label in ("快速过滤", "日期", "-", "排序"):
+        assert f'<span class="content-center-field-label">{label}</span>' in index
+
+    assert 'class="content-center-hint"' not in index
+
+    assert 'class="content-center-keyword content-center-inline-field"' in index
+    assert index.count('class="content-center-inline-field"') >= 3
+    assert "/* LifeGraph v0.0.7.7.3：内容中心筛选标签改为控件前置 */" in css
+    assert ".content-center-inline-field {\n  display: flex;" in css
+    assert ".content-center-field-label {" in css
+    assert "white-space: nowrap;" in css
+
+
+def test_content_center_batch_toolbar_sits_below_scrollable_results() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    results_pos = html.index('id="contentCenterResults"')
+    editor_pos = html.index('id="contentCenterBatchTagEditor"')
+    toolbar_pos = html.index('id="contentCenterBatchToolbar"')
+
+    assert results_pos < editor_pos < toolbar_pos
+    assert "/* LifeGraph v0.0.7.7.5：内容中心批量工具栏移至结果区底部 */" in css
+    assert ".content-center-results-section > .content-center-batch-toolbar {" in css
+    assert "margin: 0;" in css
+
+
+def test_content_center_header_divider_and_batch_mode_entry() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "border-bottom: 1px solid rgba(49, 92, 77, .12);" in css
+    assert 'id="contentCenterBatchModeToggle"' in html
+    assert '>批量整理</button>' in html
+    assert 'id="contentCenterBatchToolbar" class="content-center-batch-toolbar hidden"' in html
+    assert "let contentCenterBatchMode = false;" in javascript
+    assert "function setContentCenterBatchMode(enabled" in javascript
+    assert 'contentCenterBatchModeToggle?.addEventListener("click", toggleContentCenterBatchMode);' in javascript
+    assert 'contentCenterBatchModeToggle.textContent = contentCenterBatchMode ? "退出批量" : "批量整理";' in javascript
+    assert "/* LifeGraph v0.0.7.7.7：内容中心批量整理按需进入 */" in css
+    assert ".content-center-results-heading {\n  justify-content: flex-start;\n  text-align: left;" in css
+    assert ".content-center-results-heading .content-center-batch-mode-toggle {\n  margin-left: auto;" in css
+    assert ".content-center-modal:not(.is-batch-mode) .content-center-result-select {\n  display: none;" in css
+
+
+
+def test_content_center_row_actions_move_into_title_line() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'titleLead.append(selectLabel, titleButton);' in javascript
+    assert 'topActions.append(tagButton, scope);' in javascript
+    assert 'top.append(titleLead, topActions);' in javascript
+    assert 'card.append(top, main, readonlyTags);' in javascript
+    assert 'openHint.textContent = "点击上方内容打开时间详情"' not in javascript
+    assert 'rowActions.append(actionLead, tagButton);' not in javascript
+    assert "/* LifeGraph v0.0.7.7.8：内容卡片标题行整合单条整理与批量选择 */" in css
+    assert ".content-center-result-top-actions {" in css
+    assert ".content-center-modal.is-batch-mode .content-center-quick-tag-toggle {\n  display: none;" in css
+    assert ".content-center-result-actions,\n.content-center-result-action-lead,\n.content-center-open-hint {\n  display: none !important;" in css
+
+
+
+def test_content_center_tag_filters_share_row_with_stacked_actions() -> None:
+    index = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    row_start = index.index('<div class="content-center-tags-row">')
+    row_end = index.index('</div>\n        </form>', row_start)
+    row = index[row_start:row_end]
+
+    assert 'class="content-center-tags"' in row
+    assert 'id="contentCenterTagOptions"' in row
+    assert 'class="content-center-actions content-center-tags-actions"' in row
+    assert 'id="resetContentCenter"' in row
+    assert '>应用整理</button>' in row
+    assert row.index('id="contentCenterTagOptions"') < row.index('id="resetContentCenter"')
+    assert "/* LifeGraph v0.0.7.7.9：标签筛选与整理操作左右分栏 */" in css
+    assert "grid-template-columns: minmax(0, 1fr) 156px;" in css
+    assert ".content-center-tags-actions {\n  display: flex;\n  flex-direction: column;" in css
+    assert "/* LifeGraph v0.0.7.7.10：固定标签筛选与操作按钮同一网格行 */" in css
+    assert ".content-center-tags-row > .content-center-tags-actions {\n  grid-area: auto;\n  grid-column: 2;\n  grid-row: 1;" in css

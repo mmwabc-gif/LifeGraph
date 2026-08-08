@@ -79,7 +79,7 @@ class VaultManager:
         self,
         data_dir: Path,
         session_ttl_seconds: int = 1800,
-        app_version: str = "0.0.6",
+        app_version: str = "0.0.7",
     ) -> None:
         self.data_dir = data_dir
         self.metadata_path = data_dir / "vault.json"
@@ -1333,6 +1333,52 @@ class VaultManager:
     def list_memories_for_date(self, memory_date: str) -> list[dict[str, Any]]:
         return self.list_memories_for_period("day", memory_date)
 
+    def browse_content(
+        self,
+        *,
+        kinds: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "date_desc",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.browse_content(
+            master_key,
+            profile_id=profile["id"],
+            kinds=kinds,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+            limit=limit,
+        )
+
+    def search_content(
+        self,
+        *,
+        query: str = "",
+        kinds: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "date_desc",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        return self.database.search_content(
+            master_key,
+            profile_id=profile["id"],
+            query=query,
+            kinds=kinds,
+            tag_ids=tag_ids,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+            limit=limit,
+        )
+
     def search_memories(
         self,
         *,
@@ -1352,6 +1398,24 @@ class VaultManager:
             date_from=date_from,
             date_to=date_to,
             limit=limit,
+        )
+
+    def get_content_tag_map(
+        self,
+        *,
+        tag_ids: list[str],
+        start_date: str,
+        end_date: str,
+        kinds: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        return self.database.get_content_tag_map(
+            profile_id=profile["id"],
+            tag_ids=tag_ids,
+            start_date=start_date,
+            end_date=end_date,
+            kinds=kinds,
         )
 
     def get_memory_tag_map(
@@ -1454,32 +1518,89 @@ class VaultManager:
             except DatabaseContentNotFound as exc:
                 raise ContentNotFound(str(exc)) from exc
 
-    def attach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+    def attach_content_tag(self, *, kind: str, content_id: str, tag_id: str) -> None:
         profile = self.get_profile()
         now = datetime.now(dt_timezone.utc).isoformat()
-        attached = self.database.attach_memory_tag(
-            profile_id=profile["id"], memory_id=memory_id, tag_id=tag_id, timestamp=now
+        attached = self.database.attach_content_tag(
+            profile_id=profile["id"],
+            kind=kind,
+            content_id=content_id,
+            tag_id=tag_id,
+            timestamp=now,
         )
         if not attached:
-            raise ContentNotFound("记忆或标签不存在")
+            raise ContentNotFound("内容或标签不存在")
 
-    def detach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+    def detach_content_tag(self, *, kind: str, content_id: str, tag_id: str) -> None:
         profile = self.get_profile()
-        self.database.detach_memory_tag(
-            profile_id=profile["id"], memory_id=memory_id, tag_id=tag_id
+        self.database.detach_content_tag(
+            profile_id=profile["id"], kind=kind, content_id=content_id, tag_id=tag_id
         )
 
-    def list_memory_tags(self, *, memory_id: str) -> list[dict[str, Any]]:
+    def replace_content_tags(
+        self, *, kind: str, content_id: str, tag_ids: list[str]
+    ) -> list[dict[str, Any]]:
         profile = self.get_profile()
-        return self.database.list_memory_tags(profile_id=profile["id"], memory_id=memory_id)
+        now = datetime.now(dt_timezone.utc).isoformat()
+        try:
+            return self.database.replace_content_tags(
+                profile_id=profile["id"],
+                kind=kind,
+                content_id=content_id,
+                tag_ids=tag_ids,
+                timestamp=now,
+            )
+        except DatabaseContentNotFound as exc:
+            raise ContentNotFound(str(exc)) from exc
+
+    def bulk_update_content_tags(
+        self,
+        *,
+        items: list[dict[str, str]],
+        tag_ids: list[str],
+        operation: str,
+    ) -> list[dict[str, Any]]:
+        profile = self.get_profile()
+        now = datetime.now(dt_timezone.utc).isoformat()
+        try:
+            return self.database.bulk_update_content_tags(
+                profile_id=profile["id"],
+                items=items,
+                tag_ids=tag_ids,
+                operation=operation,
+                timestamp=now,
+            )
+        except DatabaseContentNotFound as exc:
+            raise ContentNotFound(str(exc)) from exc
+
+    def list_content_tags(self, *, kind: str, content_id: str) -> list[dict[str, Any]]:
+        profile = self.get_profile()
+        return self.database.list_content_tags(
+            profile_id=profile["id"], kind=kind, content_id=content_id
+        )
+
+    def list_content_tags_for_items(
+        self, *, kind: str, content_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        profile = self.get_profile()
+        return self.database.list_content_tags_for_items(
+            profile_id=profile["id"], kind=kind, content_ids=content_ids
+        )
+
+    # Memory-specific wrappers are retained for the v0.0.6 search/filter APIs.
+    def attach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+        self.attach_content_tag(kind="memory", content_id=memory_id, tag_id=tag_id)
+
+    def detach_memory_tag(self, *, memory_id: str, tag_id: str) -> None:
+        self.detach_content_tag(kind="memory", content_id=memory_id, tag_id=tag_id)
+
+    def list_memory_tags(self, *, memory_id: str) -> list[dict[str, Any]]:
+        return self.list_content_tags(kind="memory", content_id=memory_id)
 
     def list_memory_tags_for_memories(
         self, *, memory_ids: list[str]
     ) -> dict[str, list[dict[str, Any]]]:
-        profile = self.get_profile()
-        return self.database.list_memory_tags_for_memories(
-            profile_id=profile["id"], memory_ids=memory_ids
-        )
+        return self.list_content_tags_for_items(kind="memory", content_ids=memory_ids)
 
     def create_plan(
         self,

@@ -10,6 +10,8 @@ from app.models import (
     AutoBackupHistoryClearRequest,
     AutoBackupPolicyUpdateRequest,
     ContentDeleteRequest,
+    ContentBulkTagRequest,
+    ContentTagSelectionRequest,
     ContentUpdateRequest,
     EventCreateRequest,
     InitializeRequest,
@@ -121,12 +123,13 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
     description = resolve_period(profile_value, scope, period_key)
     events = vault.list_events_for_period(scope, period_key)
     memories = vault.list_memories_for_period(scope, period_key)
-    memory_tags = vault.list_memory_tags_for_memories(
-        memory_ids=[memory["id"] for memory in memories]
-    )
-    for memory in memories:
-        memory["tags"] = memory_tags.get(memory["id"], [])
     plans = vault.list_plans_for_period(scope, period_key)
+    for kind, items in (("event", events), ("memory", memories), ("plan", plans)):
+        tags_by_content = vault.list_content_tags_for_items(
+            kind=kind, content_ids=[item["id"] for item in items]
+        )
+        for item in items:
+            item["tags"] = tags_by_content.get(item["id"], [])
     description.update(
         {
             "content_state": {
@@ -617,6 +620,66 @@ def resolve_payload_target(vault: VaultManager, scope: str, period_key: str) -> 
     return resolve_period(profile_value, scope, period_key)
 
 
+@router.get("/content/browse", dependencies=[Depends(require_session)])
+def browse_content(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    kind: Annotated[list[Literal["event", "memory", "plan"]] | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    sort: Annotated[Literal["date_desc", "date_asc", "updated_desc"], Query()] = "date_desc",
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_BROWSE_RANGE", "message": "开始日期不能晚于结束日期"},
+        )
+    try:
+        return envelope(
+            vault.browse_content(
+                kinds=kind or ["event", "memory", "plan"],
+                date_from=date_from.isoformat() if date_from else None,
+                date_to=date_to.isoformat() if date_to else None,
+                sort=sort,
+                limit=limit,
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/content/search", dependencies=[Depends(require_session)])
+def search_content(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    q: Annotated[str, Query(max_length=120)] = "",
+    kind: Annotated[list[Literal["event", "memory", "plan"]] | None, Query()] = None,
+    tag_id: Annotated[list[str] | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    sort: Annotated[Literal["date_desc", "date_asc", "updated_desc"], Query()] = "date_desc",
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_SEARCH_RANGE", "message": "开始日期不能晚于结束日期"},
+        )
+    try:
+        return envelope(
+            vault.search_content(
+                query=q,
+                kinds=kind or ["event", "memory", "plan"],
+                tag_ids=tag_id or [],
+                date_from=date_from.isoformat() if date_from else None,
+                date_to=date_to.isoformat() if date_to else None,
+                sort=sort,
+                limit=limit,
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
 @router.post("/events", dependencies=[Depends(require_session)])
 def create_event(
     payload: EventCreateRequest,
@@ -745,6 +808,42 @@ def delete_memory(
 
 
 
+@router.get("/content/tag-map", dependencies=[Depends(require_session)])
+def content_tag_map(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    start: Annotated[date, Query()],
+    end: Annotated[date, Query()],
+    tag_id: Annotated[list[str] | None, Query()] = None,
+    kind: Annotated[list[Literal["event", "memory", "plan"]] | None, Query()] = None,
+) -> dict:
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_DATE_RANGE", "message": "开始日期不能晚于结束日期"},
+        )
+    if (end - start).days > 55_000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "DATE_RANGE_TOO_LARGE", "message": "日期范围过大"},
+        )
+    if not tag_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "TAG_FILTER_REQUIRED", "message": "请至少选择一个标签"},
+        )
+    try:
+        return envelope(
+            vault.get_content_tag_map(
+                tag_ids=tag_id,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                kinds=kind or ["event", "memory", "plan"],
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
 @router.get("/memories/search", dependencies=[Depends(require_session)])
 def search_memories(
     vault: Annotated[VaultManager, Depends(get_vault)],
@@ -855,6 +954,85 @@ def delete_tag(
         return envelope(vault.delete_tag(tag_id=tag_id))
     except ContentNotFound as exc:
         raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/content/bulk/tags", dependencies=[Depends(require_session)])
+def bulk_update_content_tags(
+    payload: ContentBulkTagRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        items = [item.model_dump() for item in payload.items]
+        return envelope(
+            vault.bulk_update_content_tags(
+                items=items, tag_ids=payload.tag_ids, operation=payload.operation
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/content/{kind}/{content_id}/tags", dependencies=[Depends(require_session)])
+def list_content_tags(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.list_content_tags(kind=kind, content_id=content_id))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/content/{kind}/{content_id}/tags", dependencies=[Depends(require_session)])
+def replace_content_tags(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    payload: ContentTagSelectionRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.replace_content_tags(
+                kind=kind, content_id=content_id, tag_ids=payload.tag_ids
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/content/{kind}/{content_id}/tags/{tag_id}", dependencies=[Depends(require_session)])
+def attach_content_tag(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    tag_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.attach_content_tag(kind=kind, content_id=content_id, tag_id=tag_id)
+        return envelope({"attached": True})
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/content/{kind}/{content_id}/tags/{tag_id}", dependencies=[Depends(require_session)])
+def detach_content_tag(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    tag_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        vault.detach_content_tag(kind=kind, content_id=content_id, tag_id=tag_id)
+        return envelope({"detached": True})
     except VaultError as exc:
         raise locked_error(exc) from exc
 

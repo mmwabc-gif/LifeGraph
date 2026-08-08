@@ -261,3 +261,71 @@ class TagUpdateRequest(BaseModel):
         if not value:
             raise ValueError("标签名称不能为空")
         return value
+
+
+class ContentTagSelectionRequest(BaseModel):
+    tag_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("tag_ids")
+    @classmethod
+    def clean_tag_ids(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            tag_id = str(raw or "").strip()
+            if not tag_id or tag_id in seen:
+                continue
+            seen.add(tag_id)
+            cleaned.append(tag_id)
+        if len(cleaned) > 100:
+            raise ValueError("一次最多设置 100 个标签")
+        return cleaned
+
+
+class ContentBulkTagTarget(BaseModel):
+    kind: Literal["event", "memory", "plan"]
+    content_id: str = Field(min_length=1, max_length=120)
+
+    @field_validator("content_id")
+    @classmethod
+    def clean_content_id(cls, value: str) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise ValueError("内容 ID 不能为空")
+        return cleaned
+
+
+class ContentBulkTagRequest(BaseModel):
+    operation: Literal["add", "remove"]
+    items: list[ContentBulkTagTarget] = Field(min_length=1, max_length=100)
+    tag_ids: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator("items")
+    @classmethod
+    def clean_items(cls, value: list[ContentBulkTagTarget]) -> list[ContentBulkTagTarget]:
+        cleaned: list[ContentBulkTagTarget] = []
+        seen: set[tuple[str, str]] = set()
+        for item in value:
+            key = (item.kind, item.content_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(item)
+        if not cleaned:
+            raise ValueError("请至少选择一条内容")
+        return cleaned
+
+    @field_validator("tag_ids")
+    @classmethod
+    def clean_bulk_tag_ids(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            tag_id = str(raw or "").strip()
+            if not tag_id or tag_id in seen:
+                continue
+            seen.add(tag_id)
+            cleaned.append(tag_id)
+        if not cleaned:
+            raise ValueError("请至少选择一个标签")
+        return cleaned

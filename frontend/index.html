@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.6</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.6">
+  <title>人生图谱 · v0.0.7</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.7">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.6</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.7</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.6</span>
+          <span class="build-badge">v0.0.7</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -116,22 +116,23 @@
           <div class="life-map-toolbar-main">
             <div class="life-map-heading">
               <p class="eyebrow">人生图谱视图</p>
-              <h2 id="lifeMapViewTitle">太阳每天都是新的</h2>
+              <h2 id="lifeMapViewTitle">月视图</h2>
             </div>
             <div class="life-map-view-controls">
               <button id="quickMemoryHomeButton" class="quick-memory-entry-button" type="button">记一记</button>
+              <button id="contentCenterHomeButton" class="content-center-entry-button" type="button">内容中心</button>
               <button id="memorySearchHomeButton" class="memory-search-entry-button" type="button">搜索</button>
               <button id="memoryMapFilterHomeButton" class="memory-map-filter-entry-button" type="button">标签筛选</button>
               <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
-                <button class="life-view-tab is-active" type="button" role="tab" data-life-view="life" aria-selected="true">日</button>
-                <button class="life-view-tab" type="button" role="tab" data-life-view="month" aria-selected="false">月</button>
+                <button class="life-view-tab" type="button" role="tab" data-life-view="life" aria-selected="false">日</button>
+                <button class="life-view-tab is-active" type="button" role="tab" data-life-view="month" aria-selected="true">月</button>
                 <button class="life-view-tab" type="button" role="tab" data-life-view="year" aria-selected="false">年</button>
               </div>
               <button id="openFullPageView" class="life-fullpage-button" type="button">全页视图</button>
             </div>
           </div>
           <div class="life-map-description-row">
-            <p id="lifeMapViewSubtitle" class="subtle">保留完整人生日期格，并可切换查看整个目标人生范围的月、年图谱。</p>
+            <p id="lifeMapViewSubtitle" class="subtle">点击月份在右侧展开整月内容和月内日期。</p>
             <div class="legend life-map-legend-items" aria-label="图谱状态图例">
               <span><i class="past-dot"></i>已走过</span>
               <span><i class="today-dot"></i>今天</span>
@@ -145,7 +146,7 @@
         </div>
 
 
-        <div id="lifeMapLifeView" class="life-map-view" role="tabpanel">
+        <div id="lifeMapLifeView" class="life-map-view hidden" role="tabpanel">
           <div class="canvas-wrap">
             <canvas id="lifeCanvas" aria-label="100 年生命日期格" tabindex="0"></canvas>
           </div>
@@ -161,7 +162,7 @@
           <p class="subtle hierarchy-help">整个目标人生范围内的年份同时显示；年格最大，悬停查看年份，点击在右侧展开年度内容和 12 个月。</p>
         </div>
 
-        <div id="lifeMapMonthView" class="life-map-view hidden" role="tabpanel" aria-label="月视图">
+        <div id="lifeMapMonthView" class="life-map-view" role="tabpanel" aria-label="月视图">
           <div class="hierarchy-stage-wrap">
             <div class="hierarchy-stage">
               <div id="monthGrid" class="hierarchy-grid month-grid"></div>
@@ -172,9 +173,9 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.6</p>
-        <h2>搜索、筛选与标签</h2>
-        <p>为记忆建立标签，通过关键词、日期范围和标签快速查找，并在整个人生图谱中高亮相关时间。</p>
+        <p class="eyebrow">v0.0.7</p>
+        <h2>统一内容整理与浏览</h2>
+        <p>内容中心支持关键词、标签、类型、日期与排序组合整理事件、记忆和计划。</p>
         <div class="button-row">
           <a class="secondary-button" href="/api/docs" target="_blank" rel="noreferrer">查看 API 文档</a>
           <button id="refreshButton" class="ghost-button" type="button">刷新进度</button>
@@ -200,6 +201,7 @@
             <span><i class="plan-ring"></i>有计划</span>
           </div>
           <button id="quickMemoryFullPageButton" class="quick-memory-entry-button full-page-control-button" type="button">记一记</button>
+          <button id="contentCenterFullPageButton" class="content-center-entry-button full-page-control-button" type="button">内容中心</button>
           <button id="memorySearchFullPageButton" class="memory-search-entry-button full-page-control-button" type="button">搜索</button>
           <button id="memoryMapFilterFullPageButton" class="memory-map-filter-entry-button full-page-control-button" type="button">标签筛选</button>
           <button id="fullPageLocateToday" class="ghost-button full-page-control-button" type="button">定位今天</button>
@@ -290,6 +292,20 @@
             <label>事件内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录这件事的经过、意义或结果（可留空）"></textarea>
             </label>
+            <div class="memory-tag-field" data-tag-selector="event">
+              <div class="memory-tag-field-header">
+                <span>标签</span>
+                <button id="toggleEventTagPicker" class="memory-tag-add-button" type="button" aria-expanded="false">＋ 添加标签</button>
+              </div>
+              <div id="eventSelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
+              <div id="eventTagPicker" class="memory-tag-picker hidden">
+                <div id="eventTagOptions" class="memory-tag-option-list"></div>
+                <div class="memory-tag-create-row">
+                  <input id="eventNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
+                  <button id="createEventTag" class="ghost-button" type="button">新建并选中</button>
+                </div>
+              </div>
+            </div>
             <div class="event-form-actions">
               <button id="cancelEventForm" class="ghost-button" type="button">取消</button>
               <button class="primary-button" type="submit">保存事件</button>
@@ -341,11 +357,25 @@
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.6">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.7">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
             </label>
+            <div class="memory-tag-field" data-tag-selector="plan">
+              <div class="memory-tag-field-header">
+                <span>标签</span>
+                <button id="togglePlanTagPicker" class="memory-tag-add-button" type="button" aria-expanded="false">＋ 添加标签</button>
+              </div>
+              <div id="planSelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
+              <div id="planTagPicker" class="memory-tag-picker hidden">
+                <div id="planTagOptions" class="memory-tag-option-list"></div>
+                <div class="memory-tag-create-row">
+                  <input id="planNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
+                  <button id="createPlanTag" class="ghost-button" type="button">新建并选中</button>
+                </div>
+              </div>
+            </div>
             <div class="event-form-actions">
               <button id="cancelPlanForm" class="ghost-button" type="button">取消</button>
               <button class="primary-button" type="submit">保存计划</button>
@@ -686,13 +716,111 @@
 
 
 
+    <div id="contentCenterModal" class="modal content-center-modal hidden" role="dialog" aria-modal="true" aria-labelledby="contentCenterTitle" aria-hidden="true">
+      <div class="modal-card content-center-card">
+        <header class="content-center-header">
+          <div>
+            <p class="eyebrow">统一内容中心</p>
+            <h2 id="contentCenterTitle">浏览事件、记忆与计划</h2>
+          </div>
+          <button id="closeContentCenter" class="icon-button" type="button" aria-label="关闭内容中心">×</button>
+        </header>
+        <form id="contentCenterForm" class="content-center-form">
+          <div class="content-center-quick-row">
+            <label class="content-center-keyword content-center-inline-field">
+              <span class="content-center-field-label">快速过滤</span>
+              <input id="contentCenterQuery" name="q" maxlength="120" autocomplete="off" placeholder="按标题或正文过滤，例如：旅行、发布、毕业">
+            </label>
+            <fieldset class="content-center-kinds">
+              <legend>内容类型</legend>
+              <div class="content-center-kind-options">
+                <label><input type="checkbox" name="kind" value="event" checked> <span>事件</span></label>
+                <label><input type="checkbox" name="kind" value="memory" checked> <span>记忆</span></label>
+                <label><input type="checkbox" name="kind" value="plan" checked> <span>计划</span></label>
+              </div>
+            </fieldset>
+          </div>
+          <div class="content-center-filter-grid">
+            <label class="content-center-inline-field">
+              <span class="content-center-field-label">日期</span>
+              <input id="contentCenterDateFrom" name="date_from" type="date">
+            </label>
+            <label class="content-center-inline-field">
+              <span class="content-center-field-label">-</span>
+              <input id="contentCenterDateTo" name="date_to" type="date">
+            </label>
+            <label class="content-center-inline-field">
+              <span class="content-center-field-label">排序</span>
+              <select id="contentCenterSort" name="sort">
+                <option value="date_desc">时间从新到旧</option>
+                <option value="date_asc">时间从旧到新</option>
+                <option value="updated_desc">最近更新优先</option>
+              </select>
+            </label>
+          </div>
+          <div class="content-center-tags-row">
+            <fieldset class="content-center-tags">
+              <legend>标签筛选 <span>（多选时需同时包含）</span></legend>
+              <div id="contentCenterTagOptions" class="content-center-tag-options"></div>
+            </fieldset>
+            <div class="content-center-actions content-center-tags-actions">
+              <button id="resetContentCenter" class="ghost-button" type="button">重置</button>
+              <button class="primary-button" type="submit">应用整理</button>
+            </div>
+          </div>
+        </form>
+        <section class="content-center-results-section" aria-live="polite">
+          <div class="content-center-results-heading">
+            <strong id="contentCenterSummary">正在准备内容中心……</strong>
+            <span id="contentCenterLimitHint" class="hidden">仅显示前 100 条</span>
+            <button id="contentCenterBatchModeToggle" class="ghost-button content-center-batch-mode-toggle" type="button" aria-pressed="false">批量整理</button>
+          </div>
+          <div id="contentCenterResults" class="content-center-results"></div>
+          <section id="contentCenterBatchTagEditor" class="content-center-batch-tag-editor hidden" aria-label="批量整理标签">
+            <div class="content-center-batch-tag-heading">
+              <div>
+                <strong>批量整理标签</strong>
+                <span id="contentCenterBatchTargetSummary">已选 0 条内容</span>
+              </div>
+              <button id="contentCenterCloseBatchTags" class="icon-button" type="button" aria-label="关闭批量标签整理">×</button>
+            </div>
+            <div class="content-center-batch-operation" role="radiogroup" aria-label="批量标签操作">
+              <label><input type="radio" name="content_center_batch_operation" value="add" checked> 添加标签</label>
+              <label><input type="radio" name="content_center_batch_operation" value="remove"> 移除标签</label>
+            </div>
+            <div id="contentCenterBatchTagOptions" class="content-center-batch-tag-options"></div>
+            <div id="contentCenterBatchCreateRow" class="content-center-batch-create">
+              <input id="contentCenterBatchNewTagName" type="text" maxlength="40" autocomplete="off" placeholder="新标签名称">
+              <button id="contentCenterBatchCreateTag" class="ghost-button" type="button">新建并选中</button>
+            </div>
+            <div class="content-center-batch-footer">
+              <span>一次最多处理当前结果中的 100 条内容</span>
+              <button id="contentCenterApplyBatchTags" class="primary-button" type="button">应用到已选内容</button>
+            </div>
+          </section>
+          <div id="contentCenterBatchToolbar" class="content-center-batch-toolbar hidden">
+            <label class="content-center-select-all">
+              <input id="contentCenterSelectAll" type="checkbox">
+              <span>全选当前结果</span>
+            </label>
+            <strong id="contentCenterSelectedCount">已选 0 条</strong>
+            <div class="content-center-batch-actions">
+              <button id="contentCenterBulkTags" class="ghost-button" type="button" disabled>批量整理标签</button>
+              <button id="contentCenterClearSelection" class="ghost-button" type="button" disabled>清空选择</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+
     <div id="memoryMapFilterModal" class="modal memory-map-filter-modal hidden" role="dialog" aria-modal="true" aria-labelledby="memoryMapFilterTitle" aria-hidden="true">
       <div class="modal-card memory-map-filter-card">
         <header class="memory-map-filter-header">
           <div>
             <p class="eyebrow">地图筛选</p>
             <h2 id="memoryMapFilterTitle">按标签突出人生日期</h2>
-            <p class="memory-map-filter-hint">选择一个或多个标签；多选时只突出同时包含全部所选标签的记忆所在时间范围。</p>
+            <p class="memory-map-filter-hint">选择一个或多个标签；多选时只突出同时包含全部所选标签的事件、记忆或计划所在时间范围。</p>
           </div>
           <button id="closeMemoryMapFilter" class="icon-button" type="button" aria-label="关闭地图标签筛选">×</button>
         </header>
@@ -714,15 +842,23 @@
         <header class="memory-search-header">
           <div>
             <p class="eyebrow">搜索 · 筛选</p>
-            <h2 id="memorySearchTitle">搜索记忆</h2>
-            <p class="memory-search-hint">关键词会在解锁后检索加密记忆的标题与正文，搜索内容不会写入数据库。</p>
+            <h2 id="memorySearchTitle">统一搜索</h2>
+            <p class="memory-search-hint">关键词会在解锁后检索事件、记忆与计划的加密标题和正文，搜索内容不会写入数据库。</p>
           </div>
-          <button id="closeMemorySearch" class="icon-button" type="button" aria-label="关闭记忆搜索">×</button>
+          <button id="closeMemorySearch" class="icon-button" type="button" aria-label="关闭统一搜索">×</button>
         </header>
         <form id="memorySearchForm" class="memory-search-form">
           <label class="memory-search-keyword">关键词
-            <input id="memorySearchQuery" name="q" maxlength="120" autocomplete="off" placeholder="搜索标题或正文，例如：毕业、旅行、第一次">
+            <input id="memorySearchQuery" name="q" maxlength="120" autocomplete="off" placeholder="搜索标题或正文，例如：毕业、旅行、发布">
           </label>
+          <fieldset class="memory-search-kinds">
+            <legend>内容类型</legend>
+            <div class="memory-search-kind-options">
+              <label><input type="checkbox" name="search_kind" value="event" checked>事件</label>
+              <label><input type="checkbox" name="search_kind" value="memory" checked>记忆</label>
+              <label><input type="checkbox" name="search_kind" value="plan" checked>计划</label>
+            </div>
+          </fieldset>
           <div class="memory-search-date-grid">
             <label>开始日期
               <input id="memorySearchDateFrom" name="date_from" type="date">
@@ -737,7 +873,7 @@
           </fieldset>
           <div class="memory-search-actions">
             <button id="resetMemorySearch" class="ghost-button" type="button">重置</button>
-            <button class="primary-button" type="submit">搜索记忆</button>
+            <button class="primary-button" type="submit">开始搜索</button>
           </div>
         </form>
         <section class="memory-search-results-section" aria-live="polite">
@@ -801,6 +937,6 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/static/tinymce/tinymce.min.js"></script>
-  <script src="/assets/app.js?v=0.0.6"></script>
+  <script src="/assets/app.js?v=0.0.7"></script>
 </body>
 </html>

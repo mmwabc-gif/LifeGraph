@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.6";
+const frontendBuildVersion = "0.0.7";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -29,7 +29,7 @@ let selectedDate = null;
 let selectedScope = null;
 let selectedPeriodKey = null;
 let drawerRequestSequence = 0;
-let activeLifeMapView = "life";
+let activeLifeMapView = "month";
 let navigatorYear = null;
 let navigatorMonth = null;
 let navigatorDate = null;
@@ -62,6 +62,43 @@ const fullPageDateTooltipTitle = document.getElementById("fullPageDateTooltipTit
 const fullPageDateTooltipMeta = document.getElementById("fullPageDateTooltipMeta");
 const quickMemoryHomeButton = document.getElementById("quickMemoryHomeButton");
 const quickMemoryFullPageButton = document.getElementById("quickMemoryFullPageButton");
+const contentCenterHomeButton = document.getElementById("contentCenterHomeButton");
+const contentCenterFullPageButton = document.getElementById("contentCenterFullPageButton");
+const contentCenterModal = document.getElementById("contentCenterModal");
+const contentCenterForm = document.getElementById("contentCenterForm");
+const contentCenterQuery = document.getElementById("contentCenterQuery");
+const contentCenterDateFrom = document.getElementById("contentCenterDateFrom");
+const contentCenterDateTo = document.getElementById("contentCenterDateTo");
+const contentCenterSort = document.getElementById("contentCenterSort");
+const contentCenterTagOptions = document.getElementById("contentCenterTagOptions");
+const contentCenterResults = document.getElementById("contentCenterResults");
+const contentCenterSummary = document.getElementById("contentCenterSummary");
+const contentCenterLimitHint = document.getElementById("contentCenterLimitHint");
+const contentCenterBatchModeToggle = document.getElementById("contentCenterBatchModeToggle");
+const closeContentCenterButton = document.getElementById("closeContentCenter");
+const resetContentCenterButton = document.getElementById("resetContentCenter");
+const contentCenterBatchToolbar = document.getElementById("contentCenterBatchToolbar");
+const contentCenterSelectAll = document.getElementById("contentCenterSelectAll");
+const contentCenterSelectedCount = document.getElementById("contentCenterSelectedCount");
+const contentCenterBulkTagsButton = document.getElementById("contentCenterBulkTags");
+const contentCenterClearSelectionButton = document.getElementById("contentCenterClearSelection");
+const contentCenterBatchTagEditor = document.getElementById("contentCenterBatchTagEditor");
+const contentCenterBatchTargetSummary = document.getElementById("contentCenterBatchTargetSummary");
+const contentCenterBatchTagOptions = document.getElementById("contentCenterBatchTagOptions");
+const contentCenterBatchCreateRow = document.getElementById("contentCenterBatchCreateRow");
+const contentCenterBatchNewTagName = document.getElementById("contentCenterBatchNewTagName");
+const contentCenterBatchCreateTagButton = document.getElementById("contentCenterBatchCreateTag");
+const contentCenterApplyBatchTagsButton = document.getElementById("contentCenterApplyBatchTags");
+const contentCenterCloseBatchTagsButton = document.getElementById("contentCenterCloseBatchTags");
+let contentCenterReturnFocus = null;
+let contentCenterRequestSequence = 0;
+let contentCenterDrawerResumeState = null;
+let activeContentCenterTagEditor = null;
+let contentCenterCurrentItems = [];
+let contentCenterBatchMode = false;
+const selectedContentCenterTagIds = new Set();
+const selectedContentCenterItems = new Map();
+const selectedContentCenterBatchTagIds = new Set();
 const memorySearchHomeButton = document.getElementById("memorySearchHomeButton");
 const memorySearchFullPageButton = document.getElementById("memorySearchFullPageButton");
 const memorySearchModal = document.getElementById("memorySearchModal");
@@ -91,7 +128,7 @@ let memoryMapFilterRequestSequence = 0;
 let memoryMapFilterRevision = 0;
 const selectedMemoryMapTagIds = new Set();
 const draftMemoryMapTagIds = new Set();
-let memoryMapTagMatches = { dates: new Set(), months: new Set(), years: new Set(), memoryCount: 0 };
+let memoryMapTagMatches = { dates: new Set(), months: new Set(), years: new Set(), contentCount: 0, counts: { event: 0, memory: 0, plan: 0 } };
 const quickMemoryModal = document.getElementById("quickMemoryModal");
 const quickMemoryForm = document.getElementById("quickMemoryForm");
 const quickMemoryDateText = document.getElementById("quickMemoryDateText");
@@ -103,7 +140,9 @@ let availableMemoryTags = [];
 let memoryTagsLoadPromise = null;
 const selectedMemoryTagIds = {
   quick: new Set(),
+  event: new Set(),
   drawer: new Set(),
+  plan: new Set(),
 };
 
 updateMemoryMapFilterEntryButtons();
@@ -439,15 +478,25 @@ function contentToEditableMemoryHtml(item) {
 }
 
 function memoryTagElements(mode) {
-  const isQuick = mode === "quick";
+  const ids = {
+    quick: ["quickMemorySelectedTags", "quickMemoryTagPicker", "quickMemoryTagOptions", "toggleQuickMemoryTagPicker", "quickMemoryNewTagName", "createQuickMemoryTag"],
+    event: ["eventSelectedTags", "eventTagPicker", "eventTagOptions", "toggleEventTagPicker", "eventNewTagName", "createEventTag"],
+    drawer: ["memorySelectedTags", "memoryTagPicker", "memoryTagOptions", "toggleMemoryTagPicker", "memoryNewTagName", "createMemoryTag"],
+    plan: ["planSelectedTags", "planTagPicker", "planTagOptions", "togglePlanTagPicker", "planNewTagName", "createPlanTag"],
+  }[mode];
+  if (!ids) return {};
   return {
-    selected: document.getElementById(isQuick ? "quickMemorySelectedTags" : "memorySelectedTags"),
-    picker: document.getElementById(isQuick ? "quickMemoryTagPicker" : "memoryTagPicker"),
-    options: document.getElementById(isQuick ? "quickMemoryTagOptions" : "memoryTagOptions"),
-    toggle: document.getElementById(isQuick ? "toggleQuickMemoryTagPicker" : "toggleMemoryTagPicker"),
-    input: document.getElementById(isQuick ? "quickMemoryNewTagName" : "memoryNewTagName"),
-    create: document.getElementById(isQuick ? "createQuickMemoryTag" : "createMemoryTag"),
+    selected: document.getElementById(ids[0]),
+    picker: document.getElementById(ids[1]),
+    options: document.getElementById(ids[2]),
+    toggle: document.getElementById(ids[3]),
+    input: document.getElementById(ids[4]),
+    create: document.getElementById(ids[5]),
   };
+}
+
+function tagModeForKind(kind) {
+  return kind === "memory" ? "drawer" : kind;
 }
 
 function memoryTagNameKey(value) {
@@ -524,7 +573,10 @@ function pruneUnavailableMemoryTagSelections() {
   const validIds = new Set(availableMemoryTags.map((tag) => tag.id));
   for (const selectedIds of [
     selectedMemoryTagIds.quick,
+    selectedMemoryTagIds.event,
     selectedMemoryTagIds.drawer,
+    selectedMemoryTagIds.plan,
+    selectedContentCenterTagIds,
     selectedMemorySearchTagIds,
     selectedMemoryMapTagIds,
     draftMemoryMapTagIds,
@@ -538,7 +590,10 @@ function pruneUnavailableMemoryTagSelections() {
 function renderAllMemoryTagControls() {
   pruneUnavailableMemoryTagSelections();
   renderMemoryTagSelector("quick");
+  renderMemoryTagSelector("event");
   renderMemoryTagSelector("drawer");
+  renderMemoryTagSelector("plan");
+  renderContentCenterTagOptions();
   renderMemorySearchTagOptions();
   renderMemoryMapFilterTagOptions();
   updateMemoryMapFilterEntryButtons();
@@ -609,23 +664,24 @@ async function createAndSelectMemoryTag(mode) {
   }
 }
 
-async function syncMemoryTags(memoryId, selectedIds) {
-  const currentTags = await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags`, {}, true);
+async function syncContentTags(kind, contentId, selectedIds) {
+  const base = `/api/v1/content/${encodeURIComponent(kind)}/${encodeURIComponent(contentId)}/tags`;
+  const currentTags = await api(base, {}, true);
   const currentIds = new Set((currentTags || []).map((tag) => tag.id));
   const desiredIds = new Set(selectedIds || []);
   const toAttach = [...desiredIds].filter((tagId) => !currentIds.has(tagId));
   const toDetach = [...currentIds].filter((tagId) => !desiredIds.has(tagId));
 
   for (const tagId of toAttach) {
-    await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags/${encodeURIComponent(tagId)}`, {
-      method: "POST",
-    }, true);
+    await api(`${base}/${encodeURIComponent(tagId)}`, { method: "POST" }, true);
   }
   for (const tagId of toDetach) {
-    await api(`/api/v1/memories/${encodeURIComponent(memoryId)}/tags/${encodeURIComponent(tagId)}`, {
-      method: "DELETE",
-    }, true);
+    await api(`${base}/${encodeURIComponent(tagId)}`, { method: "DELETE" }, true);
   }
+}
+
+async function syncMemoryTags(memoryId, selectedIds) {
+  return syncContentTags("memory", memoryId, selectedIds);
 }
 
 function appendMemoryTagBadges(article, tags = []) {
@@ -775,14 +831,701 @@ async function saveQuickMemory(event) {
 }
 
 
+
+function isContentCenterOpen() {
+  return Boolean(contentCenterModal && !contentCenterModal.classList.contains("hidden"));
+}
+
+function contentCenterKindLabel(kind) {
+  return { event: "事件", memory: "记忆", plan: "计划" }[kind] || "内容";
+}
+
+function contentCenterScopeLabel(item) {
+  const key = item.period_key || item.anchor_date || "—";
+  if (item.time_scope === "year") return `${key} · 年度`;
+  if (item.time_scope === "month") return `${key} · 月份`;
+  return `${key} · 日期`;
+}
+
+function contentCenterSnippet(item) {
+  const text = plainTextFromMemoryContent(item.content || "", item.content_format || "plain");
+  if (!text) return "暂无正文";
+  return text.length > 150 ? `${text.slice(0, 150)}…` : text;
+}
+
+function selectedContentCenterKinds() {
+  if (!contentCenterForm) return [];
+  return Array.from(contentCenterForm.querySelectorAll('input[name="kind"]:checked')).map((input) => input.value);
+}
+
+function renderContentCenterTagOptions() {
+  if (!contentCenterTagOptions) return;
+  contentCenterTagOptions.replaceChildren();
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("span");
+    empty.className = "content-center-tag-empty";
+    empty.textContent = "暂无标签，可先在任一内容编辑中创建。";
+    contentCenterTagOptions.appendChild(empty);
+    return;
+  }
+  availableMemoryTags.forEach((tag) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "content-center-tag-chip";
+    const selected = selectedContentCenterTagIds.has(tag.id);
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.textContent = `#${tag.name}`;
+    button.addEventListener("click", () => {
+      if (selectedContentCenterTagIds.has(tag.id)) selectedContentCenterTagIds.delete(tag.id);
+      else selectedContentCenterTagIds.add(tag.id);
+      renderContentCenterTagOptions();
+    });
+    contentCenterTagOptions.appendChild(button);
+  });
+}
+
+function contentCenterItemKey(item) {
+  return `${item.kind}:${item.id}`;
+}
+
+function setContentCenterBatchMode(enabled, { clearSelection = true, focusToggle = false } = {}) {
+  contentCenterBatchMode = Boolean(enabled);
+  contentCenterModal?.classList.toggle("is-batch-mode", contentCenterBatchMode);
+  contentCenterBatchToolbar?.classList.toggle("hidden", !contentCenterBatchMode);
+  if (contentCenterBatchModeToggle) {
+    contentCenterBatchModeToggle.textContent = contentCenterBatchMode ? "退出批量" : "批量整理";
+    contentCenterBatchModeToggle.setAttribute("aria-pressed", contentCenterBatchMode ? "true" : "false");
+  }
+  if (!contentCenterBatchMode && clearSelection) {
+    clearContentCenterBatchSelection();
+  } else {
+    updateContentCenterSelectionControls();
+  }
+  if (focusToggle) contentCenterBatchModeToggle?.focus();
+}
+
+function toggleContentCenterBatchMode() {
+  setContentCenterBatchMode(!contentCenterBatchMode, { clearSelection: true, focusToggle: false });
+}
+
+function selectedContentCenterBatchOperation() {
+  return document.querySelector('input[name="content_center_batch_operation"]:checked')?.value || "add";
+}
+
+function closeContentCenterBatchTagEditor({ restoreFocus = false } = {}) {
+  if (!contentCenterBatchTagEditor) return;
+  contentCenterBatchTagEditor.classList.add("hidden");
+  selectedContentCenterBatchTagIds.clear();
+  if (contentCenterBatchNewTagName) contentCenterBatchNewTagName.value = "";
+  if (contentCenterBatchCreateRow) contentCenterBatchCreateRow.classList.remove("hidden");
+  const addRadio = document.querySelector('input[name="content_center_batch_operation"][value="add"]');
+  if (addRadio) addRadio.checked = true;
+  if (restoreFocus && contentCenterBulkTagsButton && !contentCenterBulkTagsButton.disabled) {
+    contentCenterBulkTagsButton.focus();
+  }
+}
+
+function updateContentCenterSelectionControls() {
+  const selectedCount = selectedContentCenterItems.size;
+  const currentKeys = contentCenterCurrentItems.map(contentCenterItemKey);
+  const selectedCurrentCount = currentKeys.filter((key) => selectedContentCenterItems.has(key)).length;
+  if (contentCenterSelectedCount) contentCenterSelectedCount.textContent = `已选 ${selectedCount} 条`;
+  if (contentCenterBulkTagsButton) contentCenterBulkTagsButton.disabled = selectedCount === 0;
+  if (contentCenterClearSelectionButton) contentCenterClearSelectionButton.disabled = selectedCount === 0;
+  if (contentCenterSelectAll) {
+    contentCenterSelectAll.disabled = currentKeys.length === 0;
+    contentCenterSelectAll.checked = currentKeys.length > 0 && selectedCurrentCount === currentKeys.length;
+    contentCenterSelectAll.indeterminate = selectedCurrentCount > 0 && selectedCurrentCount < currentKeys.length;
+  }
+  if (contentCenterBatchTargetSummary) {
+    contentCenterBatchTargetSummary.textContent = `已选 ${selectedCount} 条内容`;
+  }
+  document.querySelectorAll('[data-content-center-select-key]').forEach((checkbox) => {
+    checkbox.checked = selectedContentCenterItems.has(checkbox.dataset.contentCenterSelectKey || "");
+  });
+  if (selectedCount === 0) closeContentCenterBatchTagEditor();
+}
+
+function setContentCenterItemSelected(item, selected) {
+  const key = contentCenterItemKey(item);
+  if (selected) selectedContentCenterItems.set(key, { kind: item.kind, id: item.id });
+  else selectedContentCenterItems.delete(key);
+  updateContentCenterSelectionControls();
+}
+
+function clearContentCenterBatchSelection() {
+  selectedContentCenterItems.clear();
+  closeContentCenterBatchTagEditor();
+  updateContentCenterSelectionControls();
+}
+
+function renderContentCenterBatchTagOptions() {
+  if (!contentCenterBatchTagOptions) return;
+  contentCenterBatchTagOptions.replaceChildren();
+  if (!availableMemoryTags.length) {
+    const empty = document.createElement("span");
+    empty.className = "content-center-batch-tag-empty";
+    empty.textContent = "暂无标签，可先新建一个标签。";
+    contentCenterBatchTagOptions.appendChild(empty);
+    return;
+  }
+  availableMemoryTags.forEach((tag) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "content-center-batch-tag-chip";
+    const selected = selectedContentCenterBatchTagIds.has(tag.id);
+    button.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.textContent = `#${tag.name}`;
+    button.addEventListener("click", () => {
+      if (selectedContentCenterBatchTagIds.has(tag.id)) selectedContentCenterBatchTagIds.delete(tag.id);
+      else selectedContentCenterBatchTagIds.add(tag.id);
+      renderContentCenterBatchTagOptions();
+    });
+    contentCenterBatchTagOptions.appendChild(button);
+  });
+}
+
+async function openContentCenterBatchTagEditor() {
+  if (!selectedContentCenterItems.size || !contentCenterBatchTagEditor) return;
+  closeContentCenterQuickTagEditor({ restoreFocus: false });
+  try {
+    await loadMemoryTags();
+  } catch (error) {
+    showOperationError(error);
+    return;
+  }
+  selectedContentCenterBatchTagIds.clear();
+  if (contentCenterBatchNewTagName) contentCenterBatchNewTagName.value = "";
+  const addRadio = document.querySelector('input[name="content_center_batch_operation"][value="add"]');
+  if (addRadio) addRadio.checked = true;
+  contentCenterBatchCreateRow?.classList.remove("hidden");
+  renderContentCenterBatchTagOptions();
+  updateContentCenterSelectionControls();
+  contentCenterBatchTagEditor.classList.remove("hidden");
+  requestAnimationFrame(() => contentCenterBatchTagOptions?.querySelector("button")?.focus());
+}
+
+async function createContentCenterBatchTag() {
+  const name = contentCenterBatchNewTagName?.value.trim() || "";
+  if (!name) {
+    showToast("请输入标签名称。", "error");
+    contentCenterBatchNewTagName?.focus();
+    return;
+  }
+  const existing = availableMemoryTags.find(
+    (tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name)
+  );
+  if (existing) {
+    selectedContentCenterBatchTagIds.add(existing.id);
+    contentCenterBatchNewTagName.value = "";
+    renderContentCenterBatchTagOptions();
+    showToast(`已选中标签 #${existing.name}`, "success");
+    return;
+  }
+  setButtonBusy(contentCenterBatchCreateTagButton, true, "新建中…");
+  try {
+    const tag = await api("/api/v1/tags", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }, true);
+    availableMemoryTags.push(tag);
+    availableMemoryTags.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+    selectedContentCenterBatchTagIds.add(tag.id);
+    contentCenterBatchNewTagName.value = "";
+    renderAllMemoryTagControls();
+    renderContentCenterTagOptions();
+    renderContentCenterBatchTagOptions();
+    showToast(`标签 #${tag.name} 已创建并选中`, "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(contentCenterBatchCreateTagButton, false);
+  }
+}
+
+async function applyContentCenterBatchTags() {
+  if (!selectedContentCenterItems.size) {
+    showToast("请先选择要整理的内容。", "error");
+    return;
+  }
+  if (!selectedContentCenterBatchTagIds.size) {
+    showToast("请至少选择一个标签。", "error");
+    return;
+  }
+  const operation = selectedContentCenterBatchOperation();
+  const items = [...selectedContentCenterItems.values()].map((item) => ({
+    kind: item.kind,
+    content_id: item.id,
+  }));
+  setButtonBusy(contentCenterApplyBatchTagsButton, true, operation === "add" ? "批量添加中…" : "批量移除中…");
+  try {
+    await api("/api/v1/content/bulk/tags", {
+      method: "POST",
+      body: JSON.stringify({
+        operation,
+        items,
+        tag_ids: [...selectedContentCenterBatchTagIds],
+      }),
+    }, true);
+    const affectedCount = items.length;
+    closeContentCenterBatchTagEditor();
+    selectedContentCenterItems.clear();
+    await loadMemoryTags({ force: true });
+    if (memoryMapFilterIsActive()) await refreshMemoryMapTagMatches();
+    await runContentCenterBrowse();
+    showToast(
+      operation === "add"
+        ? `已为 ${affectedCount} 条内容批量添加标签`
+        : `已从 ${affectedCount} 条内容批量移除标签`,
+      "success",
+    );
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(contentCenterApplyBatchTagsButton, false);
+  }
+}
+
+function closeContentCenterModalNow({ restoreFocus = true } = {}) {
+  if (!isContentCenterOpen()) return;
+  closeContentCenterQuickTagEditor({ restoreFocus: false });
+  clearContentCenterBatchSelection();
+  setContentCenterBatchMode(false, { clearSelection: false });
+  contentCenterRequestSequence += 1;
+  contentCenterDrawerResumeState = null;
+  contentCenterModal.classList.add("hidden");
+  contentCenterModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("content-center-open");
+  if (restoreFocus && contentCenterReturnFocus instanceof HTMLElement && document.contains(contentCenterReturnFocus)) {
+    contentCenterReturnFocus.focus();
+  }
+  contentCenterReturnFocus = null;
+}
+
+function suspendContentCenterForDrawer(trigger = null) {
+  if (!isContentCenterOpen()) return false;
+  closeContentCenterQuickTagEditor({ restoreFocus: false });
+  closeContentCenterBatchTagEditor();
+  contentCenterRequestSequence += 1;
+  contentCenterDrawerResumeState = {
+    scrollTop: contentCenterResults?.scrollTop || 0,
+    trigger: trigger instanceof HTMLElement ? trigger : null,
+  };
+  contentCenterModal.classList.add("hidden");
+  contentCenterModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("content-center-open");
+  return true;
+}
+
+function resumeContentCenterAfterDrawer() {
+  const resumeState = contentCenterDrawerResumeState;
+  if (!resumeState || !contentCenterModal || !currentProfile) return false;
+  contentCenterDrawerResumeState = null;
+  contentCenterModal.classList.remove("hidden");
+  contentCenterModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("content-center-open");
+  requestAnimationFrame(() => {
+    if (contentCenterResults) contentCenterResults.scrollTop = resumeState.scrollTop || 0;
+    if (resumeState.trigger instanceof HTMLElement && document.contains(resumeState.trigger)) {
+      resumeState.trigger.focus({ preventScroll: true });
+    }
+  });
+  return true;
+}
+
+function resetContentCenterFilters({ refresh = true } = {}) {
+  if (!contentCenterForm) return;
+  clearContentCenterBatchSelection();
+  contentCenterForm.querySelectorAll('input[name="kind"]').forEach((input) => { input.checked = true; });
+  contentCenterQuery.value = "";
+  contentCenterDateFrom.value = "";
+  contentCenterDateTo.value = "";
+  contentCenterSort.value = "date_desc";
+  selectedContentCenterTagIds.clear();
+  renderContentCenterTagOptions();
+  if (refresh) runContentCenterBrowse();
+}
+
+async function openContentCenterModal() {
+  if (!contentCenterModal || !currentProfile) return;
+  contentCenterDrawerResumeState = null;
+  clearContentCenterBatchSelection();
+  setContentCenterBatchMode(false, { clearSelection: false });
+  if (isMemorySearchOpen()) closeMemorySearchModalNow({ restoreFocus: false });
+  if (isMemoryMapFilterOpen()) closeMemoryMapFilterModalNow({ restoreFocus: false });
+  contentCenterReturnFocus = document.activeElement;
+  contentCenterModal.classList.remove("hidden");
+  contentCenterModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("content-center-open");
+  try {
+    await loadMemoryTags();
+    renderContentCenterTagOptions();
+  } catch (error) {
+    showOperationError(error);
+  }
+  await runContentCenterBrowse();
+}
+
+function focusContentCenterTarget(kind, contentId) {
+  requestAnimationFrame(() => {
+    const selector = `[data-content-kind="${CSS.escape(kind)}"][data-content-id="${CSS.escape(contentId)}"]`;
+    const card = document.querySelector(selector);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("search-target-flash");
+    window.setTimeout(() => card.classList.remove("search-target-flash"), 1800);
+  });
+}
+
+async function openContentCenterResult(item, trigger = null) {
+  const suspended = suspendContentCenterForDrawer(trigger);
+  const opened = await openPeriodDrawer(item.time_scope, item.period_key);
+  if (opened !== true) {
+    if (suspended) resumeContentCenterAfterDrawer();
+    return;
+  }
+  focusContentCenterTarget(item.kind, item.id);
+}
+
+function closeContentCenterQuickTagEditor({ restoreFocus = true } = {}) {
+  if (!activeContentCenterTagEditor) return;
+  const { editor, trigger } = activeContentCenterTagEditor;
+  editor?.remove();
+  if (trigger) {
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus && document.contains(trigger)) trigger.focus();
+  }
+  activeContentCenterTagEditor = null;
+}
+
+function renderContentCenterReadonlyTags(container, tags = []) {
+  if (!container) return;
+  container.replaceChildren();
+  container.classList.toggle("hidden", !tags.length);
+  tags.forEach((tag) => {
+    const badge = document.createElement("span");
+    badge.textContent = `#${tag.name}`;
+    container.appendChild(badge);
+  });
+}
+
+async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags) {
+  closeContentCenterBatchTagEditor();
+  if (activeContentCenterTagEditor?.trigger === trigger) {
+    closeContentCenterQuickTagEditor();
+    return;
+  }
+  closeContentCenterQuickTagEditor({ restoreFocus: false });
+  try {
+    await loadMemoryTags();
+  } catch (error) {
+    showOperationError(error);
+    return;
+  }
+
+  const draftIds = new Set((item.tags || []).map((tag) => tag.id));
+  const originalIds = new Set(draftIds);
+  const editor = document.createElement("section");
+  editor.className = "content-center-quick-tag-editor";
+  editor.setAttribute("aria-label", `整理${contentCenterKindLabel(item.kind)}标签`);
+
+  const heading = document.createElement("div");
+  heading.className = "content-center-quick-tag-heading";
+  const headingText = document.createElement("strong");
+  headingText.textContent = "快速调整标签";
+  const headingActions = document.createElement("div");
+  headingActions.className = "content-center-quick-tag-heading-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost-button content-center-quick-tag-cancel";
+  cancel.textContent = "取消";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary-button content-center-quick-tag-save";
+  save.textContent = "保存标签";
+  save.disabled = true;
+  headingActions.append(cancel, save);
+  heading.append(headingText, headingActions);
+
+  const options = document.createElement("div");
+  options.className = "content-center-quick-tag-options";
+
+  const createRow = document.createElement("div");
+  createRow.className = "content-center-quick-tag-create";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 40;
+  input.autocomplete = "off";
+  input.placeholder = "新标签名称";
+  const createButton = document.createElement("button");
+  createButton.type = "button";
+  createButton.className = "ghost-button";
+  createButton.textContent = "新建并选中";
+  createRow.append(input, createButton);
+
+  editor.append(heading, options, createRow);
+
+  const updateSaveState = () => {
+    const unchanged = draftIds.size === originalIds.size && [...draftIds].every((id) => originalIds.has(id));
+    save.disabled = unchanged;
+  };
+
+  const renderOptions = () => {
+    options.replaceChildren();
+    if (!availableMemoryTags.length) {
+      const empty = document.createElement("span");
+      empty.className = "content-center-quick-tag-empty";
+      empty.textContent = "暂无标签，可在下方直接新建。";
+      options.appendChild(empty);
+      return;
+    }
+    availableMemoryTags.forEach((tag) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "content-center-quick-tag-chip";
+      chip.classList.toggle("is-selected", draftIds.has(tag.id));
+      chip.setAttribute("aria-pressed", draftIds.has(tag.id) ? "true" : "false");
+      chip.textContent = `#${tag.name}`;
+      chip.addEventListener("click", () => {
+        if (draftIds.has(tag.id)) draftIds.delete(tag.id);
+        else draftIds.add(tag.id);
+        renderOptions();
+        updateSaveState();
+      });
+      options.appendChild(chip);
+    });
+  };
+
+  const createAndSelectTag = async () => {
+    const name = input.value.trim();
+    if (!name) {
+      showToast("请输入标签名称。", "error");
+      input.focus();
+      return;
+    }
+    const existing = availableMemoryTags.find(
+      (tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name)
+    );
+    if (existing) {
+      draftIds.add(existing.id);
+      input.value = "";
+      renderOptions();
+      updateSaveState();
+      showToast(`已选中标签 #${existing.name}`, "success");
+      return;
+    }
+
+    setButtonBusy(createButton, true, "新建中…");
+    try {
+      const tag = await api("/api/v1/tags", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }, true);
+      availableMemoryTags.push(tag);
+      availableMemoryTags.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+      draftIds.add(tag.id);
+      input.value = "";
+      renderAllMemoryTagControls();
+      renderOptions();
+      updateSaveState();
+      showToast(`标签 #${tag.name} 已创建并选中`, "success");
+    } catch (error) {
+      showOperationError(error);
+    } finally {
+      setButtonBusy(createButton, false);
+    }
+  };
+
+  createButton.addEventListener("click", createAndSelectTag);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      createAndSelectTag();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeContentCenterQuickTagEditor();
+    }
+  });
+  cancel.addEventListener("click", () => closeContentCenterQuickTagEditor());
+  save.addEventListener("click", async () => {
+    setButtonBusy(save, true, "保存中…");
+    try {
+      const savedTags = await api(
+        `/api/v1/content/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}/tags`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ tag_ids: [...draftIds] }),
+        },
+        true,
+      );
+      item.tags = Array.isArray(savedTags) ? savedTags : [];
+      renderContentCenterReadonlyTags(readonlyTags, item.tags);
+      const stillMatchesCurrentFilter = [...selectedContentCenterTagIds].every((tagId) => draftIds.has(tagId));
+      closeContentCenterQuickTagEditor({ restoreFocus: false });
+      await loadMemoryTags({ force: true });
+      if (memoryMapFilterIsActive()) await refreshMemoryMapTagMatches();
+      showToast(`${contentCenterKindLabel(item.kind)}标签已更新`, "success");
+      if (!stillMatchesCurrentFilter && isContentCenterOpen()) await runContentCenterBrowse();
+      else if (document.contains(trigger)) trigger.focus();
+    } catch (error) {
+      showOperationError(error);
+      setButtonBusy(save, false);
+    }
+  });
+
+  card.appendChild(editor);
+  activeContentCenterTagEditor = { editor, trigger };
+  trigger.setAttribute("aria-expanded", "true");
+  renderOptions();
+  requestAnimationFrame(() => input.focus());
+}
+
+function renderContentCenterResults(data) {
+  closeContentCenterQuickTagEditor({ restoreFocus: false });
+  closeContentCenterBatchTagEditor();
+  contentCenterResults.replaceChildren();
+  const items = data?.items || [];
+  contentCenterCurrentItems = items;
+  const counts = data?.counts || {};
+  const total = Number(data?.total || 0);
+  contentCenterSummary.textContent = total
+    ? `共 ${total} 条 · 事件 ${counts.event || 0} · 记忆 ${counts.memory || 0} · 计划 ${counts.plan || 0}`
+    : "当前条件下没有内容";
+  contentCenterLimitHint.classList.toggle("hidden", !data?.has_more);
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "content-center-empty";
+    empty.textContent = "可以清空关键词、减少标签条件、选择更多内容类型，或放宽日期范围。";
+    contentCenterResults.appendChild(empty);
+    updateContentCenterSelectionControls();
+    return;
+  }
+
+  items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = `content-center-result-card is-${item.kind}`;
+
+    const top = document.createElement("div");
+    top.className = "content-center-result-top";
+
+    const titleLead = document.createElement("div");
+    titleLead.className = "content-center-result-title-lead";
+    const selectLabel = document.createElement("label");
+    selectLabel.className = "content-center-result-select";
+    const selectCheckbox = document.createElement("input");
+    selectCheckbox.type = "checkbox";
+    selectCheckbox.setAttribute("aria-label", `选择${item.title || contentCenterKindLabel(item.kind)}`);
+    selectCheckbox.dataset.contentCenterSelectKey = contentCenterItemKey(item);
+    selectCheckbox.checked = selectedContentCenterItems.has(contentCenterItemKey(item));
+    selectCheckbox.addEventListener("change", () => setContentCenterItemSelected(item, selectCheckbox.checked));
+    selectLabel.append(selectCheckbox);
+
+    const titleButton = document.createElement("button");
+    titleButton.type = "button";
+    titleButton.className = "content-center-result-title-button";
+    titleButton.addEventListener("click", () => openContentCenterResult(item, titleButton));
+    const titleWrap = document.createElement("span");
+    titleWrap.className = "content-center-result-title";
+    const kind = document.createElement("span");
+    kind.className = `content-center-kind-badge is-${item.kind}`;
+    kind.textContent = contentCenterKindLabel(item.kind);
+    const title = document.createElement("strong");
+    title.textContent = item.title || `未命名${contentCenterKindLabel(item.kind)}`;
+    titleWrap.append(kind, title);
+    titleButton.append(titleWrap);
+    titleLead.append(selectLabel, titleButton);
+
+    const topActions = document.createElement("div");
+    topActions.className = "content-center-result-top-actions";
+    const tagButton = document.createElement("button");
+    tagButton.type = "button";
+    tagButton.className = "content-center-quick-tag-toggle";
+    tagButton.textContent = "整理标签";
+    tagButton.setAttribute("aria-expanded", "false");
+    tagButton.addEventListener("click", () => {
+      openContentCenterQuickTagEditor(item, card, tagButton, readonlyTags);
+    });
+    const scope = document.createElement("span");
+    scope.className = "content-center-scope";
+    scope.textContent = contentCenterScopeLabel(item);
+    topActions.append(tagButton, scope);
+    top.append(titleLead, topActions);
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "content-center-result-main";
+    main.addEventListener("click", () => openContentCenterResult(item, main));
+    const snippet = document.createElement("p");
+    snippet.textContent = contentCenterSnippet(item);
+    main.append(snippet);
+
+    const readonlyTags = document.createElement("div");
+    readonlyTags.className = "content-center-result-tags";
+    renderContentCenterReadonlyTags(readonlyTags, item.tags || []);
+
+    card.append(top, main, readonlyTags);
+    contentCenterResults.appendChild(card);
+  });
+  updateContentCenterSelectionControls();
+}
+
+async function runContentCenterBrowse() {
+  if (!contentCenterForm || !isContentCenterOpen()) return;
+  clearContentCenterBatchSelection();
+  const submit = contentCenterForm.querySelector('button[type="submit"]');
+  const kinds = selectedContentCenterKinds();
+  if (!kinds.length) {
+    showToast("请至少选择一种内容类型", "error");
+    return;
+  }
+  if (contentCenterDateFrom.value && contentCenterDateTo.value && contentCenterDateFrom.value > contentCenterDateTo.value) {
+    showToast("开始日期不能晚于结束日期", "error");
+    contentCenterDateFrom.focus();
+    return;
+  }
+
+  const params = new URLSearchParams();
+  const query = contentCenterQuery.value.trim();
+  if (query) params.set("q", query);
+  kinds.forEach((kind) => params.append("kind", kind));
+  if (contentCenterDateFrom.value) params.set("date_from", contentCenterDateFrom.value);
+  if (contentCenterDateTo.value) params.set("date_to", contentCenterDateTo.value);
+  selectedContentCenterTagIds.forEach((tagId) => params.append("tag_id", tagId));
+  params.set("sort", contentCenterSort.value || "date_desc");
+  params.set("limit", "100");
+
+  const requestSequence = ++contentCenterRequestSequence;
+  setButtonBusy(submit, true, "整理中…");
+  contentCenterSummary.textContent = "正在整理加密内容……";
+  contentCenterResults.replaceChildren();
+  contentCenterLimitHint.classList.add("hidden");
+  try {
+    const data = await api(`/api/v1/content/search?${params.toString()}`, {}, true);
+    if (requestSequence !== contentCenterRequestSequence || !isContentCenterOpen()) return;
+    renderContentCenterResults(data);
+  } catch (error) {
+    if (requestSequence !== contentCenterRequestSequence) return;
+    showOperationError(error);
+    contentCenterSummary.textContent = "内容整理失败，请调整条件后重试";
+  } finally {
+    setButtonBusy(submit, false);
+  }
+}
+
 function isMemorySearchOpen() {
   return Boolean(memorySearchModal && !memorySearchModal.classList.contains("hidden"));
 }
 
 function memorySearchScopeLabel(item) {
-  if (item.time_scope === "year") return `${item.period_key} · 年度记忆`;
-  if (item.time_scope === "month") return `${item.period_key} · 月份记忆`;
-  return `${item.period_key} · 日期记忆`;
+  return contentCenterScopeLabel(item);
+}
+
+function selectedMemorySearchKinds() {
+  if (!memorySearchForm) return [];
+  return Array.from(memorySearchForm.querySelectorAll('input[name="search_kind"]:checked')).map((input) => input.value);
 }
 
 function plainTextFromMemoryContent(content = "", format = "plain") {
@@ -805,7 +1548,7 @@ function renderMemorySearchTagOptions() {
   if (!availableMemoryTags.length) {
     const empty = document.createElement("span");
     empty.className = "memory-search-tag-empty";
-    empty.textContent = "暂无标签，可先在记忆编辑中创建。";
+    empty.textContent = "暂无标签，可先在任一内容编辑中创建。";
     memorySearchTagOptions.appendChild(empty);
     return;
   }
@@ -834,6 +1577,7 @@ function clearMemorySearchResults(message = "输入条件后开始搜索") {
 
 function resetMemorySearchFilters() {
   memorySearchForm?.reset();
+  memorySearchForm?.querySelectorAll('input[name="search_kind"]').forEach((input) => { input.checked = true; });
   selectedMemorySearchTagIds.clear();
   renderMemorySearchTagOptions();
   clearMemorySearchResults();
@@ -854,6 +1598,7 @@ function closeMemorySearchModalNow({ restoreFocus = true } = {}) {
 
 async function openMemorySearchModal() {
   if (!memorySearchModal || !currentProfile) return;
+  if (isContentCenterOpen()) closeContentCenterModalNow({ restoreFocus: false });
   if (isMemoryMapFilterOpen()) closeMemoryMapFilterModalNow({ restoreFocus: false });
   memorySearchReturnFocus = document.activeElement;
   memorySearchModal.classList.remove("hidden");
@@ -868,9 +1613,9 @@ async function openMemorySearchModal() {
   requestAnimationFrame(() => memorySearchQuery?.focus());
 }
 
-function focusMemorySearchTarget(memoryId) {
+function focusMemorySearchTarget(kind, contentId) {
   requestAnimationFrame(() => {
-    const selector = `[data-content-kind="memory"][data-content-id="${CSS.escape(memoryId)}"]`;
+    const selector = `[data-content-kind="${CSS.escape(kind)}"][data-content-id="${CSS.escape(contentId)}"]`;
     const card = document.querySelector(selector);
     if (!card) return;
     card.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -882,18 +1627,22 @@ function focusMemorySearchTarget(memoryId) {
 async function openMemorySearchResult(item) {
   closeMemorySearchModalNow({ restoreFocus: false });
   const opened = await openPeriodDrawer(item.time_scope, item.period_key);
-  if (opened !== false) focusMemorySearchTarget(item.id);
+  if (opened !== false) focusMemorySearchTarget(item.kind, item.id);
 }
 
 function renderMemorySearchResultsData(data) {
   memorySearchResults.replaceChildren();
   const items = data?.items || [];
-  memorySearchSummary.textContent = items.length ? `找到 ${items.length} 条记忆` : "没有找到符合条件的记忆";
+  const counts = data?.counts || {};
+  const total = Number(data?.total ?? items.length);
+  memorySearchSummary.textContent = total
+    ? `共 ${total} 条 · 事件 ${counts.event || 0} · 记忆 ${counts.memory || 0} · 计划 ${counts.plan || 0}`
+    : "没有找到符合条件的内容";
   memorySearchLimitHint.classList.toggle("hidden", !data?.has_more);
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "memory-search-empty";
-    empty.textContent = "可以换一个关键词、减少标签条件，或放宽日期范围。";
+    empty.textContent = "可以换一个关键词、选择更多内容类型、减少标签条件，或放宽日期范围。";
     memorySearchResults.appendChild(empty);
     return;
   }
@@ -901,16 +1650,22 @@ function renderMemorySearchResultsData(data) {
   items.forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "memory-search-result-card";
+    button.className = `memory-search-result-card is-${item.kind}`;
     button.addEventListener("click", () => openMemorySearchResult(item));
 
     const top = document.createElement("div");
     top.className = "memory-search-result-top";
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "memory-search-result-title";
+    const kind = document.createElement("span");
+    kind.className = `memory-search-kind-badge is-${item.kind}`;
+    kind.textContent = contentCenterKindLabel(item.kind);
     const title = document.createElement("strong");
-    title.textContent = item.title || "未命名记忆";
+    title.textContent = item.title || `未命名${contentCenterKindLabel(item.kind)}`;
+    titleWrap.append(kind, title);
     const scope = document.createElement("span");
     scope.textContent = memorySearchScopeLabel(item);
-    top.append(title, scope);
+    top.append(titleWrap, scope);
 
     const snippet = document.createElement("p");
     snippet.textContent = memorySearchSnippet(item);
@@ -933,6 +1688,11 @@ function renderMemorySearchResultsData(data) {
 async function runMemorySearch() {
   if (!memorySearchForm) return;
   const submit = memorySearchForm.querySelector('button[type="submit"]');
+  const kinds = selectedMemorySearchKinds();
+  if (!kinds.length) {
+    showToast("请至少选择一种内容类型", "error");
+    return;
+  }
   if (memorySearchDateFrom.value && memorySearchDateTo.value && memorySearchDateFrom.value > memorySearchDateTo.value) {
     showToast("开始日期不能晚于结束日期", "error");
     memorySearchDateFrom.focus();
@@ -941,6 +1701,7 @@ async function runMemorySearch() {
   const params = new URLSearchParams();
   const query = memorySearchQuery.value.trim();
   if (query) params.set("q", query);
+  kinds.forEach((kind) => params.append("kind", kind));
   if (memorySearchDateFrom.value) params.set("date_from", memorySearchDateFrom.value);
   if (memorySearchDateTo.value) params.set("date_to", memorySearchDateTo.value);
   selectedMemorySearchTagIds.forEach((tagId) => params.append("tag_id", tagId));
@@ -948,11 +1709,11 @@ async function runMemorySearch() {
 
   const requestSequence = ++memorySearchRequestSequence;
   setButtonBusy(submit, true, "搜索中…");
-  memorySearchSummary.textContent = "正在搜索加密记忆……";
+  memorySearchSummary.textContent = "正在搜索加密内容……";
   memorySearchResults.replaceChildren();
   memorySearchLimitHint.classList.add("hidden");
   try {
-    const data = await api(`/api/v1/memories/search?${params.toString()}`, {}, true);
+    const data = await api(`/api/v1/content/search?${params.toString()}`, {}, true);
     if (requestSequence !== memorySearchRequestSequence || !isMemorySearchOpen()) return;
     renderMemorySearchResultsData(data);
   } catch (error) {
@@ -989,7 +1750,13 @@ function memoryMapFilterSummaryText() {
     .filter((tag) => selectedMemoryMapTagIds.has(tag.id))
     .map((tag) => `#${tag.name}`);
   const label = tagNames.length ? tagNames.join(" + ") : `${selectedMemoryMapTagIds.size} 个标签`;
-  return `${label} · 命中 ${memoryMapTagMatches.memoryCount} 条记忆，覆盖 ${memoryMapTagMatches.dates.size} 天、${memoryMapTagMatches.months.size} 月、${memoryMapTagMatches.years.size} 年。`;
+  const parts = [
+    ["事件", memoryMapTagMatches.counts.event],
+    ["记忆", memoryMapTagMatches.counts.memory],
+    ["计划", memoryMapTagMatches.counts.plan],
+  ].filter(([, count]) => count > 0).map(([name, count]) => `${name} ${count}`);
+  const breakdown = parts.length ? `（${parts.join(" · ")}）` : "";
+  return `${label} · 命中 ${memoryMapTagMatches.contentCount} 条内容${breakdown}，覆盖 ${memoryMapTagMatches.dates.size} 天、${memoryMapTagMatches.months.size} 月、${memoryMapTagMatches.years.size} 年。`;
 }
 
 function updateMemoryMapFilterSummary() {
@@ -1002,7 +1769,7 @@ function renderMemoryMapFilterTagOptions() {
   if (!availableMemoryTags.length) {
     const empty = document.createElement("p");
     empty.className = "memory-map-filter-empty";
-    empty.textContent = "还没有标签。可以先在“记一记”或记忆编辑中创建标签。";
+    empty.textContent = "还没有标签。可以先在事件、记忆或计划编辑中创建标签。";
     memoryMapFilterTagOptions.appendChild(empty);
     return;
   }
@@ -1027,7 +1794,12 @@ function setMemoryMapTagMatchData(data = {}) {
     dates: new Set(data.dates || []),
     months: new Set(data.months || []),
     years: new Set(data.years || []),
-    memoryCount: Number(data.memory_count || 0),
+    contentCount: Number(data.content_count ?? data.memory_count ?? 0),
+    counts: {
+      event: Number(data.counts?.event || 0),
+      memory: Number(data.counts?.memory ?? data.memory_count ?? 0),
+      plan: Number(data.counts?.plan || 0),
+    },
   };
   memoryMapFilterRevision += 1;
   lifeGridSignature = "";
@@ -1053,7 +1825,7 @@ async function refreshMemoryMapTagMatches({ redraw = true } = {}) {
   });
   selectedMemoryMapTagIds.forEach((tagId) => params.append("tag_id", tagId));
   const requestSequence = ++memoryMapFilterRequestSequence;
-  const data = await api(`/api/v1/memories/tag-map?${params.toString()}`, {}, true);
+  const data = await api(`/api/v1/content/tag-map?${params.toString()}`, {}, true);
   if (requestSequence !== memoryMapFilterRequestSequence) return;
   setMemoryMapTagMatchData(data);
   updateMemoryMapFilterEntryButtons();
@@ -1075,6 +1847,7 @@ function closeMemoryMapFilterModalNow({ restoreFocus = true } = {}) {
 
 async function openMemoryMapFilterModal() {
   if (!memoryMapFilterModal || !currentProfile) return;
+  if (isContentCenterOpen()) closeContentCenterModalNow({ restoreFocus: false });
   if (isMemorySearchOpen()) closeMemorySearchModalNow({ restoreFocus: false });
   memoryMapFilterReturnFocus = document.activeElement;
   draftMemoryMapTagIds.clear();
@@ -1241,8 +2014,13 @@ function setProfileSettingsEditMode(editing, { focus = true } = {}) {
 }
 
 function tagUsageLabel(tag) {
-  const count = Number(tag?.memory_count || 0);
-  return `${count} 条记忆`;
+  const total = Number(tag?.total_count ?? tag?.memory_count ?? 0);
+  if (!total) return "尚未使用";
+  const parts = [];
+  if (Number(tag?.event_count || 0)) parts.push(`事件 ${tag.event_count}`);
+  if (Number(tag?.memory_count || 0)) parts.push(`记忆 ${tag.memory_count}`);
+  if (Number(tag?.plan_count || 0)) parts.push(`计划 ${tag.plan_count}`);
+  return `${total} 次 · ${parts.join(" · ")}`;
 }
 
 function renderTagManagementEditRow(row, tag) {
@@ -1321,13 +2099,13 @@ function renderTagManagementEditRow(row, tag) {
 }
 
 async function deleteManagedTag(tag) {
-  const count = Number(tag?.memory_count || 0);
+  const count = Number(tag?.total_count ?? tag?.memory_count ?? 0);
   const confirmed = await askConfirmation({
     eyebrow: "删除标签",
     title: `删除 #${tag.name}？`,
     message: count
-      ? `这个标签当前用于 ${count} 条记忆。删除后记忆正文仍会保留，只移除标签关联。`
-      : "这个标签当前没有关联记忆。删除后无法恢复标签本身。",
+      ? `这个标签当前关联 ${count} 条内容。删除后事件、记忆和计划正文都会保留，只移除标签关联。`
+      : "这个标签当前没有关联内容。删除后无法恢复标签本身。",
     confirmLabel: "删除标签",
     tone: "danger",
   });
@@ -1338,7 +2116,9 @@ async function deleteManagedTag(tag) {
   try {
     await api(`/api/v1/tags/${encodeURIComponent(tag.id)}`, { method: "DELETE" }, true);
     selectedMemoryTagIds.quick.delete(tag.id);
+    selectedMemoryTagIds.event.delete(tag.id);
     selectedMemoryTagIds.drawer.delete(tag.id);
+    selectedMemoryTagIds.plan.delete(tag.id);
     selectedMemorySearchTagIds.delete(tag.id);
     selectedMemoryMapTagIds.delete(tag.id);
     draftMemoryMapTagIds.delete(tag.id);
@@ -1353,7 +2133,7 @@ async function deleteManagedTag(tag) {
 function renderTagManagement() {
   if (!tagManagementList || !tagManagementSummary) return;
   const totalUsage = availableMemoryTags.reduce(
-    (sum, tag) => sum + Number(tag.memory_count || 0),
+    (sum, tag) => sum + Number(tag.total_count ?? tag.memory_count ?? 0),
     0,
   );
   tagManagementSummary.textContent = `${availableMemoryTags.length} 个标签 · ${totalUsage} 次使用`;
@@ -2590,7 +3370,7 @@ lockButton.addEventListener("click", async () => {
   currentProfile = null;
   currentProgress = null;
   contentStatus = {};
-  activeLifeMapView = "life";
+  activeLifeMapView = "month";
   navigatorYear = null;
   navigatorMonth = null;
   navigatorDate = null;
@@ -2962,7 +3742,7 @@ function renderLifeMapView(force = false) {
   }
 
   lifeMapViewTitle.textContent = "月视图";
-  lifeMapViewSubtitle.textContent = "整个目标人生范围内的所有月份同时显示，包含过去与未来；点击月份在右侧展开整月内容和月内日期。";
+  lifeMapViewSubtitle.textContent = "点击月份在右侧展开整月内容和月内日期。";
   renderMonthGrid();
 }
 
@@ -3116,7 +3896,7 @@ function drawFullPageLifeGrid(force = false) {
     dpr,
   };
   fullPageLifeSummary.textContent = memoryMapFilterIsActive()
-    ? `完整人生共 ${totalDays.toLocaleString()} 天；当前标签筛选命中 ${memoryMapTagMatches.dates.size} 个具体日期，未命中日期已弱化显示。`
+    ? `完整人生共 ${totalDays.toLocaleString()} 天；当前标签筛选命中 ${memoryMapTagMatches.contentCount} 条内容、${memoryMapTagMatches.dates.size} 个具体日期，未命中日期已弱化显示。`
     : `完整人生共 ${totalDays.toLocaleString()} 天，日期连续排列；悬停查看日期，点击打开右侧详情。`;
 }
 
@@ -3632,7 +4412,7 @@ function contentFormValue(kind) {
   return {
     title: form.querySelector('[name="title"]')?.value || "",
     content,
-    ...(kind === "memory" ? { tagIds: [...selectedMemoryTagIds.drawer].sort() } : {}),
+    tagIds: [...selectedMemoryTagIds[tagModeForKind(kind)]].sort(),
   };
 }
 
@@ -3718,7 +4498,7 @@ function resetContentForm(kind, hide = true) {
   const cancel = config.form.querySelector('.event-form-actions button[type="button"]');
   if (kind === "memory") destroyMemoryRichEditor(memoryRichEditorIds.drawer);
   config.form.reset();
-  if (kind === "memory") resetMemoryTagSelector("drawer");
+  resetMemoryTagSelector(tagModeForKind(kind));
   config.form.classList.toggle("hidden", hide);
   config.form.classList.remove("is-editing");
   delete config.form.dataset.editId;
@@ -3760,6 +4540,7 @@ function closeDateDrawerNow() {
 async function requestCloseDateDrawer() {
   if (!(await confirmDiscardChanges())) return false;
   closeDateDrawerNow();
+  resumeContentCenterAfterDrawer();
   return true;
 }
 
@@ -4353,13 +5134,13 @@ async function startContentEdit(kind, item) {
   config.form.classList.remove("hidden");
   config.form.classList.add("is-editing");
   config.form.querySelector('[name="title"]').value = item.title || "";
+  try {
+    await loadMemoryTags();
+  } catch (error) {
+    showOperationError(error);
+  }
+  setMemoryTagSelection(tagModeForKind(kind), item.tags || []);
   if (kind === "memory") {
-    try {
-      await loadMemoryTags();
-    } catch (error) {
-      showOperationError(error);
-    }
-    setMemoryTagSelection("drawer", item.tags || []);
     initMemoryRichEditor(memoryRichEditorIds.drawer, contentToEditableMemoryHtml(item));
   } else {
     config.form.querySelector('[name="content"]').value = item.content || "";
@@ -4565,7 +5346,7 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
       prepareMemoryCardCollapse(article, memoryBody, collapseButton);
     }
 
-    if (kind === "memory") appendMemoryTagBadges(article, item.tags || []);
+    appendMemoryTagBadges(article, item.tags || []);
 
     const meta = document.createElement("small");
     const metaParts = [`创建于 ${formatDateTime(item.created_at)}`];
@@ -4645,15 +5426,13 @@ async function toggleContentForm(kind, forceOpen = null) {
   resetAllContentForms();
   config.form.classList.remove("hidden");
   config.toggleButton.textContent = config.openLabel;
-  if (kind === "memory") {
-    resetMemoryTagSelector("drawer");
-    try {
-      await loadMemoryTags();
-    } catch (error) {
-      showOperationError(error);
-    }
-    initMemoryRichEditor(memoryRichEditorIds.drawer, "");
+  resetMemoryTagSelector(tagModeForKind(kind));
+  try {
+    await loadMemoryTags();
+  } catch (error) {
+    showOperationError(error);
   }
+  if (kind === "memory") initMemoryRichEditor(memoryRichEditorIds.drawer, "");
   updateContentSectionVisibility(kind);
   requestAnimationFrame(() => captureContentFormSnapshot(kind));
   config.form.querySelector('[name="title"]').focus();
@@ -4670,6 +5449,44 @@ function toggleMemoryForm(forceOpen = null) {
 function togglePlanForm(forceOpen = null) {
   return toggleContentForm("plan", forceOpen);
 }
+
+contentCenterHomeButton?.addEventListener("click", openContentCenterModal);
+contentCenterFullPageButton?.addEventListener("click", openContentCenterModal);
+closeContentCenterButton?.addEventListener("click", () => closeContentCenterModalNow());
+resetContentCenterButton?.addEventListener("click", () => resetContentCenterFilters());
+contentCenterModal?.addEventListener("click", (event) => {
+  if (event.target === contentCenterModal) closeContentCenterModalNow();
+});
+contentCenterForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runContentCenterBrowse();
+});
+contentCenterBatchModeToggle?.addEventListener("click", toggleContentCenterBatchMode);
+
+contentCenterSelectAll?.addEventListener("change", () => {
+  contentCenterCurrentItems.forEach((item) => {
+    const key = contentCenterItemKey(item);
+    if (contentCenterSelectAll.checked) selectedContentCenterItems.set(key, { kind: item.kind, id: item.id });
+    else selectedContentCenterItems.delete(key);
+  });
+  updateContentCenterSelectionControls();
+});
+contentCenterClearSelectionButton?.addEventListener("click", clearContentCenterBatchSelection);
+contentCenterBulkTagsButton?.addEventListener("click", openContentCenterBatchTagEditor);
+contentCenterCloseBatchTagsButton?.addEventListener("click", () => closeContentCenterBatchTagEditor({ restoreFocus: true }));
+contentCenterApplyBatchTagsButton?.addEventListener("click", applyContentCenterBatchTags);
+contentCenterBatchCreateTagButton?.addEventListener("click", createContentCenterBatchTag);
+contentCenterBatchNewTagName?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createContentCenterBatchTag();
+});
+document.querySelectorAll('input[name="content_center_batch_operation"]').forEach((input) => {
+  input.addEventListener("change", () => {
+    const removing = selectedContentCenterBatchOperation() === "remove";
+    contentCenterBatchCreateRow?.classList.toggle("hidden", removing);
+  });
+});
 
 memoryMapFilterHomeButton?.addEventListener("click", openMemoryMapFilterModal);
 memoryMapFilterFullPageButton?.addEventListener("click", openMemoryMapFilterModal);
@@ -4697,6 +5514,13 @@ memorySearchForm?.addEventListener("submit", async (event) => {
 
 toggleEventFormButton.addEventListener("click", () => toggleEventForm());
 document.getElementById("cancelEventForm").addEventListener("click", () => toggleContentForm("event", false));
+document.getElementById("toggleEventTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("event"));
+document.getElementById("createEventTag")?.addEventListener("click", () => createAndSelectMemoryTag("event"));
+document.getElementById("eventNewTagName")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createAndSelectMemoryTag("event");
+});
 toggleMemoryFormButton.addEventListener("click", () => toggleMemoryForm());
 document.getElementById("cancelMemoryForm").addEventListener("click", () => toggleContentForm("memory", false));
 document.getElementById("toggleMemoryTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("drawer"));
@@ -4708,6 +5532,13 @@ document.getElementById("memoryNewTagName")?.addEventListener("keydown", (event)
 });
 togglePlanFormButton.addEventListener("click", () => togglePlanForm());
 document.getElementById("cancelPlanForm").addEventListener("click", () => toggleContentForm("plan", false));
+document.getElementById("togglePlanTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("plan"));
+document.getElementById("createPlanTag")?.addEventListener("click", () => createAndSelectMemoryTag("plan"));
+document.getElementById("planNewTagName")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createAndSelectMemoryTag("plan");
+});
 trashButton.addEventListener("click", openTrashDrawer);
 refreshTrashButton.addEventListener("click", openTrashDrawer);
 emptyTrashButton.addEventListener("click", emptyTrash);
@@ -4725,7 +5556,7 @@ document.addEventListener("keydown", async (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !event.altKey && !event.shiftKey) {
     if (
       !views.home.classList.contains("hidden") && currentProfile &&
-      !isQuickMemoryOpen() && !isMemorySearchOpen() && !isMemoryMapFilterOpen() &&
+      !isQuickMemoryOpen() && !isContentCenterOpen() && !isMemorySearchOpen() && !isMemoryMapFilterOpen() &&
       confirmModal.classList.contains("hidden") &&
       settingsModal.classList.contains("hidden") &&
       resetPinModal.classList.contains("hidden") &&
@@ -4752,6 +5583,18 @@ document.addEventListener("keydown", async (event) => {
   }
   if (!resetPinModal.classList.contains("hidden")) {
     closeResetPinModal();
+    return;
+  }
+  if (isContentCenterOpen()) {
+    if (contentCenterBatchTagEditor && !contentCenterBatchTagEditor.classList.contains("hidden")) {
+      closeContentCenterBatchTagEditor({ restoreFocus: true });
+      return;
+    }
+    if (activeContentCenterTagEditor) {
+      closeContentCenterQuickTagEditor();
+      return;
+    }
+    closeContentCenterModalNow();
     return;
   }
   if (isMemoryMapFilterOpen()) {
@@ -4820,9 +5663,7 @@ async function submitScopedContent(kind) {
       method: editId ? "PUT" : "POST",
       body: JSON.stringify(requestBody),
     }, true);
-    if (kind === "memory") {
-      await syncMemoryTags(savedItem.id, selectedMemoryTagIds.drawer);
-    }
+    await syncContentTags(kind, savedItem.id, selectedMemoryTagIds[tagModeForKind(kind)]);
     await refreshContentStatuses();
     renderLifeMapView(true);
     resetAllContentForms();

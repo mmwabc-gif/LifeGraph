@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## v0.0.7 - 2026-08-08
+
+### Added
+
+- 新增统一内容中心，集中浏览事件、记忆和计划，并支持类型、日期范围、标签、关键词和排序组合整理；
+- 标签能力扩展到事件和计划，三类内容统一使用 `content_tags`；
+- 新增统一内容搜索 `GET /api/v1/content/search`，支持三类内容全文检索和组合筛选；
+- 新增统一标签地图 `GET /api/v1/content/tag-map`，三类内容均可参与日/月/年地图高亮；
+- 内容中心支持单条快速整理标签与多选批量添加/移除标签；
+- 新增批量标签原子操作接口 `POST /api/v1/content/bulk/tags`；
+- 首页默认视图调整为月视图。
+
+### Changed
+
+- 数据库 schema 从 v4 非破坏性升级到 v5，将记忆专用标签关联迁移为统一内容标签关联；
+- 标签管理统计扩展为事件、记忆、计划三类使用次数；
+- 内容中心结果区改为独立内部滚动，并持续压缩筛选区和卡片操作区，提升可视内容数量；
+- 从内容中心打开右侧详情后，关闭抽屉会返回原内容中心并保留筛选、排序、结果与滚动位置；
+- 批量整理改为按需进入模式，默认隐藏选择框和底部批量工具栏；
+- 内容卡片将单条【整理标签】整合到标题行，批量模式将选择框放到标题前；
+- 正式稳定版统一前端、FastAPI、系统状态、Python 包和 `.lifevault` 生产者版本为 `0.0.7`。
+
+### Compatibility
+
+- 原 `/api/v1/memories/search` 与 `/api/v1/memories/tag-map` 保留兼容；
+- schema v4 的 `memory_tags` 自动迁移到 `content_tags`；
+- `.lifevault` 格式继续兼容，不重写现有业务密文。
+
+### Verification
+
+```text
+141 passed
+JavaScript syntax check passed
+Python compile check passed
+```
+
 ## v0.0.6 - 2026-08-08
 
 ### Added

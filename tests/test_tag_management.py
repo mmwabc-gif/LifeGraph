@@ -83,7 +83,10 @@ def test_tag_management_lists_usage_renames_and_deletes_without_deleting_memory(
     assert deleted.json()["data"] == {
         "id": travel["id"],
         "name": "远行",
+        "event_count": 0,
         "memory_count": 1,
+        "plan_count": 0,
+        "total_count": 1,
         "deleted": True,
     }
 

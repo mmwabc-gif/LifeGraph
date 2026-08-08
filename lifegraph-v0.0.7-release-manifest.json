@@ -1,0 +1,25 @@
+{
+  "name": "LifeGraph",
+  "version": "0.0.7",
+  "released_at": "2026-08-08T18:32:00+08:00",
+  "schema_version": 5,
+  "frontend_version": "0.0.7",
+  "backend_version": "0.0.7",
+  "features": [
+    "unified_content_center",
+    "unified_content_tags",
+    "unified_content_search",
+    "unified_tag_map_filter",
+    "content_center_quick_tag_edit",
+    "content_center_bulk_tag_edit",
+    "content_center_state_restore",
+    "default_month_view"
+  ],
+  "compatibility": [
+    "memory_search_api",
+    "memory_tag_map_api",
+    "lifevault_v1"
+  ],
+  "requires_tinymce_path": "frontend/static/tinymce/tinymce.min.js",
+  "tests": "141 passed"
+}

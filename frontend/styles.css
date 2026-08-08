@@ -4298,6 +4298,45 @@ body.memory-search-open {
   gap: 12px;
 }
 
+.memory-search-kinds {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.memory-search-kinds legend {
+  margin-bottom: 8px;
+  font-size: .9rem;
+  font-weight: 800;
+}
+
+.memory-search-kind-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.memory-search-kind-options label {
+  display: inline-flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid rgba(49, 92, 77, .14);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: rgba(247, 250, 248, .78);
+  color: var(--text);
+  cursor: pointer;
+  font-size: .84rem;
+  font-weight: 750;
+}
+
+.memory-search-kind-options input {
+  width: auto;
+  margin: 0;
+}
+
 .memory-search-tags {
   margin: 0;
   border: 0;
@@ -4395,6 +4434,7 @@ body.memory-search-open {
   display: block;
   width: 100%;
   border: 1px solid rgba(49, 92, 77, .12);
+  border-left-width: 4px;
   border-radius: 14px;
   padding: 13px 14px;
   background: rgba(255, 255, 255, .66);
@@ -4404,6 +4444,10 @@ body.memory-search-open {
   font: inherit;
   transition: transform .12s ease, border-color .12s ease, background .12s ease;
 }
+
+.memory-search-result-card.is-event { border-left-color: rgba(190, 126, 64, .68); }
+.memory-search-result-card.is-memory { border-left-color: rgba(49, 92, 77, .68); }
+.memory-search-result-card.is-plan { border-left-color: rgba(91, 103, 166, .62); }
 
 .memory-search-result-card:hover,
 .memory-search-result-card:focus-visible {
@@ -4420,6 +4464,13 @@ body.memory-search-open {
   gap: 14px;
 }
 
+.memory-search-result-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .memory-search-result-top strong {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -4431,6 +4482,18 @@ body.memory-search-open {
   font-size: .78rem;
   font-weight: 650;
 }
+
+.memory-search-result-top .memory-search-kind-badge {
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+.memory-search-kind-badge.is-event { background: rgba(171, 105, 43, .9); }
+.memory-search-kind-badge.is-memory { background: rgba(49, 92, 77, .92); }
+.memory-search-kind-badge.is-plan { background: rgba(82, 92, 154, .9); }
 
 .memory-search-result-card p {
   margin: 7px 0 0;
@@ -4813,5 +4876,1275 @@ body.memory-map-filter-open {
 
   .tag-management-actions {
     justify-content: flex-start;
+  }
+}
+
+
+/* LifeGraph v0.0.7.1：统一内容中心 */
+.content-center-entry-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid rgba(126, 91, 54, .22);
+  border-radius: 14px;
+  padding: 0 16px;
+  background: rgba(252, 248, 241, .94);
+  color: #75553a;
+  cursor: pointer;
+  font: inherit;
+  font-size: .92rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: transform .14s ease, background .14s ease, box-shadow .14s ease;
+}
+
+.content-center-entry-button:hover,
+.content-center-entry-button:focus-visible {
+  transform: translateY(-1px);
+  background: rgba(245, 235, 220, .96);
+  box-shadow: 0 8px 20px rgba(107, 78, 48, .12);
+  outline: none;
+}
+
+.content-center-modal {
+  z-index: 318;
+}
+
+body.content-center-open {
+  overflow: hidden;
+}
+
+.content-center-card {
+  width: min(880px, calc(100vw - 28px));
+  max-height: min(88vh, 880px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content-center-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  flex: 0 0 auto;
+}
+
+.content-center-header h2 {
+  margin-bottom: 6px;
+}
+
+.content-center-hint {
+  margin: 0;
+  max-width: 680px;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.55;
+}
+
+.content-center-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0 16px;
+  flex: 0 0 auto;
+}
+
+.content-center-form label,
+.content-center-kinds legend {
+  font-size: .9rem;
+  font-weight: 750;
+  color: var(--muted-strong, var(--text));
+}
+
+.content-center-kinds {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.content-center-kinds legend {
+  margin-bottom: 8px;
+}
+
+.content-center-kind-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.content-center-kind-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid rgba(49, 92, 77, .14);
+  border-radius: 999px;
+  padding: 4px 11px;
+  background: rgba(250, 250, 247, .9);
+  cursor: pointer;
+}
+
+.content-center-kind-options input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.content-center-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.content-center-filter-grid label {
+  display: grid;
+  gap: 7px;
+}
+
+.content-center-filter-grid input,
+.content-center-filter-grid select {
+  width: 100%;
+}
+
+.content-center-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.content-center-results-section {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  border-top: 1px solid rgba(49, 92, 77, .12);
+  padding-top: 14px;
+}
+
+.content-center-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  flex: 0 0 auto;
+}
+
+.content-center-results-heading span {
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.content-center-results {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 9px;
+  padding: 2px 6px 8px 0;
+  scrollbar-gutter: stable;
+}
+
+.content-center-result-card {
+  display: block;
+  width: 100%;
+  border: 1px solid rgba(49, 92, 77, .12);
+  border-left-width: 4px;
+  border-radius: 14px;
+  padding: 13px 14px 13px 12px;
+  background: rgba(255, 255, 255, .7);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
+}
+
+.content-center-result-card.is-event { border-left-color: rgba(190, 126, 64, .65); }
+.content-center-result-card.is-memory { border-left-color: rgba(49, 92, 77, .62); }
+.content-center-result-card.is-plan { border-left-color: rgba(91, 103, 166, .58); }
+
+.content-center-result-card:hover,
+.content-center-result-card:focus-visible {
+  transform: translateY(-1px);
+  border-top-color: rgba(49, 92, 77, .28);
+  border-right-color: rgba(49, 92, 77, .28);
+  border-bottom-color: rgba(49, 92, 77, .28);
+  background: rgba(248, 250, 247, .98);
+  outline: none;
+}
+
+.content-center-result-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.content-center-result-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-center-result-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.content-center-kind-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+.content-center-kind-badge.is-event {
+  background: rgba(225, 166, 104, .16);
+  color: #8c5b2c;
+}
+
+.content-center-kind-badge.is-memory {
+  background: rgba(49, 92, 77, .1);
+  color: var(--accent);
+}
+
+.content-center-kind-badge.is-plan {
+  background: rgba(91, 103, 166, .12);
+  color: #586397;
+}
+
+.content-center-scope {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 650;
+}
+
+.content-center-result-card p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: .88rem;
+  line-height: 1.55;
+}
+
+.content-center-result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0 12px 10px;
+}
+
+.content-center-result-tags span {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(49, 92, 77, .09);
+  color: var(--accent);
+  font-size: .76rem;
+  font-weight: 700;
+}
+
+.content-center-empty {
+  display: grid;
+  place-items: center;
+  min-height: 112px;
+  border: 1px dashed rgba(49, 92, 77, .18);
+  border-radius: 14px;
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+  font-size: .9rem;
+}
+
+@media (max-width: 720px) {
+  .content-center-card {
+    width: calc(100vw - 18px);
+    max-height: 92vh;
+  }
+
+  .content-center-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .content-center-result-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .content-center-actions,
+  .content-center-actions button {
+    width: 100%;
+  }
+}
+
+/* LifeGraph v0.0.7.5：内容中心关键词与标签组合整理 */
+.content-center-keyword {
+  display: grid;
+  gap: 7px;
+}
+
+.content-center-keyword input {
+  width: 100%;
+}
+
+.content-center-tags {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.content-center-tags legend {
+  margin-bottom: 8px;
+  font-size: .9rem;
+  font-weight: 800;
+}
+
+.content-center-tags legend span {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 600;
+}
+
+.content-center-tag-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 34px;
+}
+
+.content-center-tag-chip {
+  min-height: 32px;
+  border: 1px solid rgba(49, 92, 77, .17);
+  border-radius: 999px;
+  padding: 4px 11px;
+  background: rgba(247, 250, 248, .86);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 750;
+}
+
+.content-center-tag-chip:hover,
+.content-center-tag-chip:focus-visible,
+.content-center-tag-chip.is-selected {
+  border-color: rgba(49, 92, 77, .42);
+  background: rgba(213, 231, 220, .88);
+  outline: none;
+}
+
+.content-center-tag-chip.is-selected::before {
+  content: "✓ ";
+}
+
+.content-center-tag-empty {
+  color: var(--muted);
+  font-size: .84rem;
+  line-height: 32px;
+}
+
+/* LifeGraph v0.0.7.6：内容中心快速标签整理 */
+.content-center-result-card {
+  padding: 0;
+  cursor: default;
+  overflow: hidden;
+}
+
+/* LifeGraph v0.0.7.6.2：结果卡片保持内容高度，列表区域独立滚动 */
+.content-center-results > .content-center-result-card,
+.content-center-results > .content-center-empty {
+  min-height: max-content;
+  align-self: start;
+}
+
+.content-center-result-main {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 13px 14px 11px 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.content-center-result-main:hover,
+.content-center-result-main:focus-visible {
+  background: rgba(248, 250, 247, .98);
+  outline: none;
+}
+
+.content-center-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid rgba(49, 92, 77, .08);
+  padding: 8px 12px 9px;
+  background: rgba(248, 250, 247, .62);
+}
+
+.content-center-result-actions > span {
+  color: var(--muted);
+  font-size: .74rem;
+}
+
+.content-center-quick-tag-toggle {
+  flex: 0 0 auto;
+  border: 1px solid rgba(49, 92, 77, .17);
+  border-radius: 999px;
+  padding: 5px 11px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+}
+
+.content-center-quick-tag-toggle:hover,
+.content-center-quick-tag-toggle:focus-visible,
+.content-center-quick-tag-toggle[aria-expanded="true"] {
+  border-color: rgba(49, 92, 77, .4);
+  background: rgba(213, 231, 220, .82);
+  outline: none;
+}
+
+.content-center-quick-tag-editor {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(49, 92, 77, .12);
+  padding: 12px;
+  background: rgba(239, 245, 241, .7);
+}
+
+.content-center-quick-tag-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.content-center-quick-tag-heading strong {
+  font-size: .88rem;
+}
+
+.content-center-quick-tag-heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.content-center-quick-tag-heading-actions button {
+  min-height: 34px;
+  border-radius: 11px;
+  padding: 0 12px;
+  font-size: .78rem;
+}
+
+.content-center-quick-tag-empty {
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.content-center-quick-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 31px;
+}
+
+.content-center-quick-tag-chip {
+  min-height: 30px;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, .88);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
+.content-center-quick-tag-chip:hover,
+.content-center-quick-tag-chip:focus-visible,
+.content-center-quick-tag-chip.is-selected {
+  border-color: rgba(49, 92, 77, .42);
+  background: rgba(213, 231, 220, .9);
+  outline: none;
+}
+
+.content-center-quick-tag-chip.is-selected::before {
+  content: "✓ ";
+}
+
+.content-center-quick-tag-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.content-center-quick-tag-create input {
+  width: 100%;
+  min-width: 0;
+}
+
+.content-center-quick-tag-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .content-center-result-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .content-center-quick-tag-heading {
+    align-items: stretch;
+  }
+
+  .content-center-quick-tag-heading-actions {
+    justify-content: flex-end;
+  }
+
+  .content-center-quick-tag-create {
+    grid-template-columns: 1fr;
+  }
+
+  .content-center-quick-tag-actions,
+  .content-center-quick-tag-actions button,
+  .content-center-quick-tag-create button {
+    width: 100%;
+  }
+}
+
+/* LifeGraph v0.0.7.7.1：内容中心空间利用优化 */
+.content-center-modal {
+  padding: 8px 12px;
+}
+
+.content-center-card {
+  width: min(1040px, calc(100vw - 20px));
+  height: min(96vh, 940px);
+  max-height: none;
+  padding: 24px 28px;
+}
+
+.content-center-header h2 {
+  margin-bottom: 4px;
+}
+
+.content-center-hint {
+  max-width: 820px;
+  font-size: .86rem;
+  line-height: 1.45;
+}
+
+.content-center-form {
+  grid-template-columns: minmax(260px, .95fr) minmax(420px, 1.7fr) auto;
+  grid-template-areas:
+    "keyword keyword actions"
+    "kinds filters filters"
+    "tags tags tags";
+  gap: 10px 14px;
+  padding: 12px 0 12px;
+}
+
+.content-center-keyword {
+  grid-area: keyword;
+}
+
+.content-center-kinds {
+  grid-area: kinds;
+}
+
+.content-center-filter-grid {
+  grid-area: filters;
+}
+
+.content-center-tags {
+  grid-area: tags;
+}
+
+.content-center-actions {
+  grid-area: actions;
+  align-self: end;
+}
+
+.content-center-kinds legend,
+.content-center-tags legend {
+  margin-bottom: 6px;
+}
+
+.content-center-results-section {
+  padding-top: 10px;
+}
+
+.content-center-results-heading {
+  padding-bottom: 8px;
+}
+
+.content-center-batch-toolbar {
+  min-height: 38px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+}
+
+@media (max-width: 900px) {
+  .content-center-card {
+    width: calc(100vw - 14px);
+    height: calc(100dvh - 14px);
+    padding: 22px;
+  }
+
+  .content-center-form {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "keyword"
+      "kinds"
+      "filters"
+      "tags"
+      "actions";
+  }
+}
+
+@media (max-height: 760px) and (min-width: 721px) {
+  .content-center-card {
+    height: calc(100vh - 12px);
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .content-center-hint {
+    display: none;
+  }
+
+  .content-center-form {
+    gap: 8px 12px;
+    padding: 9px 0;
+  }
+
+  .content-center-kind-options,
+  .content-center-tag-options {
+    gap: 6px;
+  }
+}
+
+/* LifeGraph v0.0.7.7：内容中心批量标签整理 */
+.content-center-batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-height: 42px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(49, 92, 77, .11);
+  border-radius: 12px;
+  padding: 7px 9px;
+  background: rgba(248, 250, 247, .72);
+}
+
+.content-center-select-all,
+.content-center-result-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-strong, var(--text));
+  cursor: pointer;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
+.content-center-select-all input,
+.content-center-result-select input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.content-center-batch-toolbar > strong {
+  margin-right: auto;
+  color: var(--accent);
+  font-size: .8rem;
+}
+
+.content-center-batch-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.content-center-batch-actions button {
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: .76rem;
+}
+
+.content-center-result-action-lead {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.content-center-open-hint {
+  color: var(--muted);
+  font-size: .74rem;
+}
+
+.content-center-batch-tag-editor {
+  display: grid;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(239, 245, 241, .82);
+}
+
+.content-center-batch-tag-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.content-center-batch-tag-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.content-center-batch-tag-heading strong {
+  font-size: .9rem;
+}
+
+.content-center-batch-tag-heading span,
+.content-center-batch-footer span {
+  color: var(--muted);
+  font-size: .75rem;
+}
+
+.content-center-batch-operation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.content-center-batch-operation label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 31px;
+  border: 1px solid rgba(49, 92, 77, .13);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, .75);
+  cursor: pointer;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
+.content-center-batch-operation input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.content-center-batch-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 31px;
+  max-height: 108px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.content-center-batch-tag-chip {
+  min-height: 30px;
+  border: 1px solid rgba(49, 92, 77, .16);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, .88);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 750;
+}
+
+.content-center-batch-tag-chip:hover,
+.content-center-batch-tag-chip:focus-visible,
+.content-center-batch-tag-chip.is-selected {
+  border-color: rgba(49, 92, 77, .42);
+  background: rgba(213, 231, 220, .9);
+  outline: none;
+}
+
+.content-center-batch-tag-chip.is-selected::before {
+  content: "✓ ";
+}
+
+.content-center-batch-tag-empty {
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 30px;
+}
+
+.content-center-batch-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.content-center-batch-create input {
+  min-width: 0;
+  width: 100%;
+}
+
+.content-center-batch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .content-center-batch-toolbar,
+  .content-center-batch-footer,
+  .content-center-result-action-lead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .content-center-batch-toolbar > strong {
+    margin-right: 0;
+  }
+
+  .content-center-batch-actions,
+  .content-center-batch-actions button,
+  .content-center-batch-create,
+  .content-center-batch-footer button {
+    width: 100%;
+  }
+
+  .content-center-batch-actions,
+  .content-center-batch-create {
+    grid-template-columns: 1fr;
+  }
+
+  .content-center-open-hint {
+    display: none;
+  }
+}
+
+/* v0.0.7.7.1 final compact overrides after batch organizer styles */
+.content-center-results-section .content-center-batch-toolbar {
+  min-height: 38px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+}
+
+/* LifeGraph v0.0.7.7.2：内容中心快速过滤行压缩 */
+.content-center-form {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "quick"
+    "filters"
+    "tags";
+}
+
+.content-center-quick-row {
+  grid-area: quick;
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  min-width: 0;
+}
+
+.content-center-keyword {
+  flex: 1 1 520px;
+  min-width: 260px;
+}
+
+.content-center-kinds {
+  flex: 0 0 auto;
+  align-self: end;
+  padding-bottom: 1px;
+}
+
+.content-center-kinds legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.content-center-kind-options {
+  flex-wrap: nowrap;
+}
+
+.content-center-actions {
+  flex: 0 0 auto;
+  align-self: end;
+}
+
+@media (max-width: 1050px) {
+  .content-center-quick-row {
+    flex-wrap: wrap;
+  }
+
+  .content-center-keyword {
+    flex-basis: calc(100% - 250px);
+  }
+
+  .content-center-actions {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .content-center-quick-row {
+    align-items: stretch;
+  }
+
+  .content-center-keyword,
+  .content-center-kinds,
+  .content-center-actions {
+    flex: 1 1 100%;
+  }
+
+  .content-center-kind-options {
+    flex-wrap: wrap;
+  }
+}
+
+
+/* LifeGraph v0.0.7.7.3：内容中心筛选标签改为控件前置 */
+.content-center-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.content-center-field-label {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--muted-strong, var(--text));
+  font-size: .88rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.content-center-keyword {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.content-center-keyword input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.content-center-filter-grid label.content-center-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.content-center-filter-grid label.content-center-inline-field input,
+.content-center-filter-grid label.content-center-inline-field select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .content-center-inline-field,
+  .content-center-keyword,
+  .content-center-filter-grid label.content-center-inline-field {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+}
+
+
+/* LifeGraph v0.0.7.7.5：内容中心批量工具栏移至结果区底部 */
+.content-center-results-section > .content-center-results {
+  margin-bottom: 8px;
+}
+
+.content-center-results-section > .content-center-batch-tag-editor {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  max-height: min(38vh, 330px);
+  overflow-y: auto;
+}
+
+.content-center-results-section > .content-center-batch-toolbar {
+  flex: 0 0 auto;
+  margin: 0;
+  box-shadow: 0 -5px 18px rgba(27, 53, 45, .04);
+}
+
+/* LifeGraph v0.0.7.7.6：内容中心标题分隔线与统计右对齐 */
+.content-center-header {
+  border-bottom: 1px solid rgba(49, 92, 77, .12);
+  padding-bottom: 12px;
+}
+
+.content-center-results-heading {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.content-center-results-heading > strong {
+  margin-left: auto;
+  text-align: right;
+}
+
+
+/* LifeGraph v0.0.7.7.7：内容中心批量整理按需进入 */
+.content-center-results-heading {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.content-center-results-heading > strong {
+  margin-left: 0;
+  text-align: left;
+}
+
+.content-center-results-heading .content-center-batch-mode-toggle {
+  margin-left: auto;
+  min-height: 34px;
+  padding: 0 14px;
+}
+
+.content-center-modal:not(.is-batch-mode) .content-center-result-select {
+  display: none;
+}
+
+.content-center-modal.is-batch-mode .content-center-result-action-lead {
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .content-center-results-heading {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .content-center-results-heading .content-center-batch-mode-toggle {
+    margin-left: auto;
+  }
+}
+
+/* LifeGraph v0.0.7.7.8：内容卡片标题行整合单条整理与批量选择 */
+.content-center-result-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px 0 12px;
+}
+
+.content-center-result-title-lead {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+
+.content-center-result-title-button {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.content-center-result-title-button:hover strong,
+.content-center-result-title-button:focus-visible strong {
+  color: var(--accent);
+}
+
+.content-center-result-title-button:focus-visible {
+  outline: 2px solid rgba(49, 92, 77, .24);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.content-center-result-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-center-result-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-center-result-top-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.content-center-result-main {
+  padding: 6px 14px 8px 12px;
+}
+
+.content-center-result-main p {
+  margin: 0;
+}
+
+.content-center-result-tags {
+  padding: 0 12px 12px;
+}
+
+.content-center-result-actions,
+.content-center-result-action-lead,
+.content-center-open-hint {
+  display: none !important;
+}
+
+.content-center-result-select {
+  flex: 0 0 auto;
+}
+
+.content-center-result-select span {
+  display: none;
+}
+
+.content-center-modal.is-batch-mode .content-center-quick-tag-toggle {
+  display: none;
+}
+
+.content-center-modal.is-batch-mode .content-center-result-title-lead {
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .content-center-result-top {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .content-center-result-top-actions {
+    gap: 8px;
+  }
+
+  .content-center-scope {
+    font-size: .72rem;
+  }
+
+  .content-center-quick-tag-toggle {
+    padding: 4px 8px;
+    font-size: .72rem;
+  }
+}
+
+
+/* LifeGraph v0.0.7.7.9：标签筛选与整理操作左右分栏 */
+.content-center-tags-row {
+  grid-area: tags;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 156px;
+  gap: 18px;
+  align-items: start;
+  min-width: 0;
+}
+
+.content-center-tags-row .content-center-tags {
+  grid-area: auto;
+  min-width: 0;
+}
+
+.content-center-tags-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: stretch;
+  justify-content: center;
+  margin: 0;
+}
+
+.content-center-tags-actions button {
+  width: 100%;
+  min-height: 38px;
+}
+
+@media (max-width: 720px) {
+  .content-center-tags-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .content-center-tags-actions {
+    flex-direction: row;
+  }
+
+  .content-center-tags-actions button {
+    flex: 1 1 0;
+  }
+}
+
+/* LifeGraph v0.0.7.7.10：固定标签筛选与操作按钮同一网格行 */
+.content-center-tags-row > .content-center-tags {
+  grid-area: auto;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.content-center-tags-row > .content-center-tags-actions {
+  grid-area: auto;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  justify-self: stretch;
+  justify-content: flex-start;
+}
+
+@media (max-width: 720px) {
+  .content-center-tags-row > .content-center-tags,
+  .content-center-tags-row > .content-center-tags-actions {
+    grid-column: 1;
+    grid-row: auto;
   }
 }

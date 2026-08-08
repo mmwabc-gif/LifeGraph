@@ -3,13 +3,14 @@ from __future__ import annotations
 import html
 import re
 import sqlite3
+from calendar import monthrange
 from pathlib import Path
 from typing import Any
 
 from app.security.crypto import decrypt_json, encrypt_json
 
 
-LATEST_SCHEMA_VERSION = 4
+LATEST_SCHEMA_VERSION = 5
 PROFILE_AAD = b"lifegraph:v1:profile"
 EVENT_AAD_PREFIX = b"lifegraph:v2:event:"
 MEMORY_AAD_PREFIX = b"lifegraph:v2:memory:"
@@ -105,11 +106,26 @@ class Database:
                     FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS content_tags (
+                    kind TEXT NOT NULL CHECK(kind IN ('event', 'memory', 'plan')),
+                    content_id TEXT NOT NULL,
+                    tag_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(kind, content_id, tag_id),
+                    FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_tags_profile
                 ON tags(profile_id, name);
 
                 CREATE INDEX IF NOT EXISTS idx_memory_tags_memory
                 ON memory_tags(memory_id);
+
+                CREATE INDEX IF NOT EXISTS idx_content_tags_content
+                ON content_tags(kind, content_id);
+
+                CREATE INDEX IF NOT EXISTS idx_content_tags_tag
+                ON content_tags(tag_id, kind);
 
 
                 CREATE TABLE IF NOT EXISTS profiles (
@@ -176,6 +192,17 @@ class Database:
                     """
                 )
                 self._ensure_period_columns(connection, table, date_column)
+
+            # v5: migrate existing memory-only tag links into the unified relation.
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO content_tags(kind, content_id, tag_id, created_at)
+                SELECT 'memory', memory_id, tag_id, created_at FROM memory_tags
+                """
+            )
+            # The legacy relation must be drained after migration; otherwise a tag
+            # detached in v5 would be copied back into content_tags on the next startup.
+            connection.execute("DELETE FROM memory_tags")
 
             connection.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
@@ -696,6 +723,10 @@ class Database:
                     f"内容已被其他操作更新，当前版本为 {row['revision']}"
                 )
             connection.execute(
+                "DELETE FROM content_tags WHERE kind=? AND content_id=?",
+                (kind, content_id),
+            )
+            connection.execute(
                 f"DELETE FROM {table} WHERE id=? AND profile_id=? AND deleted_at IS NOT NULL",
                 (content_id, profile_id),
             )
@@ -709,6 +740,15 @@ class Database:
         counts: dict[str, int] = {}
         with self.connect() as connection:
             for kind, (table, _, _) in _CONTENT_TABLES.items():
+                connection.execute(
+                    f"""
+                    DELETE FROM content_tags
+                    WHERE kind=? AND content_id IN (
+                        SELECT id FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL
+                    )
+                    """,
+                    (kind, profile_id),
+                )
                 cursor = connection.execute(
                     f"DELETE FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL",
                     (profile_id,),
@@ -840,6 +880,243 @@ class Database:
             master_key, profile_id=profile_id, time_scope="day", period_key=memory_date
         )
 
+    @staticmethod
+    def _content_period_bounds(time_scope: str, period_key: str, anchor_date: str) -> tuple[str, str]:
+        scope = time_scope or "day"
+        key = period_key or anchor_date
+        if scope == "year":
+            return f"{key[:4]}-01-01", f"{key[:4]}-12-31"
+        if scope == "month":
+            year, month = (int(part) for part in key[:7].split("-"))
+            last_day = monthrange(year, month)[1]
+            return f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last_day:02d}"
+        return key[:10], key[:10]
+
+    def browse_content(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        kinds: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "date_desc",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        selected_kinds = list(dict.fromkeys(kinds or list(_CONTENT_TABLES)))
+        selected_kinds = [kind for kind in selected_kinds if kind in _CONTENT_TABLES]
+        if not selected_kinds:
+            selected_kinds = list(_CONTENT_TABLES)
+
+        values: list[dict[str, Any]] = []
+        for kind in selected_kinds:
+            table, date_column, aad_prefix = _CONTENT_TABLES[kind]
+            with self.connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT id, profile_id, {date_column}, time_scope, period_key,
+                           nonce, ciphertext, created_at, updated_at, revision
+                    FROM {table}
+                    WHERE profile_id=? AND deleted_at IS NULL
+                    """,
+                    (profile_id,),
+                ).fetchall()
+
+            for row in rows:
+                period_start, period_end = self._content_period_bounds(
+                    row["time_scope"], row["period_key"], row[date_column]
+                )
+                if date_from and period_end < date_from:
+                    continue
+                if date_to and period_start > date_to:
+                    continue
+                payload = decrypt_json(
+                    master_key,
+                    row["nonce"],
+                    row["ciphertext"],
+                    aad=self._aad(aad_prefix, row["id"]),
+                )
+                values.append(
+                    {
+                        "id": row["id"],
+                        "kind": kind,
+                        "profile_id": row["profile_id"],
+                        "anchor_date": row[date_column],
+                        date_column: row[date_column],
+                        "time_scope": row["time_scope"],
+                        "period_key": row["period_key"],
+                        **payload,
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "revision": row["revision"],
+                    }
+                )
+
+        if sort == "date_asc":
+            values.sort(key=lambda item: (item["anchor_date"], item["created_at"], item["id"]))
+        elif sort == "updated_desc":
+            values.sort(
+                key=lambda item: (item["updated_at"], item["anchor_date"], item["id"]),
+                reverse=True,
+            )
+        else:
+            values.sort(
+                key=lambda item: (item["anchor_date"], item["created_at"], item["id"]),
+                reverse=True,
+            )
+
+        total = len(values)
+        counts = {kind: 0 for kind in _CONTENT_TABLES}
+        for item in values:
+            counts[item["kind"]] += 1
+
+        has_more = total > limit
+        page = values[:limit]
+        for kind in _CONTENT_TABLES:
+            content_ids = [item["id"] for item in page if item["kind"] == kind]
+            tags_by_content = self.list_content_tags_for_items(
+                profile_id=profile_id, kind=kind, content_ids=content_ids
+            )
+            for item in page:
+                if item["kind"] == kind:
+                    item["tags"] = tags_by_content.get(item["id"], [])
+
+        return {
+            "items": page,
+            "count": len(page),
+            "total": total,
+            "counts": counts,
+            "has_more": has_more,
+        }
+
+    def search_content(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        query: str = "",
+        kinds: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "date_desc",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        selected_kinds = list(dict.fromkeys(kinds or list(_CONTENT_TABLES)))
+        selected_kinds = [kind for kind in selected_kinds if kind in _CONTENT_TABLES]
+        if not selected_kinds:
+            selected_kinds = list(_CONTENT_TABLES)
+
+        tag_ids = list(dict.fromkeys(tag_ids or []))
+        normalized_query = query.strip().casefold()
+        values: list[dict[str, Any]] = []
+
+        for kind in selected_kinds:
+            table, date_column, aad_prefix = _CONTENT_TABLES[kind]
+            where = [f"c.profile_id=?", "c.deleted_at IS NULL"]
+            params: list[Any] = [profile_id]
+            if tag_ids:
+                placeholders = ",".join("?" for _ in tag_ids)
+                where.append(
+                    f"""
+                    c.id IN (
+                        SELECT ct.content_id
+                        FROM content_tags ct
+                        JOIN tags t ON t.id=ct.tag_id
+                        WHERE ct.kind=? AND t.profile_id=? AND ct.tag_id IN ({placeholders})
+                        GROUP BY ct.content_id
+                        HAVING COUNT(DISTINCT ct.tag_id)=?
+                    )
+                    """
+                )
+                params.extend([kind, profile_id, *tag_ids, len(tag_ids)])
+
+            with self.connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT c.id, c.profile_id, c.{date_column}, c.time_scope, c.period_key,
+                           c.nonce, c.ciphertext, c.created_at, c.updated_at, c.revision
+                    FROM {table} c
+                    WHERE {' AND '.join(where)}
+                    """,
+                    params,
+                ).fetchall()
+
+            for row in rows:
+                period_start, period_end = self._content_period_bounds(
+                    row["time_scope"], row["period_key"], row[date_column]
+                )
+                if date_from and period_end < date_from:
+                    continue
+                if date_to and period_start > date_to:
+                    continue
+
+                payload = decrypt_json(
+                    master_key,
+                    row["nonce"],
+                    row["ciphertext"],
+                    aad=self._aad(aad_prefix, row["id"]),
+                )
+                if normalized_query:
+                    content = str(payload.get("content", ""))
+                    if payload.get("content_format") == "html":
+                        content = html.unescape(re.sub(r"<[^>]+>", " ", content))
+                    content = re.sub(r"\s+", " ", content).strip()
+                    haystack = f"{payload.get('title', '')}\n{content}".casefold()
+                    if normalized_query not in haystack:
+                        continue
+
+                values.append(
+                    {
+                        "id": row["id"],
+                        "kind": kind,
+                        "profile_id": row["profile_id"],
+                        "anchor_date": row[date_column],
+                        date_column: row[date_column],
+                        "time_scope": row["time_scope"],
+                        "period_key": row["period_key"],
+                        **payload,
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "revision": row["revision"],
+                    }
+                )
+
+        if sort == "date_asc":
+            values.sort(key=lambda item: (item["anchor_date"], item["created_at"], item["id"]))
+        elif sort == "updated_desc":
+            values.sort(
+                key=lambda item: (item["updated_at"], item["anchor_date"], item["id"]),
+                reverse=True,
+            )
+        else:
+            values.sort(
+                key=lambda item: (item["anchor_date"], item["created_at"], item["id"]),
+                reverse=True,
+            )
+        total = len(values)
+        counts = {kind: 0 for kind in _CONTENT_TABLES}
+        for item in values:
+            counts[item["kind"]] += 1
+
+        page = values[:limit]
+        for kind in _CONTENT_TABLES:
+            content_ids = [item["id"] for item in page if item["kind"] == kind]
+            tags_by_content = self.list_content_tags_for_items(
+                profile_id=profile_id, kind=kind, content_ids=content_ids
+            )
+            for item in page:
+                if item["kind"] == kind:
+                    item["tags"] = tags_by_content.get(item["id"], [])
+
+        return {
+            "items": page,
+            "count": len(page),
+            "total": total,
+            "counts": counts,
+            "has_more": total > limit,
+        }
+
     def search_memories(
         self,
         master_key: bytes,
@@ -851,86 +1128,98 @@ class Database:
         date_to: str | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
-        tag_ids = list(dict.fromkeys(tag_ids or []))
-        where = ["m.profile_id=?", "m.deleted_at IS NULL"]
-        params: list[Any] = [profile_id]
-
-        if date_from:
-            where.append("m.memory_date>=?")
-            params.append(date_from)
-        if date_to:
-            where.append("m.memory_date<=?")
-            params.append(date_to)
-        if tag_ids:
-            placeholders = ",".join("?" for _ in tag_ids)
-            where.append(
-                f"""
-                m.id IN (
-                    SELECT mt.memory_id
-                    FROM memory_tags mt
-                    JOIN tags t ON t.id=mt.tag_id
-                    WHERE t.profile_id=? AND mt.tag_id IN ({placeholders})
-                    GROUP BY mt.memory_id
-                    HAVING COUNT(DISTINCT mt.tag_id)=?
-                )
-                """
-            )
-            params.extend([profile_id, *tag_ids, len(tag_ids)])
-
-        with self.connect() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT m.id, m.profile_id, m.memory_date, m.time_scope, m.period_key,
-                       m.nonce, m.ciphertext, m.created_at, m.updated_at, m.revision
-                FROM memories m
-                WHERE {' AND '.join(where)}
-                ORDER BY m.memory_date DESC, m.created_at DESC, m.id DESC
-                """,
-                params,
-            ).fetchall()
-
-        normalized_query = query.strip().casefold()
-        values: list[dict[str, Any]] = []
-        has_more = False
-        for row in rows:
-            payload = decrypt_json(
-                master_key,
-                row["nonce"],
-                row["ciphertext"],
-                aad=self._aad(MEMORY_AAD_PREFIX, row["id"]),
-            )
-            if normalized_query:
-                content = str(payload.get("content", ""))
-                if payload.get("content_format") == "html":
-                    content = html.unescape(re.sub(r"<[^>]+>", " ", content))
-                content = re.sub(r"\s+", " ", content).strip()
-                haystack = f"{payload.get('title', '')}\n{content}".casefold()
-                if normalized_query not in haystack:
-                    continue
-            values.append(
-                {
-                    "id": row["id"],
-                    "profile_id": row["profile_id"],
-                    "memory_date": row["memory_date"],
-                    "time_scope": row["time_scope"],
-                    "period_key": row["period_key"],
-                    **payload,
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                    "revision": row["revision"],
-                }
-            )
-            if len(values) > limit:
-                has_more = True
-                values = values[:limit]
-                break
-
-        tags_by_memory = self.list_memory_tags_for_memories(
-            profile_id=profile_id, memory_ids=[item["id"] for item in values]
+        return self.search_content(
+            master_key,
+            profile_id=profile_id,
+            query=query,
+            kinds=["memory"],
+            tag_ids=tag_ids,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
         )
-        for item in values:
-            item["tags"] = tags_by_memory.get(item["id"], [])
-        return {"items": values, "count": len(values), "has_more": has_more}
+
+    def get_content_tag_map(
+        self,
+        *,
+        profile_id: str,
+        tag_ids: list[str],
+        start_date: str,
+        end_date: str,
+        kinds: list[str] | None = None,
+    ) -> dict[str, Any]:
+        tag_ids = list(dict.fromkeys(tag_ids))
+        selected_kinds = list(dict.fromkeys(kinds or list(_CONTENT_TABLES)))
+        selected_kinds = [kind for kind in selected_kinds if kind in _CONTENT_TABLES]
+        if not selected_kinds:
+            selected_kinds = list(_CONTENT_TABLES)
+
+        result: dict[str, Any] = {
+            "dates": [],
+            "months": [],
+            "years": [],
+            "content_count": 0,
+            "counts": {kind: 0 for kind in _CONTENT_TABLES},
+        }
+        if not tag_ids:
+            return result
+
+        placeholders = ",".join("?" for _ in tag_ids)
+        dates: set[str] = set()
+        months: set[str] = set()
+        years: set[str] = set()
+        visible_ids: set[tuple[str, str]] = set()
+
+        for kind in selected_kinds:
+            table, date_column, _ = _CONTENT_TABLES[kind]
+            with self.connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT c.id, c.{date_column} AS anchor_date, c.time_scope, c.period_key
+                    FROM {table} c
+                    JOIN content_tags ct ON ct.content_id=c.id AND ct.kind=?
+                    JOIN tags t ON t.id=ct.tag_id
+                    WHERE c.profile_id=? AND t.profile_id=?
+                      AND c.deleted_at IS NULL
+                      AND ct.tag_id IN ({placeholders})
+                    GROUP BY c.id, c.{date_column}, c.time_scope, c.period_key
+                    HAVING COUNT(DISTINCT ct.tag_id)=?
+                    ORDER BY c.{date_column}, c.created_at, c.id
+                    """,
+                    (kind, profile_id, profile_id, *tag_ids, len(tag_ids)),
+                ).fetchall()
+
+            for row in rows:
+                scope = row["time_scope"] or "day"
+                key = row["period_key"] or row["anchor_date"]
+                period_start, period_end = self._content_period_bounds(
+                    scope, key, row["anchor_date"]
+                )
+                if period_end < start_date or period_start > end_date:
+                    continue
+
+                marker = (kind, row["id"])
+                if marker not in visible_ids:
+                    visible_ids.add(marker)
+                    result["counts"][kind] += 1
+
+                if scope == "day":
+                    day_key = key[:10]
+                    dates.add(day_key)
+                    months.add(day_key[:7])
+                    years.add(day_key[:4])
+                elif scope == "month":
+                    month_key = key[:7]
+                    months.add(month_key)
+                    years.add(month_key[:4])
+                elif scope == "year":
+                    years.add(key[:4])
+
+        result["dates"] = sorted(dates)
+        result["months"] = sorted(months)
+        result["years"] = sorted(years)
+        result["content_count"] = len(visible_ids)
+        return result
 
     def get_memory_tag_map(
         self,
@@ -940,67 +1229,14 @@ class Database:
         start_date: str,
         end_date: str,
     ) -> dict[str, Any]:
-        tag_ids = list(dict.fromkeys(tag_ids))
-        result: dict[str, Any] = {
-            "dates": [],
-            "months": [],
-            "years": [],
-            "memory_count": 0,
-        }
-        if not tag_ids:
-            return result
-
-        placeholders = ",".join("?" for _ in tag_ids)
-        with self.connect() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT m.id, m.memory_date, m.time_scope, m.period_key
-                FROM memories m
-                JOIN memory_tags mt ON mt.memory_id=m.id
-                JOIN tags t ON t.id=mt.tag_id
-                WHERE m.profile_id=? AND t.profile_id=?
-                  AND m.deleted_at IS NULL
-                  AND mt.tag_id IN ({placeholders})
-                GROUP BY m.id, m.memory_date, m.time_scope, m.period_key
-                HAVING COUNT(DISTINCT mt.tag_id)=?
-                ORDER BY m.memory_date, m.created_at, m.id
-                """,
-                (profile_id, profile_id, *tag_ids, len(tag_ids)),
-            ).fetchall()
-
-        dates: set[str] = set()
-        months: set[str] = set()
-        years: set[str] = set()
-        visible_memory_ids: set[str] = set()
-        for row in rows:
-            scope = row["time_scope"] or "day"
-            key = row["period_key"] or row["memory_date"]
-            if scope == "day":
-                visible = start_date <= key <= end_date
-            elif scope == "month":
-                visible = start_date[:7] <= key[:7] <= end_date[:7]
-            elif scope == "year":
-                visible = start_date[:4] <= key[:4] <= end_date[:4]
-            else:
-                visible = False
-            if not visible:
-                continue
-
-            visible_memory_ids.add(row["id"])
-            if scope == "day":
-                dates.add(key)
-                months.add(key[:7])
-                years.add(key[:4])
-            elif scope == "month":
-                months.add(key[:7])
-                years.add(key[:4])
-            elif scope == "year":
-                years.add(key[:4])
-
-        result["dates"] = sorted(dates)
-        result["months"] = sorted(months)
-        result["years"] = sorted(years)
-        result["memory_count"] = len(visible_memory_ids)
+        result = self.get_content_tag_map(
+            profile_id=profile_id,
+            tag_ids=tag_ids,
+            start_date=start_date,
+            end_date=end_date,
+            kinds=["memory"],
+        )
+        result["memory_count"] = result["counts"]["memory"]
         return result
 
     def update_memory(
@@ -1181,6 +1417,38 @@ class Database:
         return result
 
 
+    def _tag_counts_for_row(self, connection: sqlite3.Connection, *, profile_id: str, tag_id: str) -> dict[str, int]:
+        counts = {"event_count": 0, "memory_count": 0, "plan_count": 0}
+        for kind, (table, _, _) in _CONTENT_TABLES.items():
+            row = connection.execute(
+                f"""
+                SELECT COUNT(DISTINCT ct.content_id) AS count
+                FROM content_tags ct
+                JOIN {table} c ON c.id=ct.content_id
+                WHERE ct.kind=? AND ct.tag_id=?
+                  AND c.profile_id=? AND c.deleted_at IS NULL
+                """,
+                (kind, tag_id, profile_id),
+            ).fetchone()
+            counts[f"{kind}_count"] = int(row["count"] or 0)
+        counts["total_count"] = sum(counts.values())
+        return counts
+
+    def _tag_row(self, connection: sqlite3.Connection, *, profile_id: str, tag_id: str) -> dict[str, Any] | None:
+        row = connection.execute(
+            """
+            SELECT id, name, color, created_at, updated_at
+            FROM tags
+            WHERE id=? AND profile_id=?
+            """,
+            (tag_id, profile_id),
+        ).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        value.update(self._tag_counts_for_row(connection, profile_id=profile_id, tag_id=tag_id))
+        return value
+
     def create_tag(self, *, profile_id: str, tag_id: str, name: str, color: str | None, timestamp: str) -> dict[str, Any]:
         with self.connect() as connection:
             connection.execute(
@@ -1196,25 +1464,29 @@ class Database:
                 "color": color,
                 "created_at": timestamp,
                 "updated_at": timestamp,
+                "event_count": 0,
                 "memory_count": 0,
+                "plan_count": 0,
+                "total_count": 0,
             }
 
     def list_tags(self, *, profile_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT t.id, t.name, t.color, t.created_at, t.updated_at,
-                       COUNT(DISTINCT CASE WHEN m.deleted_at IS NULL THEN mt.memory_id END) AS memory_count
-                FROM tags t
-                LEFT JOIN memory_tags mt ON mt.tag_id=t.id
-                LEFT JOIN memories m ON m.id=mt.memory_id AND m.profile_id=t.profile_id
-                WHERE t.profile_id=?
-                GROUP BY t.id, t.name, t.color, t.created_at, t.updated_at
-                ORDER BY t.name COLLATE NOCASE, t.created_at, t.id
+                SELECT id, name, color, created_at, updated_at
+                FROM tags
+                WHERE profile_id=?
+                ORDER BY name COLLATE NOCASE, created_at, id
                 """,
                 (profile_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            values: list[dict[str, Any]] = []
+            for row in rows:
+                value = dict(row)
+                value.update(self._tag_counts_for_row(connection, profile_id=profile_id, tag_id=row["id"]))
+                values.append(value)
+            return values
 
     def update_tag(
         self,
@@ -1236,36 +1508,14 @@ class Database:
             )
             if cursor.rowcount != 1:
                 raise DatabaseContentNotFound("标签不存在")
-            row = connection.execute(
-                """
-                SELECT t.id, t.name, t.color, t.created_at, t.updated_at,
-                       COUNT(DISTINCT CASE WHEN m.deleted_at IS NULL THEN mt.memory_id END) AS memory_count
-                FROM tags t
-                LEFT JOIN memory_tags mt ON mt.tag_id=t.id
-                LEFT JOIN memories m ON m.id=mt.memory_id AND m.profile_id=t.profile_id
-                WHERE t.id=? AND t.profile_id=?
-                GROUP BY t.id, t.name, t.color, t.created_at, t.updated_at
-                """,
-                (tag_id, profile_id),
-            ).fetchone()
+            row = self._tag_row(connection, profile_id=profile_id, tag_id=tag_id)
             if row is None:  # pragma: no cover - defensive
                 raise DatabaseContentNotFound("标签不存在")
-            return dict(row)
+            return row
 
     def delete_tag(self, *, profile_id: str, tag_id: str) -> dict[str, Any]:
         with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT t.id, t.name,
-                       COUNT(DISTINCT CASE WHEN m.deleted_at IS NULL THEN mt.memory_id END) AS memory_count
-                FROM tags t
-                LEFT JOIN memory_tags mt ON mt.tag_id=t.id
-                LEFT JOIN memories m ON m.id=mt.memory_id AND m.profile_id=t.profile_id
-                WHERE t.id=? AND t.profile_id=?
-                GROUP BY t.id, t.name
-                """,
-                (tag_id, profile_id),
-            ).fetchone()
+            row = self._tag_row(connection, profile_id=profile_id, tag_id=tag_id)
             if row is None:
                 raise DatabaseContentNotFound("标签不存在")
             connection.execute(
@@ -1275,20 +1525,32 @@ class Database:
             return {
                 "id": row["id"],
                 "name": row["name"],
-                "memory_count": int(row["memory_count"] or 0),
+                "event_count": row["event_count"],
+                "memory_count": row["memory_count"],
+                "plan_count": row["plan_count"],
+                "total_count": row["total_count"],
                 "deleted": True,
             }
 
-    def attach_memory_tag(
-        self, *, profile_id: str, memory_id: str, tag_id: str, timestamp: str
+    def attach_content_tag(
+        self,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+        tag_id: str,
+        timestamp: str,
     ) -> bool:
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        table, _, _ = _CONTENT_TABLES[kind]
         with self.connect() as connection:
             cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO memory_tags(memory_id, tag_id, created_at)
-                SELECT ?, ?, ?
+                f"""
+                INSERT OR IGNORE INTO content_tags(kind, content_id, tag_id, created_at)
+                SELECT ?, ?, ?, ?
                 WHERE EXISTS (
-                    SELECT 1 FROM memories
+                    SELECT 1 FROM {table}
                     WHERE id=? AND profile_id=? AND deleted_at IS NULL
                 )
                 AND EXISTS (
@@ -1296,75 +1558,251 @@ class Database:
                     WHERE id=? AND profile_id=?
                 )
                 """,
-                (memory_id, tag_id, timestamp, memory_id, profile_id, tag_id, profile_id),
+                (kind, content_id, tag_id, timestamp, content_id, profile_id, tag_id, profile_id),
             )
             if cursor.rowcount:
                 return True
             existing = connection.execute(
-                """
+                f"""
                 SELECT 1
-                FROM memory_tags mt
-                JOIN memories m ON m.id=mt.memory_id
-                JOIN tags t ON t.id=mt.tag_id
-                WHERE mt.memory_id=? AND mt.tag_id=?
-                  AND m.profile_id=? AND t.profile_id=?
-                  AND m.deleted_at IS NULL
+                FROM content_tags ct
+                JOIN {table} c ON c.id=ct.content_id
+                JOIN tags t ON t.id=ct.tag_id
+                WHERE ct.kind=? AND ct.content_id=? AND ct.tag_id=?
+                  AND c.profile_id=? AND t.profile_id=?
+                  AND c.deleted_at IS NULL
                 """,
-                (memory_id, tag_id, profile_id, profile_id),
+                (kind, content_id, tag_id, profile_id, profile_id),
             ).fetchone()
             return existing is not None
 
-    def detach_memory_tag(self, *, profile_id: str, memory_id: str, tag_id: str) -> bool:
+    def detach_content_tag(self, *, profile_id: str, kind: str, content_id: str, tag_id: str) -> bool:
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        table, _, _ = _CONTENT_TABLES[kind]
         with self.connect() as connection:
             cursor = connection.execute(
-                """
-                DELETE FROM memory_tags
-                WHERE memory_id=? AND tag_id=?
+                f"""
+                DELETE FROM content_tags
+                WHERE kind=? AND content_id=? AND tag_id=?
                   AND EXISTS (
-                      SELECT 1 FROM memories
-                      WHERE memories.id=memory_tags.memory_id
-                        AND memories.profile_id=?
-                        AND memories.deleted_at IS NULL
+                      SELECT 1 FROM {table}
+                      WHERE {table}.id=content_tags.content_id
+                        AND {table}.profile_id=?
+                        AND {table}.deleted_at IS NULL
                   )
                   AND EXISTS (
                       SELECT 1 FROM tags
-                      WHERE tags.id=memory_tags.tag_id
+                      WHERE tags.id=content_tags.tag_id
                         AND tags.profile_id=?
                   )
                 """,
-                (memory_id, tag_id, profile_id, profile_id),
+                (kind, content_id, tag_id, profile_id, profile_id),
             )
             return bool(cursor.rowcount)
 
-    def list_memory_tags(self, *, profile_id: str, memory_id: str) -> list[dict[str, Any]]:
-        return self.list_memory_tags_for_memories(
-            profile_id=profile_id, memory_ids=[memory_id]
-        ).get(memory_id, [])
+    def replace_content_tags(
+        self,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+        tag_ids: list[str],
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        table, _, _ = _CONTENT_TABLES[kind]
+        desired_ids = list(dict.fromkeys(tag_ids))
+        with self.connect() as connection:
+            content_exists = connection.execute(
+                f"""
+                SELECT 1 FROM {table}
+                WHERE id=? AND profile_id=? AND deleted_at IS NULL
+                """,
+                (content_id, profile_id),
+            ).fetchone()
+            if content_exists is None:
+                raise DatabaseContentNotFound("内容不存在")
 
-    def list_memory_tags_for_memories(
-        self, *, profile_id: str, memory_ids: list[str]
+            if desired_ids:
+                placeholders = ",".join("?" for _ in desired_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT id FROM tags
+                    WHERE profile_id=? AND id IN ({placeholders})
+                    """,
+                    (profile_id, *desired_ids),
+                ).fetchall()
+                valid_ids = {row["id"] for row in rows}
+                if valid_ids != set(desired_ids):
+                    raise DatabaseContentNotFound("标签不存在")
+
+            connection.execute(
+                "DELETE FROM content_tags WHERE kind=? AND content_id=?",
+                (kind, content_id),
+            )
+            if desired_ids:
+                connection.executemany(
+                    """
+                    INSERT INTO content_tags(kind, content_id, tag_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [(kind, content_id, tag_id, timestamp) for tag_id in desired_ids],
+                )
+
+        return self.list_content_tags(profile_id=profile_id, kind=kind, content_id=content_id)
+
+    def bulk_update_content_tags(
+        self,
+        *,
+        profile_id: str,
+        items: list[dict[str, str]],
+        tag_ids: list[str],
+        operation: str,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        if operation not in {"add", "remove"}:
+            raise ValueError("不支持的批量标签操作")
+
+        unique_items: list[dict[str, str]] = []
+        seen_items: set[tuple[str, str]] = set()
+        for raw in items:
+            kind = str(raw.get("kind") or "").strip()
+            content_id = str(raw.get("content_id") or "").strip()
+            if kind not in _CONTENT_TABLES or not content_id:
+                raise DatabaseContentNotFound("内容不存在")
+            key = (kind, content_id)
+            if key in seen_items:
+                continue
+            seen_items.add(key)
+            unique_items.append({"kind": kind, "content_id": content_id})
+
+        desired_tag_ids = list(dict.fromkeys(tag_ids))
+        if not unique_items:
+            raise DatabaseContentNotFound("内容不存在")
+        if not desired_tag_ids:
+            raise DatabaseContentNotFound("标签不存在")
+
+        with self.connect() as connection:
+            tag_placeholders = ",".join("?" for _ in desired_tag_ids)
+            tag_rows = connection.execute(
+                f"""
+                SELECT id FROM tags
+                WHERE profile_id=? AND id IN ({tag_placeholders})
+                """,
+                (profile_id, *desired_tag_ids),
+            ).fetchall()
+            if {row["id"] for row in tag_rows} != set(desired_tag_ids):
+                raise DatabaseContentNotFound("标签不存在")
+
+            for item in unique_items:
+                table, _, _ = _CONTENT_TABLES[item["kind"]]
+                exists = connection.execute(
+                    f"""
+                    SELECT 1 FROM {table}
+                    WHERE id=? AND profile_id=? AND deleted_at IS NULL
+                    """,
+                    (item["content_id"], profile_id),
+                ).fetchone()
+                if exists is None:
+                    raise DatabaseContentNotFound("内容不存在")
+
+            if operation == "add":
+                connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO content_tags(kind, content_id, tag_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (item["kind"], item["content_id"], tag_id, timestamp)
+                        for item in unique_items
+                        for tag_id in desired_tag_ids
+                    ],
+                )
+            else:
+                delete_placeholders = ",".join("?" for _ in desired_tag_ids)
+                for item in unique_items:
+                    connection.execute(
+                        f"""
+                        DELETE FROM content_tags
+                        WHERE kind=? AND content_id=? AND tag_id IN ({delete_placeholders})
+                        """,
+                        (item["kind"], item["content_id"], *desired_tag_ids),
+                    )
+
+        grouped: dict[str, list[str]] = {}
+        for item in unique_items:
+            grouped.setdefault(item["kind"], []).append(item["content_id"])
+        tags_by_kind = {
+            kind: self.list_content_tags_for_items(
+                profile_id=profile_id, kind=kind, content_ids=content_ids
+            )
+            for kind, content_ids in grouped.items()
+        }
+        return [
+            {
+                "kind": item["kind"],
+                "content_id": item["content_id"],
+                "tags": tags_by_kind.get(item["kind"], {}).get(item["content_id"], []),
+            }
+            for item in unique_items
+        ]
+
+    def list_content_tags(self, *, profile_id: str, kind: str, content_id: str) -> list[dict[str, Any]]:
+        return self.list_content_tags_for_items(
+            profile_id=profile_id, kind=kind, content_ids=[content_id]
+        ).get(content_id, [])
+
+    def list_content_tags_for_items(
+        self, *, profile_id: str, kind: str, content_ids: list[str]
     ) -> dict[str, list[dict[str, Any]]]:
-        unique_ids = list(dict.fromkeys(memory_ids))
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        unique_ids = list(dict.fromkeys(content_ids))
         if not unique_ids:
             return {}
+        table, _, _ = _CONTENT_TABLES[kind]
         placeholders = ",".join("?" for _ in unique_ids)
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT mt.memory_id, t.id, t.name, t.color
+                SELECT ct.content_id, t.id, t.name, t.color
                 FROM tags t
-                JOIN memory_tags mt ON mt.tag_id=t.id
-                JOIN memories m ON m.id=mt.memory_id
-                WHERE mt.memory_id IN ({placeholders})
-                  AND m.profile_id=? AND t.profile_id=?
-                  AND m.deleted_at IS NULL
-                ORDER BY mt.memory_id, t.name
+                JOIN content_tags ct ON ct.tag_id=t.id
+                JOIN {table} c ON c.id=ct.content_id
+                WHERE ct.kind=? AND ct.content_id IN ({placeholders})
+                  AND c.profile_id=? AND t.profile_id=?
+                  AND c.deleted_at IS NULL
+                ORDER BY ct.content_id, t.name COLLATE NOCASE, t.id
                 """,
-                (*unique_ids, profile_id, profile_id),
+                (kind, *unique_ids, profile_id, profile_id),
             ).fetchall()
-        result = {memory_id: [] for memory_id in unique_ids}
+        result = {content_id: [] for content_id in unique_ids}
         for row in rows:
-            result[row["memory_id"]].append(
+            result[row["content_id"]].append(
                 {"id": row["id"], "name": row["name"], "color": row["color"]}
             )
         return result
+
+    # Compatibility wrappers used by existing memory-specific search/filter APIs.
+    def attach_memory_tag(self, *, profile_id: str, memory_id: str, tag_id: str, timestamp: str) -> bool:
+        return self.attach_content_tag(
+            profile_id=profile_id, kind="memory", content_id=memory_id, tag_id=tag_id, timestamp=timestamp
+        )
+
+    def detach_memory_tag(self, *, profile_id: str, memory_id: str, tag_id: str) -> bool:
+        return self.detach_content_tag(
+            profile_id=profile_id, kind="memory", content_id=memory_id, tag_id=tag_id
+        )
+
+    def list_memory_tags(self, *, profile_id: str, memory_id: str) -> list[dict[str, Any]]:
+        return self.list_content_tags(profile_id=profile_id, kind="memory", content_id=memory_id)
+
+    def list_memory_tags_for_memories(
+        self, *, profile_id: str, memory_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        return self.list_content_tags_for_items(
+            profile_id=profile_id, kind="memory", content_ids=memory_ids
+        )
+
