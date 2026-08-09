@@ -81,15 +81,15 @@ def test_auto_backup_policy_creates_initial_backup_and_history(tmp_path: Path) -
     assert history.status_code == 200
     item = history.json()["data"]["items"][0]
     assert item["valid"] is True
-    assert item["schema_version"] == 5
-    assert item["producer_version"] == "0.0.7"
+    assert item["schema_version"] == 7
+    assert item["producer_version"] == "0.0.8"
 
     downloaded = client.get(
         f"/api/v1/backup/auto/history/{item['filename']}", headers=headers
     )
     assert downloaded.status_code == 200
     package = inspect_lifevault_package(downloaded.content)
-    assert package.manifest["producer"]["version"] == "0.0.7"
+    assert package.manifest["producer"]["version"] == "0.0.8"
     assert "自动备份测试者".encode("utf-8") not in downloaded.content
     assert "首个事件".encode("utf-8") not in downloaded.content
     metadata = json.loads(package.metadata_bytes.decode("utf-8"))
@@ -202,7 +202,7 @@ def test_automatic_backup_failure_does_not_fail_saved_content(
     def fail_backup(**_kwargs):
         raise OSError("simulated automatic backup disk failure")
 
-    monkeypatch.setattr("app.security.vault.build_lifevault_backup", fail_backup)
+    monkeypatch.setattr("app.security.vault.build_lifevault_backup_file", fail_backup)
     response = client.post(
         "/api/v1/events",
         headers=headers,

@@ -18,11 +18,11 @@ def test_release_version_is_consistent(tmp_path: Path) -> None:
 
     health = client.get("/health")
     assert health.status_code == 200
-    assert health.json()["version"] == "0.0.7"
+    assert health.json()["version"] == "0.0.8"
 
     status = client.get("/api/v1/system/status")
     assert status.status_code == 200
-    assert status.json()["data"]["version"] == "0.0.7"
+    assert status.json()["data"]["version"] == "0.0.8"
 
 
 

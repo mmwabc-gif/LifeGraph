@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import heapq
 import json
 import os
 import secrets
+import shutil
 import threading
 import uuid
+import zipfile
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -20,14 +24,25 @@ from app.security.crypto import (
     wrap_master_key,
 )
 from app.security.sessions import Session, SessionManager
+from app.services.attachments import (
+    AttachmentFileError,
+    AttachmentStore,
+    MAX_ATTACHMENT_BYTES,
+    extract_attachment_time_metadata,
+    fallback_attachment_timeline_metadata,
+)
 from app.services.backup import (
     BackupArtifact,
+    BackupFileArtifact,
     LifeVaultPackage,
     LifeVaultPackageError,
     build_lifevault_backup,
+    build_lifevault_backup_file,
+    inspect_lifevault_file,
     inspect_lifevault_package,
     sha256_bytes,
     verify_lifevault_database,
+    verify_lifevault_file,
 )
 from app.services.progress import add_years, today_for_timezone
 from app.storage.database import (
@@ -74,16 +89,22 @@ class TagConflict(VaultError):
     pass
 
 
+class MaterialDuplicate(VaultError):
+    pass
+
+
 class VaultManager:
     def __init__(
         self,
         data_dir: Path,
         session_ttl_seconds: int = 1800,
-        app_version: str = "0.0.7",
+        app_version: str = "0.0.8",
     ) -> None:
         self.data_dir = data_dir
         self.metadata_path = data_dir / "vault.json"
         self.database = Database(data_dir / "lifegraph.db")
+        self.attachment_store = AttachmentStore(data_dir / "attachments")
+        self.attachment_store.migrate_legacy_layout()
         self.auto_backup_dir = data_dir / "backups" / "auto"
         self.app_version = app_version
         self.sessions = SessionManager(session_ttl_seconds)
@@ -429,17 +450,18 @@ class VaultManager:
                     "valid": False,
                 }
                 try:
-                    package = inspect_lifevault_package(path.read_bytes())
-                    producer = package.manifest.get("producer") or {}
+                    inspected = inspect_lifevault_file(path, verify_checksums=True)
+                    manifest = inspected["manifest"]
+                    producer = manifest.get("producer") or {}
                     entry.update(
                         {
                             "valid": True,
-                            "created_at": package.manifest.get("created_at"),
+                            "created_at": manifest.get("created_at"),
                             "producer_version": producer.get("version"),
-                            "schema_version": (package.manifest.get("repository") or {}).get(
+                            "schema_version": (manifest.get("repository") or {}).get(
                                 "schema_version"
                             ),
-                            "sha256": package.package_sha256,
+                            "sha256": inspected["package_sha256"],
                         }
                     )
                 except (LifeVaultPackageError, OSError) as exc:
@@ -622,12 +644,6 @@ class VaultManager:
             policy["last_error"] = None
             self._write_backup_policy(metadata, policy)
             try:
-                artifact = build_lifevault_backup(
-                    database=self.database,
-                    metadata_path=self.metadata_path,
-                    master_key=master_key,
-                    app_version=self.app_version,
-                )
                 timestamp = now.strftime("%Y%m%d-%H%M%S")
                 filename = f"lifegraph-auto-{timestamp}.lifevault"
                 path = self.auto_backup_dir / filename
@@ -635,10 +651,16 @@ class VaultManager:
                     path = self.auto_backup_dir / (
                         f"lifegraph-auto-{timestamp}-{secrets.token_hex(3)}.lifevault"
                     )
-                self._atomic_write(path, artifact.content)
-                # Re-open and decrypt the exact bytes written to disk before recording success.
-                package = inspect_lifevault_package(path.read_bytes())
-                verify_lifevault_database(package, master_key)
+                artifact = build_lifevault_backup_file(
+                    database=self.database,
+                    metadata_path=self.metadata_path,
+                    master_key=master_key,
+                    app_version=self.app_version,
+                    attachment_dir=self.attachment_store.root,
+                    output_path=path,
+                )
+                # Re-open and decrypt the exact disk-backed package before recording success.
+                verify_lifevault_file(path, master_key)
                 verified_at = datetime.now(dt_timezone.utc).isoformat()
                 policy["last_success_at"] = verified_at
                 policy["last_filename"] = path.name
@@ -654,7 +676,7 @@ class VaultManager:
                     "reason": reason,
                     "filename": path.name,
                     "size": path.stat().st_size,
-                    "sha256": sha256_bytes(path.read_bytes()),
+                    "sha256": artifact.sha256,
                     "pruned_filenames": deleted,
                     **self.get_auto_backup_status(),
                 }
@@ -680,8 +702,8 @@ class VaultManager:
             policy = self._normalized_backup_policy(metadata)
             try:
                 path = self.auto_backup_path(filename)
-                package = inspect_lifevault_package(path.read_bytes())
-                integrity = verify_lifevault_database(package, master_key)
+                integrity = verify_lifevault_file(path, master_key)
+                manifest = integrity.get("manifest") or {}
                 verified_at = datetime.now(dt_timezone.utc).isoformat()
                 policy["last_verified_at"] = verified_at
                 policy["last_verified_filename"] = filename
@@ -692,13 +714,16 @@ class VaultManager:
                     "filename": filename,
                     "verified_at": verified_at,
                     "size": path.stat().st_size,
-                    "sha256": package.package_sha256,
-                    "created_at": package.manifest.get("created_at"),
+                    "sha256": integrity.get("package_sha256"),
+                    "created_at": manifest.get("created_at"),
                     "schema_version": integrity.get("schema_version"),
                     "sqlite_quick_check": integrity.get("sqlite_quick_check"),
                     "foreign_key_errors": integrity.get("foreign_key_errors"),
                     "encrypted_records_verified": integrity.get(
                         "encrypted_records_verified"
+                    ),
+                    "attachment_files_verified": integrity.get(
+                        "attachment_files_verified", 0
                     ),
                     "status": self.get_auto_backup_status(),
                 }
@@ -789,9 +814,23 @@ class VaultManager:
                     )
                 except DatabaseIntegrityError as exc:
                     raise VaultError(str(exc)) from exc
+            attachment_records = self.database.list_all_attachments(master_key)
+            for record in attachment_records:
+                try:
+                    content = self.attachment_store.read(
+                        master_key, record["id"], record["file_nonce"]
+                    )
+                except AttachmentFileError as exc:
+                    raise VaultError(f"附件完整性检查失败：{exc}") from exc
+                if len(content) != int(record.get("size_bytes") or -1):
+                    raise VaultError("附件完整性检查失败：附件大小不一致")
+                import hashlib
+                if hashlib.sha256(content).hexdigest() != record.get("sha256"):
+                    raise VaultError("附件完整性检查失败：附件摘要不一致")
             return {
                 "ready": True,
                 **result,
+                "attachment_files_verified": len(attachment_records),
                 "checked_at": datetime.now(dt_timezone.utc).isoformat(),
             }
 
@@ -807,19 +846,45 @@ class VaultManager:
                     metadata_path=self.metadata_path,
                     master_key=master_key,
                     app_version=app_version,
+                    attachment_dir=self.attachment_store.root,
                 )
             except (DatabaseIntegrityError, OSError, ValueError, json.JSONDecodeError) as exc:
                 raise VaultError(f"备份导出失败：{exc}") from exc
 
+    def export_lifevault_file(self, *, app_version: str) -> BackupFileArtifact:
+        """Export to a temporary disk-backed package for streaming HTTP download."""
+        with self._mutex:
+            master_key = self.require_master_key()
+            if not self.metadata_path.exists() or not self.database.path.exists():
+                raise VaultError("加密仓库文件不完整")
+            export_dir = self.data_dir / ".exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(dt_timezone.utc).strftime("%Y%m%d-%H%M%S")
+            path = export_dir / f"lifegraph-export-{timestamp}-{secrets.token_hex(4)}.lifevault"
+            try:
+                artifact = build_lifevault_backup_file(
+                    database=self.database,
+                    metadata_path=self.metadata_path,
+                    master_key=master_key,
+                    app_version=app_version,
+                    attachment_dir=self.attachment_store.root,
+                    output_path=path,
+                )
+                verify_lifevault_file(path, master_key)
+                return artifact
+            except (DatabaseIntegrityError, LifeVaultPackageError, OSError, ValueError, json.JSONDecodeError) as exc:
+                path.unlink(missing_ok=True)
+                raise VaultError(f"备份导出失败：{exc}") from exc
+
     @staticmethod
-    def _external_master_key(
-        package: LifeVaultPackage,
+    def _external_master_key_from_metadata_bytes(
+        metadata_bytes: bytes,
         *,
         credential_method: Literal["pin", "recovery"],
         credential_secret: str,
     ) -> bytes:
         try:
-            metadata = json.loads(package.metadata_bytes.decode("utf-8"))
+            metadata = json.loads(metadata_bytes.decode("utf-8"))
             if credential_method == "pin":
                 slot = metadata["key_slots"]["pin"]
                 aad = PIN_AAD
@@ -848,6 +913,19 @@ class VaultManager:
             raise CredentialError(f"{label}不正确") from exc
 
     @staticmethod
+    def _external_master_key(
+        package: LifeVaultPackage,
+        *,
+        credential_method: Literal["pin", "recovery"],
+        credential_secret: str,
+    ) -> bytes:
+        return VaultManager._external_master_key_from_metadata_bytes(
+            package.metadata_bytes,
+            credential_method=credential_method,
+            credential_secret=credential_secret,
+        )
+
+    @staticmethod
     def _import_report(
         package: LifeVaultPackage,
         integrity: dict[str, Any],
@@ -866,10 +944,62 @@ class VaultManager:
             ),
             "compatible_schema_version": integrity["schema_version"],
             "encrypted_records_verified": integrity["encrypted_records_verified"],
+            "attachment_files_verified": integrity.get("attachment_files_verified", 0),
             "record_counts": integrity.get("record_counts", {}),
             "package_sha256": package.package_sha256,
             "credential_method": credential_method,
         }
+
+    @staticmethod
+    def _import_report_values(
+        *,
+        manifest: dict[str, Any],
+        package_sha256: str,
+        integrity: dict[str, Any],
+        credential_method: str,
+    ) -> dict[str, Any]:
+        producer = manifest.get("producer") or {}
+        return {
+            "valid": True,
+            "format": manifest.get("format"),
+            "format_version": manifest.get("format_version"),
+            "created_at": manifest.get("created_at"),
+            "producer_version": producer.get("version"),
+            "schema_version": integrity.get("source_schema_version", integrity["schema_version"]),
+            "compatible_schema_version": integrity["schema_version"],
+            "encrypted_records_verified": integrity["encrypted_records_verified"],
+            "attachment_files_verified": integrity.get("attachment_files_verified", 0),
+            "record_counts": integrity.get("record_counts", {}),
+            "package_sha256": package_sha256,
+            "credential_method": credential_method,
+        }
+
+    def inspect_lifevault_import_file(
+        self,
+        *,
+        path: Path,
+        credential_method: Literal["pin", "recovery"],
+        credential_secret: str,
+    ) -> dict[str, Any]:
+        """Run a full disk-backed restore rehearsal with bounded memory."""
+        with self._mutex:
+            self.require_master_key()
+            try:
+                inspected = inspect_lifevault_file(path, verify_checksums=True)
+                imported_key = self._external_master_key_from_metadata_bytes(
+                    inspected["metadata_bytes"],
+                    credential_method=credential_method,
+                    credential_secret=credential_secret,
+                )
+                integrity = verify_lifevault_file(path, imported_key)
+            except (LifeVaultPackageError, DatabaseIntegrityError) as exc:
+                raise VaultError(f"备份包验证失败：{exc}") from exc
+            return self._import_report_values(
+                manifest=inspected["manifest"],
+                package_sha256=inspected["package_sha256"],
+                integrity=integrity,
+                credential_method=credential_method,
+            )
 
     def inspect_lifevault_import(
         self,
@@ -937,6 +1067,7 @@ class VaultManager:
                     metadata_path=self.metadata_path,
                     master_key=current_master_key,
                     app_version=app_version,
+                    attachment_dir=self.attachment_store.root,
                 )
             except (DatabaseIntegrityError, OSError, ValueError, json.JSONDecodeError) as exc:
                 raise VaultError(f"无法创建恢复前安全备份：{exc}") from exc
@@ -957,19 +1088,37 @@ class VaultManager:
 
             incoming_metadata = self.data_dir / ".restore-vault.json"
             incoming_database = self.data_dir / ".restore-lifegraph.db"
+            incoming_attachments = self.data_dir / ".restore-attachments"
+            previous_attachments = self.data_dir / ".restore-attachments-previous"
+            shutil.rmtree(incoming_attachments, ignore_errors=True)
+            shutil.rmtree(previous_attachments, ignore_errors=True)
+            incoming_store = AttachmentStore(incoming_attachments)
+            incoming_attachments.mkdir(parents=True, exist_ok=True)
+            for attachment_id, encrypted in package.attachment_files.items():
+                incoming_store.write_encrypted_bytes(attachment_id, encrypted)
+
             self._atomic_write(incoming_metadata, package.metadata_bytes)
             self._atomic_write(incoming_database, package.database_bytes)
             # Verify that the exact candidate bytes reached disk before replacement.
             if (
                 incoming_metadata.read_bytes() != package.metadata_bytes
                 or incoming_database.read_bytes() != package.database_bytes
+                or {
+                    path.stem: path.read_bytes()
+                    for path in incoming_attachments.rglob("*.lgatt")
+                } != package.attachment_files
             ):
                 incoming_metadata.unlink(missing_ok=True)
                 incoming_database.unlink(missing_ok=True)
+                shutil.rmtree(incoming_attachments, ignore_errors=True)
                 raise VaultError("恢复候选文件写入校验失败")
 
             self._restore_in_progress = True
+            had_live_attachments = self.attachment_store.root.exists()
             try:
+                if had_live_attachments:
+                    os.replace(self.attachment_store.root, previous_attachments)
+                os.replace(incoming_attachments, self.attachment_store.root)
                 for suffix in ("-wal", "-shm"):
                     self.database.path.with_name(self.database.path.name + suffix).unlink(
                         missing_ok=True
@@ -985,9 +1134,13 @@ class VaultManager:
                     restored_metadata, "repository_restored"
                 )
                 self._write_metadata(restored_metadata)
+                shutil.rmtree(previous_attachments, ignore_errors=True)
             except Exception as exc:
                 # Roll back from the already verified pre-restore package.
                 try:
+                    shutil.rmtree(self.attachment_store.root, ignore_errors=True)
+                    if had_live_attachments and previous_attachments.exists():
+                        os.replace(previous_attachments, self.attachment_store.root)
                     self._atomic_write(self.metadata_path, rollback_package.metadata_bytes)
                     self._atomic_write(self.database.path, rollback_package.database_bytes)
                     for suffix in ("-wal", "-shm"):
@@ -1009,6 +1162,8 @@ class VaultManager:
             finally:
                 incoming_metadata.unlink(missing_ok=True)
                 incoming_database.unlink(missing_ok=True)
+                shutil.rmtree(incoming_attachments, ignore_errors=True)
+                shutil.rmtree(previous_attachments, ignore_errors=True)
                 self._restore_in_progress = False
 
             # A restored repository must always be unlocked again with its own credential.
@@ -1016,6 +1171,163 @@ class VaultManager:
             self._master_key = None
             report = self._import_report(
                 package, source_integrity, credential_method=credential_method
+            )
+            report.update(
+                {
+                    "restored": True,
+                    "locked": True,
+                    "restored_schema_version": restored_integrity["schema_version"],
+                    "rescue_backup_filename": rescue_path.name,
+                }
+            )
+            return report
+
+    def restore_lifevault_file(
+        self,
+        *,
+        path: Path,
+        credential_method: Literal["pin", "recovery"],
+        credential_secret: str,
+        confirm: str,
+        app_version: str,
+    ) -> dict[str, Any]:
+        """Replace the live repository from a disk-backed package using bounded memory."""
+        if confirm != "REPLACE_REPOSITORY":
+            raise VaultError("恢复确认口令无效")
+        with self._mutex:
+            current_master_key = self.require_master_key()
+            try:
+                inspected = inspect_lifevault_file(path, verify_checksums=True)
+                imported_key = self._external_master_key_from_metadata_bytes(
+                    inspected["metadata_bytes"],
+                    credential_method=credential_method,
+                    credential_secret=credential_secret,
+                )
+                source_integrity = verify_lifevault_file(path, imported_key)
+            except (LifeVaultPackageError, DatabaseIntegrityError) as exc:
+                raise VaultError(f"备份包验证失败：{exc}") from exc
+
+            recovery_dir = self.data_dir / "recovery"
+            timestamp = datetime.now(dt_timezone.utc).strftime("%Y%m%d-%H%M%S")
+            rescue_path = recovery_dir / f"lifegraph-before-restore-{timestamp}.lifevault"
+            if rescue_path.exists():
+                rescue_path = recovery_dir / (
+                    f"lifegraph-before-restore-{timestamp}-{secrets.token_hex(3)}.lifevault"
+                )
+            try:
+                build_lifevault_backup_file(
+                    database=self.database,
+                    metadata_path=self.metadata_path,
+                    master_key=current_master_key,
+                    app_version=app_version,
+                    attachment_dir=self.attachment_store.root,
+                    output_path=rescue_path,
+                )
+                verify_lifevault_file(rescue_path, current_master_key)
+            except (DatabaseIntegrityError, LifeVaultPackageError, OSError, ValueError, json.JSONDecodeError) as exc:
+                raise VaultError(f"无法创建恢复前安全备份：{exc}") from exc
+
+            incoming_metadata = self.data_dir / ".restore-vault.json"
+            incoming_database = self.data_dir / ".restore-lifegraph.db"
+            incoming_attachments = self.data_dir / ".restore-attachments"
+            previous_attachments = self.data_dir / ".restore-attachments-previous"
+            shutil.rmtree(incoming_attachments, ignore_errors=True)
+            shutil.rmtree(previous_attachments, ignore_errors=True)
+            incoming_attachments.mkdir(parents=True, exist_ok=True)
+            incoming_store = AttachmentStore(incoming_attachments)
+            entry_map = {
+                entry.get("path"): entry
+                for entry in inspected["manifest"].get("files", [])
+                if isinstance(entry, dict)
+            }
+
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    metadata_bytes = archive.read("repository/vault.json")
+                    self._atomic_write(incoming_metadata, metadata_bytes)
+                    db_entry = entry_map.get("repository/lifegraph.db") or {}
+                    db_digest = hashlib.sha256()
+                    db_size = 0
+                    with archive.open("repository/lifegraph.db") as source, incoming_database.open("wb") as target:
+                        while chunk := source.read(1024 * 1024):
+                            target.write(chunk)
+                            db_digest.update(chunk)
+                            db_size += len(chunk)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    if db_size != int(db_entry.get("size", -1)) or db_digest.hexdigest() != db_entry.get("sha256"):
+                        raise VaultError("恢复候选数据库写入校验失败")
+
+                    for archive_name in archive.namelist():
+                        if not archive_name.startswith("repository/attachments/") or not archive_name.endswith(".lgatt"):
+                            continue
+                        attachment_id = archive_name.removeprefix("repository/attachments/").removesuffix(".lgatt")
+                        entry = entry_map.get(archive_name) or {}
+                        with archive.open(archive_name) as source:
+                            size, digest = incoming_store.write_encrypted_stream(attachment_id, source)
+                        if size != int(entry.get("size", -1)) or digest != entry.get("sha256"):
+                            raise VaultError(f"恢复候选附件 {attachment_id} 写入校验失败")
+            except Exception:
+                incoming_metadata.unlink(missing_ok=True)
+                incoming_database.unlink(missing_ok=True)
+                shutil.rmtree(incoming_attachments, ignore_errors=True)
+                raise
+
+            self._restore_in_progress = True
+            had_live_attachments = self.attachment_store.root.exists()
+            try:
+                if had_live_attachments:
+                    os.replace(self.attachment_store.root, previous_attachments)
+                os.replace(incoming_attachments, self.attachment_store.root)
+                for suffix in ("-wal", "-shm"):
+                    self.database.path.with_name(self.database.path.name + suffix).unlink(missing_ok=True)
+                os.replace(incoming_metadata, self.metadata_path)
+                os.replace(incoming_database, self.database.path)
+                self.database.initialize_schema()
+                restored_integrity = self.database.verify_encrypted_snapshot(self.database.path, imported_key)
+                restored_metadata = self._read_metadata()
+                self._append_security_audit(restored_metadata, "repository_restored")
+                self._write_metadata(restored_metadata)
+                shutil.rmtree(previous_attachments, ignore_errors=True)
+            except Exception as exc:
+                try:
+                    shutil.rmtree(self.attachment_store.root, ignore_errors=True)
+                    if had_live_attachments and previous_attachments.exists():
+                        os.replace(previous_attachments, self.attachment_store.root)
+                    rollback_metadata = self.data_dir / ".rollback-vault.json"
+                    rollback_database = self.data_dir / ".rollback-lifegraph.db"
+                    with zipfile.ZipFile(rescue_path) as archive:
+                        self._atomic_write(rollback_metadata, archive.read("repository/vault.json"))
+                        with archive.open("repository/lifegraph.db") as source, rollback_database.open("wb") as target:
+                            shutil.copyfileobj(source, target, length=1024 * 1024)
+                            target.flush()
+                            os.fsync(target.fileno())
+                    os.replace(rollback_metadata, self.metadata_path)
+                    os.replace(rollback_database, self.database.path)
+                    for suffix in ("-wal", "-shm"):
+                        self.database.path.with_name(self.database.path.name + suffix).unlink(missing_ok=True)
+                    self.database.initialize_schema()
+                    self.database.verify_encrypted_snapshot(self.database.path, current_master_key)
+                    self._master_key = current_master_key
+                except Exception as rollback_exc:  # pragma: no cover - catastrophic I/O
+                    self._master_key = None
+                    self.sessions.revoke_all()
+                    raise VaultError(f"仓库恢复失败且自动回滚失败：{rollback_exc}") from exc
+                raise VaultError(f"仓库恢复失败，已自动回滚：{exc}") from exc
+            finally:
+                incoming_metadata.unlink(missing_ok=True)
+                incoming_database.unlink(missing_ok=True)
+                shutil.rmtree(incoming_attachments, ignore_errors=True)
+                shutil.rmtree(previous_attachments, ignore_errors=True)
+                self._restore_in_progress = False
+
+            self.sessions.revoke_all()
+            self._master_key = None
+            report = self._import_report_values(
+                manifest=inspected["manifest"],
+                package_sha256=inspected["package_sha256"],
+                integrity=source_integrity,
+                credential_method=credential_method,
             )
             report.update(
                 {
@@ -1294,6 +1606,36 @@ class VaultManager:
 
     def delete_event(self, *, event_id: str, revision: int) -> dict[str, Any]:
         return self._delete_content(kind="event", content_id=event_id, revision=revision)
+
+    def move_content_period(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        anchor_date: str,
+        time_scope: str,
+        period_key: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            try:
+                return self.database.move_content_period(
+                    kind=kind,
+                    content_id=content_id,
+                    profile_id=profile["id"],
+                    anchor_date=anchor_date,
+                    time_scope=time_scope,
+                    period_key=period_key,
+                    expected_revision=revision,
+                    timestamp=now,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except DatabaseRevisionConflict as exc:
+                raise ContentRevisionConflict(str(exc)) from exc
 
     def create_memory(
         self,
@@ -1602,6 +1944,661 @@ class VaultManager:
     ) -> dict[str, list[dict[str, Any]]]:
         return self.list_content_tags_for_items(kind="memory", content_ids=memory_ids)
 
+    @staticmethod
+    def _public_attachment(value: dict[str, Any]) -> dict[str, Any]:
+        public = {
+            key: item
+            for key, item in value.items()
+            if key not in {"file_nonce", "profile_id"}
+        }
+        public["is_independent"] = not bool(value.get("kind") and value.get("content_id"))
+        return public
+
+    def create_attachment(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        filename: str,
+        media_type: str | None,
+        content: bytes,
+        file_last_modified_ms: int | None = None,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            if kind not in {"event", "memory", "plan"}:
+                raise VaultError("不支持的内容类型")
+            clean_name = Path(filename or "").name.strip()
+            if not clean_name:
+                clean_name = "未命名附件"
+            if len(clean_name) > 240:
+                raise VaultError("附件文件名过长")
+            if not content:
+                raise VaultError("附件文件为空")
+            if len(content) > MAX_ATTACHMENT_BYTES:
+                raise VaultError("单个附件不能超过 50 MB")
+            if not self.database.content_exists(
+                profile_id=profile["id"],
+                kind=kind,
+                content_id=content_id,
+                include_deleted=False,
+            ):
+                raise ContentNotFound("内容不存在或已经被删除")
+
+            attachment_id = str(uuid.uuid4())
+            now = datetime.now(dt_timezone.utc).isoformat()
+            timezone_name = str(profile.get("timezone") or "UTC")
+            try:
+                source = self.database.get_content_reference(
+                    master_key,
+                    profile_id=profile["id"],
+                    kind=kind,
+                    content_id=content_id,
+                    include_deleted=False,
+                )
+                time_metadata = extract_attachment_time_metadata(
+                    content,
+                    filename=clean_name,
+                    media_type=media_type,
+                    file_last_modified_ms=file_last_modified_ms,
+                    timezone_name=timezone_name,
+                )
+                if not time_metadata.get("timeline_date"):
+                    time_metadata.update(
+                        fallback_attachment_timeline_metadata(
+                            source_time_scope=str(source.get("time_scope") or ""),
+                            source_period_key=str(source.get("period_key") or ""),
+                            attachment_created_at=now,
+                            timezone_name=timezone_name,
+                        )
+                    )
+                file_nonce, sha256 = self.attachment_store.write(
+                    master_key, attachment_id, content
+                )
+                value = self.database.create_attachment(
+                    master_key,
+                    attachment_id=attachment_id,
+                    profile_id=profile["id"],
+                    kind=kind,
+                    content_id=content_id,
+                    file_nonce=file_nonce,
+                    metadata={
+                        "filename": clean_name,
+                        "media_type": (media_type or "application/octet-stream")[:200],
+                        "size_bytes": len(content),
+                        "sha256": sha256,
+                        **time_metadata,
+                    },
+                    timestamp=now,
+                )
+            except DatabaseContentNotFound as exc:
+                self.attachment_store.delete(attachment_id)
+                raise ContentNotFound(str(exc)) from exc
+            except AttachmentFileError as exc:
+                self.attachment_store.delete(attachment_id)
+                raise VaultError(str(exc)) from exc
+            except Exception:
+                self.attachment_store.delete(attachment_id)
+                raise
+            return self._public_attachment(value)
+
+    def import_material(
+        self,
+        *,
+        filename: str,
+        media_type: str | None,
+        content: bytes,
+        file_last_modified_ms: int | None = None,
+        source_relative_path: str | None = None,
+        source_directory_name: str | None = None,
+        reject_duplicate: bool = False,
+    ) -> dict[str, Any]:
+        """Import one encrypted material without requiring a parent content item.
+
+        Directory imports may preserve a browser-provided relative source path and
+        request duplicate rejection. The path is metadata only; LifeGraph never
+        reads or writes the original source path on the user's filesystem.
+        """
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            clean_name = Path(filename or "").name.strip() or "未命名资料"
+            if len(clean_name) > 240:
+                raise VaultError("资料文件名过长")
+            if not content:
+                raise VaultError("资料文件为空")
+            if len(content) > MAX_ATTACHMENT_BYTES:
+                raise VaultError("单个资料不能超过 50 MB")
+
+            incoming_sha256 = hashlib.sha256(content).hexdigest()
+            if reject_duplicate:
+                duplicate = self.find_material_duplicates([incoming_sha256]).get("matches", {}).get(incoming_sha256, [])
+                if duplicate:
+                    raise MaterialDuplicate("相同文件已经存在于人生资料库中")
+
+            clean_relative_path = str(source_relative_path or "").replace("\\", "/").strip().lstrip("/")
+            if clean_relative_path:
+                parts = [part for part in clean_relative_path.split("/") if part not in {"", ".", ".."}]
+                clean_relative_path = "/".join(parts)[:1000]
+            clean_directory_name = Path(str(source_directory_name or "").strip()).name[:120]
+
+            attachment_id = str(uuid.uuid4())
+            now = datetime.now(dt_timezone.utc).isoformat()
+            timezone_name = str(profile.get("timezone") or "UTC")
+            time_metadata = extract_attachment_time_metadata(
+                content,
+                filename=clean_name,
+                media_type=media_type,
+                file_last_modified_ms=file_last_modified_ms,
+                timezone_name=timezone_name,
+            )
+            if not time_metadata.get("timeline_date"):
+                time_metadata.update(
+                    fallback_attachment_timeline_metadata(
+                        source_time_scope=None,
+                        source_period_key=None,
+                        attachment_created_at=now,
+                        timezone_name=timezone_name,
+                    )
+                )
+            try:
+                file_nonce, sha256 = self.attachment_store.write(
+                    master_key, attachment_id, content
+                )
+                value = self.database.create_attachment(
+                    master_key,
+                    attachment_id=attachment_id,
+                    profile_id=profile["id"],
+                    kind=None,
+                    content_id=None,
+                    file_nonce=file_nonce,
+                    metadata={
+                        "filename": clean_name,
+                        "media_type": (media_type or "application/octet-stream")[:200],
+                        "size_bytes": len(content),
+                        "sha256": sha256,
+                        "material_origin": "directory_import" if clean_relative_path else "independent",
+                        **({"source_relative_path": clean_relative_path} if clean_relative_path else {}),
+                        **({"source_directory_name": clean_directory_name} if clean_directory_name else {}),
+                        **time_metadata,
+                    },
+                    timestamp=now,
+                )
+            except AttachmentFileError as exc:
+                self.attachment_store.delete(attachment_id)
+                raise VaultError(str(exc)) from exc
+            except Exception:
+                self.attachment_store.delete(attachment_id)
+                raise
+            return self._public_attachment(value)
+
+    def find_material_duplicates(self, sha256_values: list[str]) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        wanted = {str(value or "").strip().lower() for value in sha256_values}
+        wanted = {value for value in wanted if len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)}
+        matches: dict[str, list[dict[str, Any]]] = {value: [] for value in wanted}
+        if not wanted:
+            return {"matches": {}, "matched_hashes": 0}
+        for value in self.database.list_all_attachments(master_key, profile_id=profile["id"]):
+            digest = str(value.get("sha256") or "").strip().lower()
+            if digest not in wanted:
+                continue
+            matches[digest].append(
+                {
+                    "id": value.get("id"),
+                    "filename": value.get("filename") or "未命名资料",
+                    "is_independent": not bool(value.get("kind") and value.get("content_id")),
+                }
+            )
+        compact = {key: values for key, values in matches.items() if values}
+        return {"matches": compact, "matched_hashes": len(compact)}
+
+    def list_attachment_counts_for_items(
+        self, *, kind: str, content_ids: list[str]
+    ) -> dict[str, int]:
+        self.require_master_key()
+        profile = self.get_profile()
+        return self.database.list_attachment_counts_for_items(
+            profile_id=profile["id"], kind=kind, content_ids=content_ids
+        )
+
+    @staticmethod
+    def _attachment_metadata_payload(value: dict[str, Any]) -> dict[str, Any]:
+        private_keys = {
+            "id",
+            "profile_id",
+            "kind",
+            "content_id",
+            "file_nonce",
+            "created_at",
+            "updated_at",
+        }
+        return {key: item for key, item in value.items() if key not in private_keys}
+
+    def _attachment_context_fallback_metadata(
+        self,
+        *,
+        master_key: bytes,
+        profile_id: str,
+        timezone_name: str,
+        value: dict[str, Any],
+    ) -> dict[str, str]:
+        source = None
+        if value.get("kind") and value.get("content_id"):
+            try:
+                source = self.database.get_content_reference(
+                    master_key,
+                    profile_id=profile_id,
+                    kind=str(value.get("kind")),
+                    content_id=str(value.get("content_id")),
+                    include_deleted=True,
+                )
+            except DatabaseContentNotFound:
+                source = None
+        return fallback_attachment_timeline_metadata(
+            source_time_scope=str(source.get("time_scope") or "") if source else None,
+            source_period_key=str(source.get("period_key") or "") if source else None,
+            attachment_created_at=str(value.get("created_at") or ""),
+            timezone_name=timezone_name,
+        )
+
+    def _ensure_attachment_time_metadata(
+        self,
+        *,
+        master_key: bytes,
+        profile_id: str,
+        timezone_name: str,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = self._attachment_metadata_payload(value)
+        if value.get("time_metadata_checked") is True and value.get("timeline_date"):
+            return value
+
+        # Historical records may already be marked as checked even though no
+        # reliable file time was found. Apply the contextual fallback without
+        # decrypting the blob again.
+        if value.get("time_metadata_checked") is True:
+            fallback = self._attachment_context_fallback_metadata(
+                master_key=master_key,
+                profile_id=profile_id,
+                timezone_name=timezone_name,
+                value=value,
+            )
+            if not fallback:
+                return value
+            metadata.update(fallback)
+            return self.database.update_attachment_metadata(
+                master_key,
+                profile_id=profile_id,
+                attachment_id=value["id"],
+                metadata=metadata,
+                timestamp=datetime.now(dt_timezone.utc).isoformat(),
+            )
+
+        try:
+            content = self.attachment_store.read(master_key, value["id"], value["file_nonce"])
+            extracted = extract_attachment_time_metadata(
+                content,
+                filename=str(value.get("filename") or ""),
+                media_type=str(value.get("media_type") or "application/octet-stream"),
+                file_last_modified_ms=None,
+                timezone_name=timezone_name,
+            )
+            # Preserve any capture metadata already written by v0.0.8.3 while
+            # adding the independent timeline relationship.
+            for key in ("captured_at", "captured_date", "capture_source"):
+                if value.get(key) and not extracted.get(key):
+                    extracted[key] = value[key]
+            if not extracted.get("timeline_at") and value.get("captured_at"):
+                extracted["timeline_at"] = value["captured_at"]
+                extracted["timeline_date"] = value.get("captured_date")
+                extracted["timeline_time_source"] = f"exif:{value.get('capture_source') or 'capture'}"
+            metadata.update(extracted)
+        except AttachmentFileError:
+            metadata["time_metadata_checked"] = True
+
+        if not metadata.get("timeline_date"):
+            metadata.update(
+                self._attachment_context_fallback_metadata(
+                    master_key=master_key,
+                    profile_id=profile_id,
+                    timezone_name=timezone_name,
+                    value=value,
+                )
+            )
+        return self.database.update_attachment_metadata(
+            master_key,
+            profile_id=profile_id,
+            attachment_id=value["id"],
+            metadata=metadata,
+            timestamp=datetime.now(dt_timezone.utc).isoformat(),
+        )
+
+    def assign_attachment_timeline_fallback(self, *, attachment_id: str) -> dict[str, Any]:
+        """Repair an undated attachment using parent day or attachment-added time."""
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            if value.get("timeline_date"):
+                return self._public_attachment(value)
+            fallback = self._attachment_context_fallback_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                timezone_name=str(profile.get("timezone") or "UTC"),
+                value=value,
+            )
+            if not fallback:
+                raise VaultError("无法从来源内容日期或附件添加时间确定归属日期")
+            metadata = self._attachment_metadata_payload(value)
+            metadata.update(fallback)
+            metadata["time_metadata_checked"] = True
+            metadata["timeline_fallback_manual"] = True
+            updated = self.database.update_attachment_metadata(
+                master_key,
+                profile_id=profile["id"],
+                attachment_id=attachment_id,
+                metadata=metadata,
+                timestamp=datetime.now(dt_timezone.utc).isoformat(),
+            )
+            return self._public_attachment(updated)
+
+
+    def list_attachments(self, *, kind: str, content_id: str) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        try:
+            values = self.database.list_attachments(
+                master_key,
+                profile_id=profile["id"],
+                kind=kind,
+                content_id=content_id,
+            )
+        except DatabaseContentNotFound as exc:
+            raise ContentNotFound(str(exc)) from exc
+        values = [
+            self._ensure_attachment_time_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                timezone_name=str(profile.get("timezone") or "UTC"),
+                value=value,
+            )
+            for value in values
+        ]
+        return [self._public_attachment(value) for value in values]
+
+    @staticmethod
+    def _attachment_matches_period(value: dict[str, Any], scope: str, period_key: str) -> bool:
+        timeline_date = str(value.get("timeline_date") or "")
+        if not timeline_date:
+            return False
+        if scope == "day":
+            return timeline_date == period_key
+        if scope == "month":
+            return timeline_date[:7] == period_key
+        if scope == "year":
+            return timeline_date[:4] == period_key
+        return False
+
+    def list_materials_for_period(self, *, scope: str, period_key: str) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        values = self.database.list_all_attachments(master_key, profile_id=profile["id"])
+        materials: list[dict[str, Any]] = []
+        for raw_value in values:
+            value = self._ensure_attachment_time_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                timezone_name=str(profile.get("timezone") or "UTC"),
+                value=raw_value,
+            )
+            if not self._attachment_matches_period(value, scope, period_key):
+                continue
+            source = None
+            if value.get("kind") and value.get("content_id"):
+                try:
+                    source = self.database.get_content_reference(
+                        master_key,
+                        profile_id=profile["id"],
+                        kind=str(value["kind"]),
+                        content_id=str(value["content_id"]),
+                        include_deleted=False,
+                    )
+                except DatabaseContentNotFound:
+                    continue
+            public = self._public_attachment(value)
+            public["source_content"] = (
+                {
+                    "kind": source["kind"],
+                    "id": source["id"],
+                    "title": source["title"],
+                    "time_scope": source["time_scope"],
+                    "period_key": source["period_key"],
+                }
+                if source
+                else None
+            )
+            materials.append(public)
+        materials.sort(
+            key=lambda item: (str(item.get("timeline_at") or ""), str(item.get("filename") or "")),
+            reverse=True,
+        )
+        return materials
+
+    @staticmethod
+    def _material_category(value: dict[str, Any]) -> str:
+        media_type = str(value.get("media_type") or "").lower()
+        filename = str(value.get("filename") or "").lower()
+        suffix = Path(filename).suffix.lower()
+        if media_type.startswith("image/") or suffix in {
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif",
+        }:
+            return "image"
+        if (
+            media_type.startswith("text/")
+            or media_type in {"application/pdf", "application/rtf"}
+            or "officedocument" in media_type
+            or "msword" in media_type
+            or "ms-excel" in media_type
+            or "ms-powerpoint" in media_type
+            or "opendocument" in media_type
+            or suffix in {
+                ".pdf", ".txt", ".md", ".rtf", ".doc", ".docx", ".xls", ".xlsx",
+                ".ppt", ".pptx", ".odt", ".ods", ".odp", ".csv",
+            }
+        ):
+            return "document"
+        return "other"
+
+    def browse_materials(
+        self,
+        *,
+        query: str = "",
+        categories: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "timeline_desc",
+        limit: int = 48,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Browse encrypted material metadata with bounded-memory pagination.
+
+        Because filename/timeline metadata is encrypted at rest, broad filters still
+        decrypt candidate metadata rows. The iterator and top-K selection avoid
+        materializing the entire decrypted library in memory, while the API returns
+        only the requested page.
+        """
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        category_set = {value for value in (categories or ["image", "document", "other"]) if value in {"image", "document", "other"}}
+        if not category_set:
+            category_set = {"image", "document", "other"}
+        needle = query.strip().casefold()
+        counts = {"image": 0, "document": 0, "other": 0, "undated": 0}
+        total = 0
+        page_cap = max(0, int(offset)) + max(1, int(limit))
+
+        def matched_items():
+            nonlocal total
+            for raw_value in self.database.iter_all_attachments(master_key, profile_id=profile["id"]):
+                value = self._ensure_attachment_time_metadata(
+                    master_key=master_key,
+                    profile_id=profile["id"],
+                    timezone_name=str(profile.get("timezone") or "UTC"),
+                    value=raw_value,
+                )
+                source = None
+                if value.get("kind") and value.get("content_id"):
+                    try:
+                        source = self.database.get_content_reference(
+                            master_key,
+                            profile_id=profile["id"],
+                            kind=str(value["kind"]),
+                            content_id=str(value["content_id"]),
+                            include_deleted=False,
+                        )
+                    except DatabaseContentNotFound:
+                        continue
+
+                category = self._material_category(value)
+                timeline_date = str(value.get("timeline_date") or "")
+                if category not in category_set:
+                    continue
+                if date_from and (not timeline_date or timeline_date < date_from):
+                    continue
+                if date_to and (not timeline_date or timeline_date > date_to):
+                    continue
+                if needle:
+                    haystack = "\n".join(
+                        [
+                            str(value.get("filename") or ""),
+                            str(value.get("media_type") or ""),
+                            str(source.get("title") or "") if source else "独立资料",
+                        ]
+                    ).casefold()
+                    if needle not in haystack:
+                        continue
+
+                public = self._public_attachment(value)
+                public["category"] = category
+                public["source_content"] = (
+                    {
+                        "kind": source["kind"],
+                        "id": source["id"],
+                        "title": source["title"],
+                        "time_scope": source["time_scope"],
+                        "period_key": source["period_key"],
+                    }
+                    if source
+                    else None
+                )
+                counts[category] += 1
+                if not timeline_date:
+                    counts["undated"] += 1
+                total += 1
+                yield public
+
+        if sort == "timeline_asc":
+            key = lambda item: (
+                not bool(item.get("timeline_at")),
+                str(item.get("timeline_at") or "9999-12-31T23:59:59"),
+                str(item.get("filename") or ""),
+                str(item.get("id") or ""),
+            )
+            selected = heapq.nsmallest(page_cap, matched_items(), key=key)
+        elif sort == "added_desc":
+            key = lambda item: (str(item.get("created_at") or ""), str(item.get("filename") or ""), str(item.get("id") or ""))
+            selected = heapq.nlargest(page_cap, matched_items(), key=key)
+        else:
+            key = lambda item: (
+                bool(item.get("timeline_at")),
+                str(item.get("timeline_at") or ""),
+                str(item.get("filename") or ""),
+                str(item.get("id") or ""),
+            )
+            selected = heapq.nlargest(page_cap, matched_items(), key=key)
+
+        page = selected[offset : offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "items": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "next_offset": next_offset if next_offset < total else None,
+            "has_more": next_offset < total,
+            "counts": counts,
+        }
+
+    def delete_independent_material(self, *, attachment_id: str) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            try:
+                result = self.database.delete_independent_material(
+                    profile_id=profile["id"], attachment_id=attachment_id
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            self.attachment_store.delete(attachment_id)
+            return result
+
+    def read_attachment(self, *, attachment_id: str) -> tuple[dict[str, Any], bytes]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+                content = self.attachment_store.read(
+                    master_key, attachment_id, value["file_nonce"]
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            except AttachmentFileError as exc:
+                raise VaultError(str(exc)) from exc
+
+            if len(content) != int(value.get("size_bytes") or -1):
+                raise VaultError("附件大小校验失败")
+            import hashlib
+            if hashlib.sha256(content).hexdigest() != value.get("sha256"):
+                raise VaultError("附件完整性校验失败")
+            return self._public_attachment(value), content
+
+    def delete_attachment(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        with self._mutex:
+            self.require_master_key()
+            profile = self.get_profile()
+            try:
+                result = self.database.delete_attachment(
+                    profile_id=profile["id"],
+                    kind=kind,
+                    content_id=content_id,
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            self.attachment_store.delete(attachment_id)
+            return result
+
     def create_plan(
         self,
         *,
@@ -1760,12 +2757,15 @@ class VaultManager:
             self.require_master_key()
             profile = self.get_profile()
             try:
-                return self.database.permanently_delete_content(
+                result = self.database.permanently_delete_content(
                     kind=kind,
                     content_id=content_id,
                     profile_id=profile["id"],
                     expected_revision=revision,
                 )
+                for attachment_id in result.pop("attachment_ids", []):
+                    self.attachment_store.delete(attachment_id)
+                return result
             except DatabaseContentNotFound as exc:
                 raise ContentNotFound(str(exc)) from exc
             except DatabaseRevisionConflict as exc:
@@ -1775,13 +2775,40 @@ class VaultManager:
         with self._mutex:
             self.require_master_key()
             profile = self.get_profile()
-            return self.database.empty_trash(profile_id=profile["id"])
+            result = self.database.empty_trash(profile_id=profile["id"])
+            for attachment_id in result.pop("attachment_ids", []):
+                self.attachment_store.delete(attachment_id)
+            return result
 
     def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, dict[str, bool]]]:
-        self.require_master_key()
+        master_key = self.require_master_key()
         profile = self.get_profile()
-        return self.database.get_content_status(
+        result = self.database.get_content_status(
             profile_id=profile["id"],
             start_date=start_date,
             end_date=end_date,
         )
+        for raw_value in self.database.list_all_attachments(master_key, profile_id=profile["id"]):
+            value = self._ensure_attachment_time_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                timezone_name=str(profile.get("timezone") or "UTC"),
+                value=raw_value,
+            )
+            timeline_date = str(value.get("timeline_date") or "")
+            if not timeline_date or timeline_date < start_date or timeline_date > end_date:
+                continue
+            if not self.database.content_exists(
+                profile_id=profile["id"],
+                kind=str(value.get("kind") or ""),
+                content_id=str(value.get("content_id") or ""),
+                include_deleted=False,
+            ):
+                continue
+            for map_name, map_key in (("dates", timeline_date), ("months", timeline_date[:7]), ("years", timeline_date[:4])):
+                state = result[map_name].setdefault(
+                    map_key,
+                    {"has_event": False, "has_memory": False, "has_plan": False},
+                )
+                state["has_material"] = True
+        return result

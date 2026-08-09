@@ -84,7 +84,7 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
     assert response.headers["content-type"].startswith(
         "application/vnd.lifegraph.lifevault+zip"
     )
-    assert response.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v1"
+    assert response.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v2"
     assert ".lifevault" in response.headers["content-disposition"]
     assert event_title.encode("utf-8") not in response.content
     assert event_body.encode("utf-8") not in response.content
@@ -98,9 +98,9 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
         }
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["format"] == "lifegraph-lifevault"
-        assert manifest["format_version"] == 1
-        assert manifest["producer"]["version"] == "0.0.7"
-        assert manifest["repository"]["schema_version"] == 5
+        assert manifest["format_version"] == 2
+        assert manifest["producer"]["version"] == "0.0.8"
+        assert manifest["repository"]["schema_version"] == 7
         assert manifest["integrity"]["encrypted_records_verified"] == 3
         for entry in manifest["files"]:
             value = archive.read(entry["path"])

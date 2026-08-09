@@ -38,7 +38,7 @@ def test_stage0_database_migrates_to_latest_schema(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        assert {"schema_meta", "profiles", "events", "memories", "plans"}.issubset(tables)
+        assert {"schema_meta", "profiles", "events", "memories", "plans", "attachments"}.issubset(tables)
         for table in ("events", "memories", "plans"):
             columns = {
                 row["name"] for row in connection.execute(f"PRAGMA table_info({table})")
@@ -150,3 +150,55 @@ def test_schema_v4_memory_tags_are_migrated_to_unified_content_tags(tmp_path: Pa
     database.initialize_schema()
     with database.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM content_tags").fetchone()[0] == 0
+
+
+def test_schema_v6_attachments_are_upgraded_for_independent_materials(tmp_path: Path) -> None:
+    database_path = tmp_path / "lifegraph.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key, value) VALUES('schema_version', '6');
+            CREATE TABLE profiles (
+                id TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO profiles VALUES('profile-1', X'00', X'01', '2026-08-08', '2026-08-08', 1);
+            CREATE TABLE attachments (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('event', 'memory', 'plan')),
+                content_id TEXT NOT NULL,
+                file_nonce BLOB NOT NULL,
+                metadata_nonce BLOB NOT NULL,
+                metadata_ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO attachments VALUES(
+                'attachment-1', 'profile-1', 'memory', 'memory-1', X'01', X'02', X'03',
+                '2026-08-08', '2026-08-08'
+            );
+            """
+        )
+
+    database = Database(database_path)
+    database.initialize_schema()
+
+    assert database.schema_version() == LATEST_SCHEMA_VERSION
+    with database.connect() as connection:
+        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(attachments)")}
+        old_row = connection.execute(
+            "SELECT kind, content_id FROM attachments WHERE id='attachment-1'"
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO attachments(
+                id, profile_id, kind, content_id, file_nonce, metadata_nonce,
+                metadata_ciphertext, created_at, updated_at
+            ) VALUES('material-1', 'profile-1', NULL, NULL, X'01', X'02', X'03', '2026-08-08', '2026-08-08')
+            """
+        )
+    assert columns["kind"]["notnull"] == 0
+    assert columns["content_id"]["notnull"] == 0
+    assert tuple(old_row) == ("memory", "memory-1")

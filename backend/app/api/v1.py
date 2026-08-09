@@ -1,21 +1,28 @@
 from __future__ import annotations
 
 from datetime import date
+import os
+from pathlib import Path
+import tempfile
+from urllib.parse import quote
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.models import (
     AutoBackupHistoryClearRequest,
     AutoBackupPolicyUpdateRequest,
     ContentDeleteRequest,
+    ContentMoveRequest,
     ContentBulkTagRequest,
     ContentTagSelectionRequest,
     ContentUpdateRequest,
     EventCreateRequest,
     InitializeRequest,
     MemoryCreateRequest,
+    MaterialDuplicateCheckRequest,
     PinChangeRequest,
     PinResetRequest,
     PlanCreateRequest,
@@ -32,10 +39,12 @@ from app.security.vault import (
     ContentRevisionConflict,
     CredentialError,
     TagConflict,
+    MaterialDuplicate,
     VaultError,
     VaultManager,
 )
-from app.services.backup import LIFEVAULT_MEDIA_TYPE, MAX_LIFEVAULT_BYTES
+from app.services.attachments import MAX_ATTACHMENT_BYTES
+from app.services.backup import LIFEVAULT_MEDIA_TYPE, MAX_LIFEVAULT_IMPORT_BYTES
 from app.services.date_detail import DateOutOfLifeRange
 from app.services.periods import child_periods, resolve_period
 from app.services.progress import calculate_progress
@@ -124,22 +133,32 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
     events = vault.list_events_for_period(scope, period_key)
     memories = vault.list_memories_for_period(scope, period_key)
     plans = vault.list_plans_for_period(scope, period_key)
+    materials = vault.list_materials_for_period(scope=scope, period_key=period_key)
     for kind, items in (("event", events), ("memory", memories), ("plan", plans)):
+        content_ids = [item["id"] for item in items]
         tags_by_content = vault.list_content_tags_for_items(
-            kind=kind, content_ids=[item["id"] for item in items]
+            kind=kind, content_ids=content_ids
+        )
+        attachment_counts = vault.list_attachment_counts_for_items(
+            kind=kind, content_ids=content_ids
         )
         for item in items:
             item["tags"] = tags_by_content.get(item["id"], [])
+            item["attachment_count"] = attachment_counts.get(item["id"], 0)
+    content_state = {
+        "has_event": bool(events),
+        "has_memory": bool(memories),
+        "has_plan": bool(plans),
+    }
+    if materials:
+        content_state["has_material"] = True
     description.update(
         {
-            "content_state": {
-                "has_event": bool(events),
-                "has_memory": bool(memories),
-                "has_plan": bool(plans),
-            },
+            "content_state": content_state,
             "events": events,
             "memories": memories,
             "plans": plans,
+            "materials": materials,
             "children": child_periods(profile_value, description),
         }
     )
@@ -155,7 +174,7 @@ def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
             "unlocked": vault.is_unlocked,
             "api_version": "v1",
             "schema_version": vault.database.schema_version(),
-            "storage_mode": "sqlite+aead-field-encryption",
+            "storage_mode": "sqlite+aead-field-encryption+encrypted-attachments",
         }
     )
 
@@ -417,45 +436,67 @@ def check_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
 @router.get("/backup/export", dependencies=[Depends(require_session)])
 def export_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> Response:
     try:
-        artifact = vault.export_lifevault(app_version=vault.app_version)
+        artifact = vault.export_lifevault_file(app_version=vault.app_version)
     except VaultError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "BACKUP_EXPORT_FAILED", "message": str(exc)},
         ) from exc
-    return Response(
-        content=artifact.content,
+
+    def cleanup_export() -> None:
+        artifact.path.unlink(missing_ok=True)
+        try:
+            artifact.path.parent.rmdir()
+        except OSError:
+            pass
+
+    return FileResponse(
+        path=artifact.path,
+        filename=artifact.filename,
         media_type=LIFEVAULT_MEDIA_TYPE,
         headers={
-            "Content-Disposition": f'attachment; filename="{artifact.filename}"',
-            "X-LifeGraph-Backup-Format": "lifegraph-lifevault-v1",
+            "X-LifeGraph-Backup-Format": "lifegraph-lifevault-v2",
             "Cache-Control": "no-store",
         },
+        background=BackgroundTask(cleanup_export),
     )
 
 
-async def read_lifevault_upload(upload: UploadFile) -> bytes:
+async def read_lifevault_upload(upload: UploadFile) -> Path:
     filename = upload.filename or ""
     if filename and not filename.lower().endswith(".lifevault"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_BACKUP_FILE", "message": "请选择 .lifevault 备份文件"},
         )
-    value = bytearray()
-    while chunk := await upload.read(1024 * 1024):
-        value.extend(chunk)
-        if len(value) > MAX_LIFEVAULT_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail={"code": "BACKUP_TOO_LARGE", "message": "备份文件超过 512 MB 限制"},
-            )
-    await upload.close()
-    if not value:
+    fd, temp_name = tempfile.mkstemp(prefix="lifegraph-import-", suffix=".lifevault")
+    os.close(fd)
+    path = Path(temp_name)
+    size = 0
+    try:
+        with path.open("wb") as stream:
+            while chunk := await upload.read(1024 * 1024):
+                stream.write(chunk)
+                size += len(chunk)
+                if size > MAX_LIFEVAULT_IMPORT_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail={"code": "BACKUP_TOO_LARGE", "message": "备份文件超过 2 TB 安全限制"},
+                    )
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+    if size <= 0:
+        path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_BACKUP_FILE", "message": "备份文件为空"},
         )
-    return bytes(value)
+    return path
 
 
 @router.post("/backup/import/check", dependencies=[Depends(require_session)])
@@ -465,11 +506,11 @@ async def check_backup_import(
     credential_method: Annotated[Literal["pin", "recovery"], Form()] = "pin",
     credential_secret: Annotated[str, Form(min_length=1, max_length=256)] = "",
 ) -> dict:
-    content = await read_lifevault_upload(backup_file)
+    path = await read_lifevault_upload(backup_file)
     try:
         return envelope(
-            vault.inspect_lifevault_import(
-                content=content,
+            vault.inspect_lifevault_import_file(
+                path=path,
                 credential_method=credential_method,
                 credential_secret=credential_secret,
             )
@@ -481,6 +522,8 @@ async def check_backup_import(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "BACKUP_IMPORT_CHECK_FAILED", "message": str(exc)},
         ) from exc
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @router.post("/backup/import", dependencies=[Depends(require_session)])
@@ -491,11 +534,11 @@ async def import_backup(
     credential_secret: Annotated[str, Form(min_length=1, max_length=256)] = "",
     confirm: Annotated[str, Form()] = "",
 ) -> dict:
-    content = await read_lifevault_upload(backup_file)
+    path = await read_lifevault_upload(backup_file)
     try:
         return envelope(
-            vault.restore_lifevault(
-                content=content,
+            vault.restore_lifevault_file(
+                path=path,
                 credential_method=credential_method,
                 credential_secret=credential_secret,
                 confirm=confirm,
@@ -509,6 +552,8 @@ async def import_backup(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "BACKUP_RESTORE_FAILED", "message": str(exc)},
         ) from exc
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @router.post("/profile/change-impact", dependencies=[Depends(require_session)])
@@ -648,6 +693,104 @@ def browse_content(
         raise locked_error(exc) from exc
 
 
+@router.post("/materials/import", dependencies=[Depends(require_session)])
+async def import_material(
+    material_file: Annotated[UploadFile, File()],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    file_last_modified_ms: Annotated[int | None, Form()] = None,
+    source_relative_path: Annotated[str | None, Form(max_length=1000)] = None,
+    source_directory_name: Annotated[str | None, Form(max_length=120)] = None,
+    reject_duplicate: Annotated[bool, Form()] = False,
+) -> dict:
+    content = await material_file.read(MAX_ATTACHMENT_BYTES + 1)
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={"code": "MATERIAL_TOO_LARGE", "message": "单个资料不能超过 50 MB"},
+        )
+    try:
+        return envelope(
+            vault.import_material(
+                filename=material_file.filename or "未命名资料",
+                media_type=material_file.content_type,
+                content=content,
+                file_last_modified_ms=file_last_modified_ms,
+                source_relative_path=source_relative_path,
+                source_directory_name=source_directory_name,
+                reject_duplicate=reject_duplicate,
+            )
+        )
+    except MaterialDuplicate as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "MATERIAL_DUPLICATE", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MATERIAL_IMPORT_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/materials/duplicates", dependencies=[Depends(require_session)])
+def check_material_duplicates(
+    payload: MaterialDuplicateCheckRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.find_material_duplicates(payload.sha256))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/browse", dependencies=[Depends(require_session)])
+def browse_materials(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    q: Annotated[str, Query(max_length=120)] = "",
+    category: Annotated[list[Literal["image", "document", "other"]] | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    sort: Annotated[Literal["timeline_desc", "timeline_asc", "added_desc"], Query()] = "timeline_desc",
+    limit: Annotated[int, Query(ge=1, le=100)] = 48,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+) -> dict:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_MATERIAL_RANGE", "message": "资料开始日期不能晚于结束日期"},
+        )
+    try:
+        return envelope(
+            vault.browse_materials(
+                query=q,
+                categories=category or ["image", "document", "other"],
+                date_from=date_from.isoformat() if date_from else None,
+                date_to=date_to.isoformat() if date_to else None,
+                sort=sort,
+                limit=limit,
+                offset=offset,
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/materials/{attachment_id}", dependencies=[Depends(require_session)])
+def delete_independent_material(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_independent_material(attachment_id=attachment_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "MATERIAL_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
 @router.get("/content/search", dependencies=[Depends(require_session)])
 def search_content(
     vault: Annotated[VaultManager, Depends(get_vault)],
@@ -676,6 +819,44 @@ def search_content(
                 limit=limit,
             )
         )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/content/{kind}/{content_id}/period", dependencies=[Depends(require_session)])
+def move_content_period(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    payload: ContentMoveRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        description = resolve_payload_target(vault, payload.time_scope, payload.period_key)
+        if kind == "plan" and not description["plan_allowed"]:
+            code = "PLAN_DATE_IN_PAST" if payload.time_scope == "day" else "PLAN_PERIOD_IN_PAST"
+            message = "未来计划不能移动到已经过去的日期" if payload.time_scope == "day" else "未来计划不能移动到已经结束的时间范围"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": code, "message": message},
+            )
+        return envelope(
+            vault.move_content_period(
+                kind=kind,
+                content_id=content_id,
+                anchor_date=description["anchor_date"],
+                time_scope=payload.time_scope,
+                period_key=payload.period_key,
+                revision=payload.revision,
+            )
+        )
+    except DateOutOfLifeRange as exc:
+        raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except ContentRevisionConflict as exc:
+        raise revision_conflict_error(exc) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
 
@@ -954,6 +1135,123 @@ def delete_tag(
         return envelope(vault.delete_tag(tag_id=tag_id))
     except ContentNotFound as exc:
         raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/content/{kind}/{content_id}/attachments", dependencies=[Depends(require_session)])
+def list_content_attachments(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.list_attachments(kind=kind, content_id=content_id))
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/content/{kind}/{content_id}/attachments", dependencies=[Depends(require_session)])
+async def upload_content_attachment(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    attachment_file: Annotated[UploadFile, File()],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    file_last_modified_ms: Annotated[int | None, Form()] = None,
+) -> dict:
+    content = await attachment_file.read(MAX_ATTACHMENT_BYTES + 1)
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={"code": "ATTACHMENT_TOO_LARGE", "message": "单个附件不能超过 50 MB"},
+        )
+    try:
+        return envelope(
+            vault.create_attachment(
+                kind=kind,
+                content_id=content_id,
+                filename=attachment_file.filename or "未命名附件",
+                media_type=attachment_file.content_type,
+                content=content,
+                file_last_modified_ms=file_last_modified_ms,
+            )
+        )
+    except ContentNotFound as exc:
+        raise content_not_found_error(exc) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ATTACHMENT_UPLOAD_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/attachments/{attachment_id}/download", dependencies=[Depends(require_session)])
+def download_attachment(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> Response:
+    try:
+        metadata, content = vault.read_attachment(attachment_id=attachment_id)
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+    filename = str(metadata.get("filename") or "attachment")
+    encoded = quote(filename, safe="")
+    return Response(
+        content=content,
+        media_type=str(metadata.get("media_type") or "application/octet-stream"),
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+            "X-LifeGraph-Attachment-Id": attachment_id,
+        },
+    )
+
+
+@router.post("/attachments/{attachment_id}/timeline-fallback", dependencies=[Depends(require_session)])
+def assign_attachment_timeline_fallback(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.assign_attachment_timeline_fallback(attachment_id=attachment_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ATTACHMENT_TIMELINE_FALLBACK_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.delete("/content/{kind}/{content_id}/attachments/{attachment_id}", dependencies=[Depends(require_session)])
+def delete_content_attachment(
+    kind: Literal["event", "memory", "plan"],
+    content_id: str,
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.delete_attachment(
+                kind=kind,
+                content_id=content_id,
+                attachment_id=attachment_id,
+            )
+        )
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
     except VaultError as exc:
         raise locked_error(exc) from exc
 

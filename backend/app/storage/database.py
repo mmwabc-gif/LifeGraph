@@ -10,11 +10,12 @@ from typing import Any
 from app.security.crypto import decrypt_json, encrypt_json
 
 
-LATEST_SCHEMA_VERSION = 5
+LATEST_SCHEMA_VERSION = 7
 PROFILE_AAD = b"lifegraph:v1:profile"
 EVENT_AAD_PREFIX = b"lifegraph:v2:event:"
 MEMORY_AAD_PREFIX = b"lifegraph:v2:memory:"
 PLAN_AAD_PREFIX = b"lifegraph:v2:plan:"
+ATTACHMENT_META_AAD_PREFIX = b"lifegraph:v1:attachment-meta:"
 
 _CONTENT_TABLES = {
     "event": ("events", "event_date", EVENT_AAD_PREFIX),
@@ -74,6 +75,76 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_{table}_profile_period
             ON {table}(profile_id, time_scope, period_key)
             WHERE deleted_at IS NULL
+            """
+        )
+
+    def _ensure_material_attachment_schema(self, connection: sqlite3.Connection) -> None:
+        """Upgrade attachments so a material may exist without a parent content item.
+
+        v6 required every encrypted file to belong to an event/memory/plan. v7
+        keeps that relation optional: a row with NULL kind/content_id is an
+        independent material that still has its own encrypted metadata and
+        timeline relationship.
+        """
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='attachments'"
+        ).fetchone()
+        if row is None:
+            return
+        columns = {item["name"]: item for item in connection.execute("PRAGMA table_info(attachments)")}
+        kind = columns.get("kind")
+        content_id = columns.get("content_id")
+        needs_upgrade = bool(
+            (kind and int(kind["notnull"]) == 1)
+            or (content_id and int(content_id["notnull"]) == 1)
+            or "CHECK(kind IN ('event', 'memory', 'plan'))" in str(row["sql"] or "")
+        )
+        if not needs_upgrade:
+            return
+
+        connection.execute("DROP INDEX IF EXISTS idx_attachments_content")
+        connection.execute("DROP INDEX IF EXISTS idx_attachments_profile")
+        connection.execute("DROP TABLE IF EXISTS attachments_v7")
+        connection.execute(
+            """
+            CREATE TABLE attachments_v7 (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                kind TEXT CHECK(kind IS NULL OR kind IN ('event', 'memory', 'plan')),
+                content_id TEXT,
+                file_nonce BLOB NOT NULL,
+                metadata_nonce BLOB NOT NULL,
+                metadata_ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+                CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL))
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO attachments_v7(
+                id, profile_id, kind, content_id, file_nonce, metadata_nonce,
+                metadata_ciphertext, created_at, updated_at
+            )
+            SELECT id, profile_id, kind, content_id, file_nonce, metadata_nonce,
+                   metadata_ciphertext, created_at, updated_at
+            FROM attachments
+            """
+        )
+        connection.execute("DROP TABLE attachments")
+        connection.execute("ALTER TABLE attachments_v7 RENAME TO attachments")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_content
+            ON attachments(profile_id, kind, content_id, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_profile
+            ON attachments(profile_id, created_at)
             """
         )
 
@@ -181,8 +252,29 @@ class Database:
                     deleted_at TEXT,
                     FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
                 );
+                
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    kind TEXT CHECK(kind IS NULL OR kind IN ('event', 'memory', 'plan')),
+                    content_id TEXT,
+                    file_nonce BLOB NOT NULL,
+                    metadata_nonce BLOB NOT NULL,
+                    metadata_ciphertext BLOB NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+                    CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_attachments_content
+                ON attachments(profile_id, kind, content_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_attachments_profile
+                ON attachments(profile_id, created_at);
                 """
             )
+            self._ensure_material_attachment_schema(connection)
             for table, date_column, _ in _CONTENT_TABLES.values():
                 connection.execute(
                     f"""
@@ -287,6 +379,19 @@ class Database:
                     )
                 counts[kind] = len(rows)
                 verified_records += len(rows)
+
+            attachment_rows = connection.execute(
+                "SELECT id, metadata_nonce, metadata_ciphertext FROM attachments"
+            ).fetchall()
+            for row in attachment_rows:
+                decrypt_json(
+                    master_key,
+                    row["metadata_nonce"],
+                    row["metadata_ciphertext"],
+                    aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+                )
+            counts["attachment"] = len(attachment_rows)
+            verified_records += len(attachment_rows)
 
         return {
             "sqlite_quick_check": "ok",
@@ -397,8 +502,8 @@ class Database:
         self,
         master_key: bytes,
         *,
-        kind: str,
-        content_id: str,
+        kind: str | None,
+        content_id: str | None,
         profile_id: str,
         anchor_date: str,
         time_scope: str,
@@ -562,6 +667,74 @@ class Database:
             "revision": row["revision"],
         }
 
+    def move_content_period(
+        self,
+        *,
+        kind: str,
+        content_id: str,
+        profile_id: str,
+        anchor_date: str,
+        time_scope: str,
+        period_key: str,
+        expected_revision: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        table, date_column, _aad_prefix = _CONTENT_TABLES[kind]
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE {table}
+                SET {date_column}=?, time_scope=?, period_key=?,
+                    updated_at=?, revision=revision + 1
+                WHERE id=? AND profile_id=? AND deleted_at IS NULL AND revision=?
+                """,
+                (
+                    anchor_date,
+                    time_scope,
+                    period_key,
+                    timestamp,
+                    content_id,
+                    profile_id,
+                    expected_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    f"""
+                    SELECT revision
+                    FROM {table}
+                    WHERE id=? AND profile_id=? AND deleted_at IS NULL
+                    """,
+                    (content_id, profile_id),
+                ).fetchone()
+                if row is None:
+                    raise DatabaseContentNotFound("内容不存在或已经被删除")
+                raise DatabaseRevisionConflict(
+                    f"内容已被其他操作更新，当前版本为 {row['revision']}"
+                )
+            row = connection.execute(
+                f"""
+                SELECT id, {date_column}, time_scope, period_key, updated_at, revision
+                FROM {table}
+                WHERE id=? AND profile_id=?
+                """,
+                (content_id, profile_id),
+            ).fetchone()
+        if row is None:
+            raise DatabaseContentNotFound("内容不存在或已经被删除")
+        return {
+            "kind": kind,
+            "id": row["id"],
+            "anchor_date": row[date_column],
+            "time_scope": row["time_scope"],
+            "period_key": row["period_key"],
+            "updated_at": row["updated_at"],
+            "revision": row["revision"],
+            "moved": True,
+        }
+
     def _soft_delete_content(
         self,
         *,
@@ -722,9 +895,20 @@ class Database:
                 raise DatabaseRevisionConflict(
                     f"内容已被其他操作更新，当前版本为 {row['revision']}"
                 )
+            attachment_ids = [
+                item["id"]
+                for item in connection.execute(
+                    "SELECT id FROM attachments WHERE profile_id=? AND kind=? AND content_id=?",
+                    (profile_id, kind, content_id),
+                ).fetchall()
+            ]
             connection.execute(
                 "DELETE FROM content_tags WHERE kind=? AND content_id=?",
                 (kind, content_id),
+            )
+            connection.execute(
+                "DELETE FROM attachments WHERE profile_id=? AND kind=? AND content_id=?",
+                (profile_id, kind, content_id),
             )
             connection.execute(
                 f"DELETE FROM {table} WHERE id=? AND profile_id=? AND deleted_at IS NOT NULL",
@@ -734,12 +918,33 @@ class Database:
             "kind": kind,
             "id": content_id,
             "permanently_deleted": True,
+            "attachment_ids": attachment_ids,
         }
 
     def empty_trash(self, *, profile_id: str) -> dict[str, Any]:
         counts: dict[str, int] = {}
+        attachment_ids: list[str] = []
         with self.connect() as connection:
             for kind, (table, _, _) in _CONTENT_TABLES.items():
+                deleted_ids = [
+                    row["id"]
+                    for row in connection.execute(
+                        f"SELECT id FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL",
+                        (profile_id,),
+                    ).fetchall()
+                ]
+                if deleted_ids:
+                    placeholders = ",".join("?" for _ in deleted_ids)
+                    attachment_ids.extend(
+                        row["id"]
+                        for row in connection.execute(
+                            f"""
+                            SELECT id FROM attachments
+                            WHERE profile_id=? AND kind=? AND content_id IN ({placeholders})
+                            """,
+                            (profile_id, kind, *deleted_ids),
+                        ).fetchall()
+                    )
                 connection.execute(
                     f"""
                     DELETE FROM content_tags
@@ -748,6 +953,15 @@ class Database:
                     )
                     """,
                     (kind, profile_id),
+                )
+                connection.execute(
+                    f"""
+                    DELETE FROM attachments
+                    WHERE profile_id=? AND kind=? AND content_id IN (
+                        SELECT id FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL
+                    )
+                    """,
+                    (profile_id, kind, profile_id),
                 )
                 cursor = connection.execute(
                     f"DELETE FROM {table} WHERE profile_id=? AND deleted_at IS NOT NULL",
@@ -758,7 +972,383 @@ class Database:
             "counts": counts,
             "total": sum(counts.values()),
             "emptied": True,
+            "attachment_ids": attachment_ids,
         }
+
+    def content_exists(
+        self,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+        include_deleted: bool = False,
+    ) -> bool:
+        if kind not in _CONTENT_TABLES:
+            return False
+        table, _, _ = _CONTENT_TABLES[kind]
+        deleted_clause = "" if include_deleted else " AND deleted_at IS NULL"
+        with self.connect() as connection:
+            row = connection.execute(
+                f"SELECT 1 FROM {table} WHERE id=? AND profile_id=?{deleted_clause}",
+                (content_id, profile_id),
+            ).fetchone()
+        return row is not None
+
+    def get_content_reference(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+        include_deleted: bool = False,
+    ) -> dict[str, Any]:
+        if kind not in _CONTENT_TABLES:
+            raise DatabaseContentNotFound("内容不存在")
+        table, date_column, aad_prefix = _CONTENT_TABLES[kind]
+        deleted_clause = "" if include_deleted else " AND deleted_at IS NULL"
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT id, profile_id, {date_column}, time_scope, period_key,
+                       nonce, ciphertext, created_at, updated_at, revision, deleted_at
+                FROM {table}
+                WHERE id=? AND profile_id=?{deleted_clause}
+                """,
+                (content_id, profile_id),
+            ).fetchone()
+        if row is None:
+            raise DatabaseContentNotFound("内容不存在或已经被删除")
+        payload = decrypt_json(
+            master_key,
+            row["nonce"],
+            row["ciphertext"],
+            aad=self._aad(aad_prefix, row["id"]),
+        )
+        return {
+            "id": row["id"],
+            "kind": kind,
+            "profile_id": row["profile_id"],
+            date_column: row[date_column],
+            "time_scope": row["time_scope"],
+            "period_key": row["period_key"],
+            "title": payload.get("title") or "未命名内容",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "revision": row["revision"],
+            "deleted_at": row["deleted_at"],
+        }
+
+    def create_attachment(
+        self,
+        master_key: bytes,
+        *,
+        attachment_id: str,
+        profile_id: str,
+        kind: str | None,
+        content_id: str | None,
+        file_nonce: bytes,
+        metadata: dict[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        if (kind is None) != (content_id is None):
+            raise ValueError("资料关联必须同时包含内容类型和内容 ID")
+        if kind is not None:
+            if kind not in _CONTENT_TABLES:
+                raise ValueError("不支持的内容类型")
+            if not self.content_exists(
+                profile_id=profile_id, kind=kind, content_id=content_id or "", include_deleted=False
+            ):
+                raise DatabaseContentNotFound("内容不存在或已经被删除")
+        metadata_nonce, metadata_ciphertext = encrypt_json(
+            master_key,
+            metadata,
+            aad=self._aad(ATTACHMENT_META_AAD_PREFIX, attachment_id),
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO attachments(
+                    id, profile_id, kind, content_id, file_nonce,
+                    metadata_nonce, metadata_ciphertext, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attachment_id,
+                    profile_id,
+                    kind,
+                    content_id,
+                    file_nonce,
+                    metadata_nonce,
+                    metadata_ciphertext,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return {
+            "id": attachment_id,
+            "profile_id": profile_id,
+            "kind": kind,
+            "content_id": content_id,
+            **metadata,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+
+    def update_attachment_metadata(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        attachment_id: str,
+        metadata: dict[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        metadata_nonce, metadata_ciphertext = encrypt_json(
+            master_key,
+            metadata,
+            aad=self._aad(ATTACHMENT_META_AAD_PREFIX, attachment_id),
+        )
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE attachments
+                SET metadata_nonce=?, metadata_ciphertext=?, updated_at=?
+                WHERE id=? AND profile_id=?
+                """,
+                (metadata_nonce, metadata_ciphertext, timestamp, attachment_id, profile_id),
+            )
+            if cursor.rowcount != 1:
+                raise DatabaseContentNotFound("附件不存在")
+            row = connection.execute(
+                """
+                SELECT id, profile_id, kind, content_id, file_nonce, created_at, updated_at
+                FROM attachments
+                WHERE id=? AND profile_id=?
+                """,
+                (attachment_id, profile_id),
+            ).fetchone()
+        if row is None:
+            raise DatabaseContentNotFound("附件不存在")
+        return {
+            "id": row["id"],
+            "profile_id": row["profile_id"],
+            "kind": row["kind"],
+            "content_id": row["content_id"],
+            "file_nonce": row["file_nonce"],
+            **metadata,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def list_attachment_counts_for_items(
+        self,
+        *,
+        profile_id: str,
+        kind: str,
+        content_ids: list[str],
+    ) -> dict[str, int]:
+        if kind not in _CONTENT_TABLES:
+            raise ValueError("不支持的内容类型")
+        normalized_ids = list(dict.fromkeys(content_id for content_id in content_ids if content_id))
+        if not normalized_ids:
+            return {}
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT content_id, COUNT(*) AS attachment_count
+                FROM attachments
+                WHERE profile_id=? AND kind=? AND content_id IN ({placeholders})
+                GROUP BY content_id
+                """,
+                (profile_id, kind, *normalized_ids),
+            ).fetchall()
+        return {row["content_id"]: int(row["attachment_count"]) for row in rows}
+
+    def list_attachments(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+    ) -> list[dict[str, Any]]:
+        if not self.content_exists(
+            profile_id=profile_id, kind=kind, content_id=content_id, include_deleted=True
+        ):
+            raise DatabaseContentNotFound("内容不存在")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, profile_id, kind, content_id, file_nonce,
+                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                FROM attachments
+                WHERE profile_id=? AND kind=? AND content_id=?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (profile_id, kind, content_id),
+            ).fetchall()
+        values: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = decrypt_json(
+                master_key,
+                row["metadata_nonce"],
+                row["metadata_ciphertext"],
+                aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+            )
+            values.append(
+                {
+                    "id": row["id"],
+                    "profile_id": row["profile_id"],
+                    "kind": row["kind"],
+                    "content_id": row["content_id"],
+                    "file_nonce": row["file_nonce"],
+                    **metadata,
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return values
+
+    def get_attachment(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, profile_id, kind, content_id, file_nonce,
+                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                FROM attachments
+                WHERE id=? AND profile_id=?
+                """,
+                (attachment_id, profile_id),
+            ).fetchone()
+        if row is None:
+            raise DatabaseContentNotFound("附件不存在")
+        metadata = decrypt_json(
+            master_key,
+            row["metadata_nonce"],
+            row["metadata_ciphertext"],
+            aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+        )
+        return {
+            "id": row["id"],
+            "profile_id": row["profile_id"],
+            "kind": row["kind"],
+            "content_id": row["content_id"],
+            "file_nonce": row["file_nonce"],
+            **metadata,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def delete_attachment(
+        self,
+        *,
+        profile_id: str,
+        kind: str,
+        content_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM attachments
+                WHERE id=? AND profile_id=? AND kind=? AND content_id=?
+                """,
+                (attachment_id, profile_id, kind, content_id),
+            ).fetchone()
+            if row is None:
+                raise DatabaseContentNotFound("附件不存在")
+            connection.execute(
+                "DELETE FROM attachments WHERE id=? AND profile_id=?",
+                (attachment_id, profile_id),
+            )
+        return {"id": attachment_id, "deleted": True}
+
+    def delete_independent_material(
+        self,
+        *,
+        profile_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, kind, content_id FROM attachments
+                WHERE id=? AND profile_id=?
+                """,
+                (attachment_id, profile_id),
+            ).fetchone()
+            if row is None:
+                raise DatabaseContentNotFound("资料不存在")
+            if row["kind"] is not None or row["content_id"] is not None:
+                raise DatabaseContentNotFound("该资料仍属于内容附件，不能作为独立资料删除")
+            connection.execute(
+                "DELETE FROM attachments WHERE id=? AND profile_id=?",
+                (attachment_id, profile_id),
+            )
+        return {"id": attachment_id, "deleted": True}
+
+    def iter_all_attachments(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str | None = None,
+        batch_size: int = 256,
+    ):
+        """Yield decrypted attachment metadata in bounded batches.
+
+        Attachment metadata remains encrypted at rest, so broad material searches
+        still need to decrypt candidate rows. Iterating prevents a large library
+        from materializing every decrypted metadata record in memory at once.
+        """
+        query = """
+            SELECT id, profile_id, kind, content_id, file_nonce,
+                   metadata_nonce, metadata_ciphertext, created_at, updated_at
+            FROM attachments
+        """
+        params: tuple[Any, ...] = ()
+        if profile_id is not None:
+            query += " WHERE profile_id=?"
+            params = (profile_id,)
+        query += " ORDER BY created_at ASC, id ASC"
+        with self.connect() as connection:
+            cursor = connection.execute(query, params)
+            while True:
+                rows = cursor.fetchmany(max(1, int(batch_size)))
+                if not rows:
+                    break
+                for row in rows:
+                    metadata = decrypt_json(
+                        master_key,
+                        row["metadata_nonce"],
+                        row["metadata_ciphertext"],
+                        aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+                    )
+                    yield {
+                        "id": row["id"],
+                        "profile_id": row["profile_id"],
+                        "kind": row["kind"],
+                        "content_id": row["content_id"],
+                        "file_nonce": row["file_nonce"],
+                        **metadata,
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+
+    def list_all_attachments(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return list(self.iter_all_attachments(master_key, profile_id=profile_id))
 
     def create_event(
         self,

@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.7"' in javascript
+    assert 'const frontendBuildVersion = "0.0.8"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -288,7 +288,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.7"' in javascript
+    assert 'const frontendBuildVersion = "0.0.8"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -568,7 +568,7 @@ def test_drawer_navigation_uses_keyboard_arrows_instead_of_wheel() -> None:
     assert 'handleDrawerKeyboardNavigation' in javascript
     assert 'event.key === "ArrowLeft"' in javascript
     assert 'event.key === "ArrowRight"' in javascript
-    assert 'addEventListener("wheel"' not in javascript
+    assert 'dateDrawer.addEventListener("wheel"' not in javascript
     assert 'handleDrawerContentWheel' not in javascript
     assert 'drawerScrollHint' not in javascript
     assert 'drawer-scroll-hint' not in css
@@ -661,8 +661,8 @@ def test_tag_management_settings_ui_and_handlers_are_present() -> None:
     assert 'method: "DELETE"' in javascript
     assert '.tag-management-list {' in css
     assert '.tag-management-row {' in css
-    assert 'const frontendBuildVersion = "0.0.7";' in javascript
-    assert '/assets/app.js?v=0.0.7' in html
+    assert 'const frontendBuildVersion = "0.0.8";' in javascript
+    assert '/assets/app.js?v=0.0.8' in html
 
 
 def test_unified_content_center_ui_and_handlers_are_present() -> None:
@@ -717,6 +717,7 @@ def test_event_and_plan_forms_share_unified_tag_controls() -> None:
     root = Path(__file__).resolve().parents[1]
     html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
     javascript = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (root / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     for element_id in (
         "toggleEventTagPicker",
@@ -724,15 +725,30 @@ def test_event_and_plan_forms_share_unified_tag_controls() -> None:
         "eventTagPicker",
         "eventTagOptions",
         "eventNewTagName",
-        "createEventTag",
+        "toggleMemoryTagPicker",
+        "memorySelectedTags",
+        "memoryTagPicker",
+        "memoryTagOptions",
+        "memoryNewTagName",
         "togglePlanTagPicker",
         "planSelectedTags",
         "planTagPicker",
         "planTagOptions",
         "planNewTagName",
-        "createPlanTag",
     ):
         assert f'id="{element_id}"' in html
+
+    for removed_button_id in ("createEventTag", "createMemoryTag", "createPlanTag"):
+        assert f'id="{removed_button_id}"' not in html
+    assert html.count('class="memory-tag-inline-create-input"') == 3
+    assert html.count('aria-label="输入新标签名称，按回车创建并选中"') == 3
+    assert 'document.getElementById("eventNewTagName")?.addEventListener("keydown"' in javascript
+    assert 'document.getElementById("memoryNewTagName")?.addEventListener("keydown"' in javascript
+    assert 'document.getElementById("planNewTagName")?.addEventListener("keydown"' in javascript
+    assert 'showToast(`已选中标签 #${existing.name}`, "success")' in javascript
+    assert 'showToast(`标签 #${tag.name} 已创建并选中`, "success")' in javascript
+    assert ".memory-tag-inline-create-input {" in css
+    assert "flex: 0 0 9.5em;" in css
 
     assert 'event: new Set()' in javascript
     assert 'plan: new Set()' in javascript
@@ -931,3 +947,472 @@ def test_content_center_tag_filters_share_row_with_stacked_actions() -> None:
     assert ".content-center-tags-actions {\n  display: flex;\n  flex-direction: column;" in css
     assert "/* LifeGraph v0.0.7.7.10：固定标签筛选与操作按钮同一网格行 */" in css
     assert ".content-center-tags-row > .content-center-tags-actions {\n  grid-area: auto;\n  grid-column: 2;\n  grid-row: 1;" in css
+
+
+def test_content_cards_expose_encrypted_attachment_panel() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'attachmentButton.className = "content-attachment-button"' in javascript
+    assert 'attachmentButton.textContent = `附件 ${Number.isInteger(item.attachment_count) ? item.attachment_count : 0}`' in javascript
+    assert 'formData.append("attachment_file", file, file.name);' in javascript
+    assert 'className = "attachment-panel hidden"' in javascript
+    assert 'textContent = "＋ 添加附件"' in javascript
+    assert '单个附件最多 50 MB' in javascript
+    assert '/api/v1/attachments/${encodeURIComponent(attachment.id)}/download' in javascript
+    assert 'article.appendChild(attachmentPanel);' in javascript
+    assert 'button.textContent = `附件 ${attachments.length}`;' in javascript
+    assert '/* LifeGraph v0.0.8.1：内容附件基础能力 */' in css
+    assert '.attachment-panel {' in css
+    assert '.attachment-item {' in css
+
+
+def test_new_content_forms_support_pending_attachments_before_save() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for kind in ("event", "memory", "plan"):
+        assert f'data-pending-attachments="{kind}"' in html
+        assert f'id="{kind}PendingAttachments"' in html
+        assert f'id="{kind}PendingAttachmentList"' in html
+        assert f'document.getElementById("{kind}PendingAttachments")' in javascript
+
+    assert 'const pendingContentAttachments = {' in javascript
+    assert 'async function uploadPendingContentAttachments(kind, contentId)' in javascript
+    assert 'const attachmentResult = await uploadPendingContentAttachments(kind, savedItem.id);' in javascript
+    assert 'formNode.dataset.editId = savedItem.id;' in javascript
+    assert 'clearPendingContentAttachments(kind);' in javascript
+    assert '附件上传失败，可再次保存重试' in javascript
+    assert '.content-form-attachment-field {' in css
+    assert '.pending-attachment-list {' in css
+
+
+def test_image_attachments_render_thumbnails_and_secure_preview_modal() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for element_id in (
+        "attachmentPreviewModal",
+        "attachmentPreviewTitle",
+        "attachmentPreviewImage",
+        "attachmentPreviewPrevious",
+        "attachmentPreviewNext",
+        "downloadAttachmentPreview",
+        "closeAttachmentPreview",
+    ):
+        assert f'id="{element_id}"' in html
+
+    assert 'function isImageAttachment(attachment)' in javascript
+    assert 'async function fetchAttachmentBlob(attachment)' in javascript
+    assert 'async function attachmentObjectUrl(attachment)' in javascript
+    assert 'function createAttachmentThumbnail(attachment, images, imageIndex, { lazy = false } = {})' in javascript
+    assert 'openAttachmentPreview(images, imageIndex, button);' in javascript
+    assert 'navigateAttachmentPreview(event.key === "ArrowLeft" ? -1 : 1);' in javascript
+    assert 'releaseAllAttachmentObjectUrls();' in javascript
+    assert 'if (isImageFile(file)) {' in javascript
+    assert '/* LifeGraph v0.0.8.2：图片附件缩略图与沉浸式预览 */' in css
+    assert '.attachment-thumbnail-button {' in css
+    assert '.attachment-preview-modal {' in css
+    assert '.attachment-preview-image {' in css
+
+
+def test_content_center_uses_inline_enter_to_create_tags() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="contentCenterBatchNewTagName" class="content-center-batch-tag-inline-input"' in html
+    assert 'id="contentCenterBatchCreateTag"' not in html
+    assert 'class="content-center-batch-create"' not in html
+    assert 'input.className = "content-center-quick-tag-inline-input";' in javascript
+    assert 'input.placeholder = "＋ 新标签";' in javascript
+    assert 'createButton.textContent = "新建并选中";' not in javascript
+    assert 'contentCenterBatchCreateTagButton' not in javascript
+    assert 'createContentCenterBatchTag();' in javascript
+    assert 'event.key !== "Enter"' in javascript
+    assert '.content-center-quick-tag-inline-input,' in css
+    assert '.content-center-batch-tag-inline-input {' in css
+
+
+def test_attachment_preview_stage_cannot_cover_footer_actions() -> None:
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert '/* LifeGraph v0.0.8.2.1：图片预览底栏与内容中心行内标签新建修复 */' in css
+    assert '.attachment-preview-stage,\n.attachment-preview-image-wrap {\n  overflow: hidden;' in css
+    assert '.attachment-preview-image {\n  width: 100%;\n  height: 100%;' in css
+    assert '.attachment-preview-footer {\n  position: relative;\n  z-index: 3;' in css
+
+
+def test_attachment_preview_is_borderless_supports_wheel_and_middle_click_fullscreen() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'const attachmentPreviewStage = attachmentPreviewModal?.querySelector(".attachment-preview-stage");' in javascript
+    assert 'attachmentPreviewStage?.addEventListener("wheel"' in javascript
+    assert 'navigateAttachmentPreview(delta > 0 ? 1 : -1);' in javascript
+    assert 'attachmentPreviewImage?.addEventListener("auxclick"' in javascript
+    assert 'attachmentPreviewImage?.addEventListener("contextmenu"' in javascript
+    assert 'closeAttachmentPreview();' in javascript
+    assert 'event.button !== 1' in javascript
+    assert 'toggleAttachmentPreviewFullscreen();' in javascript
+    assert 'attachmentPreviewModal.requestFullscreen' in javascript
+    assert 'document.exitFullscreen()' in javascript
+    assert 'document.addEventListener("fullscreenchange"' in javascript
+    assert '/* LifeGraph v0.0.8.2.3：默认中等尺寸预览，中键切换真正全屏 */' in css
+    assert ".attachment-preview-shell {\n  position: relative;\n  display: block;\n  width: min(82vw, 1180px);\n  height: min(78dvh, 780px);" in css
+    assert ".attachment-preview-modal.is-fullscreen-zoom .attachment-preview-shell" in css
+    assert "width: 100vw;\n  height: 100dvh;" in css
+    assert "border: 0;\n  border-radius: 14px;" in css
+    assert ".attachment-preview-modal.is-fullscreen-zoom .attachment-preview-shell" in css
+    assert "border-radius: 0;\n  box-shadow: none;" in css
+    assert ".attachment-preview-header,\n.attachment-preview-footer {\n  position: absolute;" in css
+    assert ".attachment-preview-nav {\n  position: absolute;" in css
+    assert 'cursor: zoom-in;' in css
+    assert 'cursor: zoom-out;' in css
+
+
+def test_attachment_time_is_independent_and_shown_as_timeline_relationship() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'function attachmentTimelineLabel(attachment)' in javascript
+    assert 'return `拍摄于 ${time}`;' in javascript
+    assert 'return `文档创建于 ${time}`;' in javascript
+    assert 'return `文件修改于 ${time}`;' in javascript
+    assert 'return `来源内容日期 ${String(attachment.timeline_date || time).slice(0, 10)}`;' in javascript
+    assert 'return `附件添加于 ${time}`;' in javascript
+    assert 'fallbackButton.textContent = "归入来源/添加时间";' in javascript
+    assert '/timeline-fallback`' in javascript
+    assert 'timelineButton.textContent = `时间轴归属 ${attachment.timeline_date}`;' in javascript
+    assert 'openPeriodDrawer("day", attachment.timeline_date)' in javascript
+    assert 'formData.append("file_last_modified_ms", String(Math.trunc(file.lastModified)));' in javascript
+    assert 'adoptButton.textContent = "采用";' not in javascript
+    assert '建议挂接日期' not in javascript
+    assert '/* LifeGraph v0.0.8.4：资料双重时间关系与时间轴归属 */' in css
+    assert '.attachment-timeline-meta {' in css
+    assert '.attachment-timeline-date-button {' in css
+
+
+def test_period_drawer_has_material_section_for_file_own_timeline_date() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="materialSection"' in html
+    assert 'id="materialList"' in html
+    assert '按文件自身时间归属到人生时间轴' in html
+    assert 'function renderMaterialList(materials = [])' in javascript
+    assert 'renderMaterialList(detail.materials || []);' in javascript
+    assert 'sourceButton.textContent = `来自 ${source.period_key} · ${materialSourceKindLabel(source.kind)}：${source.title || "未命名内容"}`;' in javascript
+    assert 'state.has_material' in javascript
+    assert 'labels.push("有资料")' in javascript
+    assert '.material-list {' in css
+    assert '.hierarchy-material-marker {' in css
+    assert '.period-material-marker {' in css
+
+
+
+def test_material_center_entry_filters_and_relation_actions_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="materialCenterHomeButton"' in html
+    assert 'id="materialCenterFullPageButton"' in html
+    assert 'id="materialCenterModal"' in html
+    assert 'id="materialCenterQuery"' in html
+    assert 'name="material_category" value="image" checked' in html
+    assert 'name="material_category" value="document" checked' in html
+    assert 'name="material_category" value="other" checked' in html
+    assert 'id="materialCenterDateFrom"' in html
+    assert 'id="materialCenterDateTo"' in html
+    assert 'id="materialCenterSort"' in html
+    assert 'id="materialCenterTimelineView"' in html
+    assert 'id="materialCenterListView"' in html
+    assert '>时间轴</button>' in html
+    assert '>列表</button>' in html
+
+    assert 'async function openMaterialCenterModal()' in javascript
+    assert 'async function runMaterialCenterBrowse()' in javascript
+    assert '/api/v1/materials/browse?' in javascript
+    assert 'function renderMaterialCenterResults(data)' in javascript
+    assert 'function renderMaterialCenterTimeline(items, imageItems, imageIndexById)' in javascript
+    assert 'function renderMaterialCenterList(items, imageItems, imageIndexById)' in javascript
+    assert 'let materialCenterViewMode = "timeline";' in javascript
+    assert 'materialTimelineNodeSummary(dateItems)' in javascript
+    assert 'openMaterialCenterPeriod("day", attachment.timeline_date, dateButton)' in javascript
+    assert 'downloadAttachmentFile(attachment)' in javascript
+    assert 'createAttachmentThumbnail(' in javascript
+    assert 'resumeMaterialCenterAfterDrawer()' in javascript
+
+    assert '.material-center-modal {\n  z-index: 319;' in css
+    assert '.full-page-life-view {\n  position: fixed;\n  inset: 0;\n  z-index: 125;' in css
+    assert '.material-center-card {' in css
+    assert '.material-center-results {' in css
+    assert 'overflow-y: auto;' in css
+    assert '.material-center-card-item {' in css
+    assert '.material-center-timeline {' in css
+    assert '.material-timeline-date-row {' in css
+    assert '.material-timeline-grid {' in css
+    assert '.material-timeline-dot {' in css
+    assert 'overflow: hidden;' in css
+    assert '.material-center-source-button {' in css
+    assert 'text-overflow: ellipsis;' in css
+
+
+def test_material_center_quick_filter_keeps_category_labels_on_one_line() -> None:
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    assert ".material-center-keyword" in css
+    assert "max-width: 560px" in css
+    assert ".material-center-category-options label" in css
+    assert "white-space: nowrap" in css
+    assert "word-break: keep-all" in css
+    assert "min-width: 76px" in css
+
+
+def test_material_center_truncated_text_has_native_tooltips():
+    app_js = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert 'title.title = title.textContent;' in app_js
+    assert 'meta.title = meta.textContent;' in app_js
+    assert 'sourceButton.title = sourceButton.textContent;' in app_js
+
+
+def test_material_center_supports_independent_import_and_delete() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="importMaterialButton"' in html
+    assert 'id="materialImportInput"' in html
+    assert 'type="file" multiple' in html
+    assert 'async function importIndependentMaterialFile(file, options = {})' in javascript
+    assert 'fetch("/api/v1/materials/import"' in javascript
+    assert 'formData.append("material_file", file, file.name);' in javascript
+    assert 'async function importIndependentMaterials(files)' in javascript
+    assert 'independent.textContent = "独立资料 · 直接导入人生资料库";' in javascript
+    assert 'if (attachment.is_independent)' in javascript
+    assert '`/api/v1/materials/${encodeURIComponent(attachment.id)}`' in javascript
+    assert '.material-center-header-actions {' in css
+    assert '.material-center-independent-label,' in css
+
+
+def test_material_directory_scan_preview_and_batch_import_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="scanMaterialDirectoryButton"' in html
+    assert 'id="materialDirectoryInput"' in html
+    assert 'webkitdirectory' in html
+    assert 'id="materialDirectoryScanModal"' in html
+    assert 'id="materialDirectoryScanList"' in html
+    assert 'id="importScannedMaterials"' in html
+    assert 'const MAX_DIRECTORY_SCAN_FILES = 1000;' in javascript
+    assert 'window.crypto.subtle.digest("SHA-256"' in javascript
+    assert 'api("/api/v1/materials/duplicates"' in javascript
+    assert 'sourceRelativePath: item.relativePath' in javascript
+    assert 'rejectDuplicate: true' in javascript
+    assert 'formData.append("source_relative_path"' in javascript
+    assert 'formData.append("reject_duplicate", "true")' in javascript
+    assert '.material-directory-scan-modal {' in css
+    assert '.material-directory-scan-list {' in css
+    assert '.material-directory-scan-item {' in css
+
+
+def test_period_materials_default_to_six_item_collapsed_view() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="materialSectionToggle"' in html
+    assert 'const MATERIAL_SECTION_COLLAPSED_LIMIT = 6;' in javascript
+    assert 'materialSectionExpanded = false;' in javascript
+    assert 'index >= MATERIAL_SECTION_COLLAPSED_LIMIT' in javascript
+    assert 'materialSectionTotal = items.length;' in javascript
+    assert 'const total = Math.max(materialSectionTotal, cards.length);' in javascript
+    assert 'toggle.textContent = materialSectionExpanded ? "收起" : `展开全部（${total}）`;' in javascript
+    assert 'function ensureMaterialSectionToggle()' in javascript
+    assert 'materialSectionToggle.dataset.collapseBound' in javascript
+    assert '.material-section-toggle {' in css
+
+
+def test_material_center_timeline_groups_collapse_after_six_items() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'function bindMaterialTimelineCollapse(' in javascript
+    assert 'toggle.textContent = `展开全部（${items.length}）`;' in javascript
+    assert 'toggle.textContent = expanded ? "收起" : `展开全部（${items.length}）`;' in javascript
+    assert 'card.classList.toggle("hidden", index >= MATERIAL_SECTION_COLLAPSED_LIMIT);' in javascript
+    assert 'bindMaterialTimelineCollapse(grid, dateItems, nodeHeader, imageItems, imageIndexById);' in javascript
+    assert 'bindMaterialTimelineCollapse(grid, undated, heading, imageItems, imageIndexById);' in javascript
+    assert '.material-timeline-node-header {' in css
+    assert '.material-timeline-toggle {' in css
+
+
+def test_material_timeline_year_can_collapse_all_year_materials() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'yearHeadingText.textContent = `${year} 年 · ${yearItems.length} 份资料`;' in javascript
+    assert 'yearToggle.textContent = "收起年度";' in javascript
+    assert 'yearBody.classList.toggle("hidden", !yearExpanded);' in javascript
+    assert 'yearToggle.textContent = yearExpanded ? "收起年度" : `展开年度（${yearItems.length}）`;' in javascript
+    assert 'yearToggle.setAttribute("aria-expanded", String(yearExpanded));' in javascript
+    assert '.material-timeline-year-toggle {' in css
+    assert '.material-timeline-year-body {' in css
+
+
+def test_material_timeline_month_has_independent_collapse_control() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'monthHeadingText.textContent = `${Number(month)} 月 · ${monthItems.length} 份资料`;' in javascript
+    assert 'monthToggle.textContent = "收起月份";' in javascript
+    assert 'monthBody.classList.toggle("hidden", !monthExpanded);' in javascript
+    assert 'monthToggle.textContent = monthExpanded ? "收起月份" : `展开月份（${monthItems.length}）`;' in javascript
+    assert 'monthToggle.setAttribute("aria-expanded", String(monthExpanded));' in javascript
+    assert '.material-timeline-month-toggle {' in css
+    assert '.material-timeline-month-body {' in css
+
+
+def test_period_drawer_add_buttons_include_current_scope() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'function periodScopeLabel(scope = selectedScope)' in javascript
+    assert 'if (scope === "year") return "年";' in javascript
+    assert 'if (scope === "month") return "月";' in javascript
+    assert 'if (scope === "day") return "日";' in javascript
+    assert 'return `＋ 添加${periodScopeLabel(scope)}${config.itemLabel}`;' in javascript
+    assert 'toggleEventFormButton.textContent = scopedContentCreateLabel("event", detail.scope);' in javascript
+    assert 'toggleMemoryFormButton.textContent = scopedContentCreateLabel("memory", detail.scope);' in javascript
+    assert ': scopedContentCreateLabel("plan", detail.scope);' in javascript
+
+
+def test_period_drawer_content_lists_have_independent_collapse_controls() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="eventListToggle"' in html
+    assert 'id="memoryListToggle"' in html
+    assert 'id="planListToggle"' in html
+    assert 'const contentSectionCollapsed = { event: false, memory: false, plan: false };' in javascript
+    assert 'function updateContentListCollapse(kind)' in javascript
+    assert 'list.classList.toggle("hidden", collapsed);' in javascript
+    assert '`展开${config.itemLabel}（${itemCount}）`' in javascript
+    assert '`收起${config.itemLabel}`' in javascript
+    assert 'contentSectionCollapsed[kind] = !contentSectionCollapsed[kind];' in javascript
+    assert '.content-section-toggle {' in css
+
+
+def test_home_hero_contains_clickable_current_month_calendar() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="homeMonthCalendarTitle"' in html
+    assert 'id="homeMonthCalendarGrid"' in html
+    assert '<span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>' in html
+    assert 'function renderHomeMonthCalendar()' in javascript
+    assert 'if (!homeMonthCalendarMonthKey) homeMonthCalendarMonthKey = todayMonthKey;' in javascript
+    assert 'const mondayOffset = (firstDay.getUTCDay() + 6) % 7;' in javascript
+    assert 'const button = periodChildButton(child, currentProgress.today);' in javascript
+    assert 'renderHomeMonthCalendar();' in javascript
+    assert '.hero-month-calendar {' in css
+    assert '.hero-month-calendar-grid {' in css
+    assert 'grid-template-columns: repeat(7, minmax(0, 1fr));' in css
+
+
+def test_home_hero_uses_balanced_side_tracks_for_centered_month_calendar():
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    assert "grid-template-columns: minmax(260px, 1fr) minmax(360px, 520px) minmax(260px, 1fr);" in css
+    assert ".hero > .life-percent {\n  justify-self: end;" in css
+    assert ".hero-copy {\n  min-width: 0;\n  justify-self: start;" in css
+    assert ".hero-month-calendar {\n  width: 100%;\n  justify-self: center;" in css
+
+
+def test_day_calendars_use_horizontal_lunar_watermark_without_growing_home_cells() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert '/assets/calendar_meta.js?v=0.0.8' in html
+    assert '/assets/app.js?v=0.0.8' in html
+    assert 'function decorateDayCalendarButton(button, child, options = {})' in javascript
+    assert 'window.LifeGraphCalendarMeta?.getDateMeta?.(child.period_key)' in javascript
+    assert 'watermark.className = "calendar-day-watermark";' in javascript
+    assert 'watermark.classList.add(`glyph-count-${watermarkCharacters.length}`);' in javascript
+    assert 'solarDay.className = "calendar-day-solar";' in javascript
+    assert 'decorateDayCalendarButton(button, child)' in javascript
+    assert 'decorateDayCalendarButton(button, child, { actionLabel: "点击查看或添加" })' in javascript
+    assert '.calendar-day-watermark {' in css
+    assert '.calendar-day-watermark.glyph-count-2 .glyph-1 { left: 28%; }' in css
+    assert '.calendar-day-solar {' in css
+    assert 'z-index: 2;' in css
+    assert '.period-navigator[data-scope="month"] .calendar-day-watermark,' in css
+    assert '.period-navigator[data-scope="day"] .calendar-day-watermark {' in css
+    assert '.hero-month-calendar-grid .period-child-cell,\n.hero-month-day-placeholder {\n  height: 27px;' in css
+
+
+def test_calendar_meta_supports_lunar_first_day_and_solar_terms_locally() -> None:
+    calendar_meta = (PROJECT_ROOT / "frontend" / "calendar_meta.js").read_text(encoding="utf-8")
+
+    assert '"初一"' in calendar_meta
+    assert '"立秋"' in calendar_meta
+    assert 'lunar.dayNumber === 1 ? lunar.monthName : lunar.dayName' in calendar_meta
+    assert 'tooltipParts.push(`农历${lunarFull}`);' in calendar_meta
+    assert 'tooltipParts.push(`节气：${solarTerm}`);' in calendar_meta
+    assert 'global.LifeGraphCalendarMeta = api;' in calendar_meta
+
+
+def test_home_month_calendar_title_opens_year_month_picker() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="homeMonthCalendarPickerButton"' in html
+    assert 'id="homeMonthCalendarPicker"' in html
+    assert 'id="homeMonthCalendarYear"' in html
+    assert 'id="homeMonthCalendarMonth"' in html
+    assert 'id="homeMonthCalendarToday"' in html
+    assert 'id="homeMonthCalendarApply"' in html
+    assert 'function syncHomeMonthCalendarPicker()' in javascript
+    assert 'function setHomeMonthCalendarMonth(monthKey' in javascript
+    assert 'homeMonthCalendarYear?.addEventListener("change"' in javascript
+    assert 'setHomeMonthCalendarMonth(currentProgress.today.slice(0, 7));' in javascript
+    assert '.hero-month-calendar-picker-popover {' in css
+    assert '.hero-month-calendar-title-button[aria-expanded="true"]' in css
+
+
+def test_calendar_meta_supports_major_traditional_festivals_and_priority() -> None:
+    calendar_meta = (PROJECT_ROOT / "frontend" / "calendar_meta.js").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    for festival in ["春节", "元宵", "清明", "端午", "七夕", "中秋", "重阳", "腊八", "除夕"]:
+        assert f'"{festival}"' in calendar_meta
+    assert "festival || solarTerm ||" in calendar_meta
+    assert 'tooltipParts.push(`传统节日：${festival}`);' in calendar_meta
+    assert 'watermark.classList.toggle("is-festival", Boolean(calendarMeta.festival));' in javascript
+    assert ".calendar-day-watermark.is-festival {" in css
+    assert "color: #a94339;" in css
+    assert ".calendar-day-watermark.is-solar-term {" in css
+    assert "color: #ad5d50;" in css
+
+
+def test_material_center_uses_paged_loading_and_lazy_thumbnails() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'params.set("limit", "48")' in javascript
+    assert 'params.set("offset", "0")' in javascript
+    assert 'async function loadMoreMaterialCenterResults()' in javascript
+    assert 'new IntersectionObserver' in javascript
+    assert 'observeMaterialThumbnail(button, loadThumbnail)' in javascript
+    assert 'material-center-load-sentinel' in javascript
+    assert '滚动继续加载' in html
+    assert '.material-center-load-sentinel {' in css

@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.7</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.7">
+  <title>人生图谱 · v0.0.8</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.8">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.7</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.8</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.7</span>
+          <span class="build-badge">v0.0.8</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -85,11 +85,51 @@
     <section id="homeView" class="hidden">
       <div class="home-sticky">
         <section class="hero panel">
-          <div>
+          <div class="hero-copy">
             <p id="todayText" class="eyebrow"></p>
             <h2 id="welcomeTitle">人生图谱</h2>
             <p id="lifeSentence" class="hero-sentence"></p>
           </div>
+
+          <section class="hero-month-calendar" aria-label="本月日历">
+            <div class="hero-month-calendar-head">
+              <div class="hero-month-calendar-picker">
+                <button
+                  id="homeMonthCalendarPickerButton"
+                  class="hero-month-calendar-title-button"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="homeMonthCalendarPicker"
+                  title="选择要查看的年月"
+                >
+                  <span id="homeMonthCalendarTitle">本月</span>
+                  <span class="hero-month-calendar-title-caret" aria-hidden="true">⌄</span>
+                </button>
+                <div id="homeMonthCalendarPicker" class="hero-month-calendar-picker-popover hidden" role="group" aria-label="选择年月">
+                  <div class="hero-month-calendar-picker-fields">
+                    <label>
+                      <span>年份</span>
+                      <select id="homeMonthCalendarYear" aria-label="选择年份"></select>
+                    </label>
+                    <label>
+                      <span>月份</span>
+                      <select id="homeMonthCalendarMonth" aria-label="选择月份"></select>
+                    </label>
+                  </div>
+                  <div class="hero-month-calendar-picker-actions">
+                    <button id="homeMonthCalendarToday" class="secondary-button" type="button">回到本月</button>
+                    <button id="homeMonthCalendarApply" class="primary-button" type="button">查看</button>
+                  </div>
+                </div>
+              </div>
+              <span>点击日期查看 / 添加</span>
+            </div>
+            <div class="hero-month-weekdays" aria-hidden="true">
+              <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+            </div>
+            <div id="homeMonthCalendarGrid" class="hero-month-calendar-grid"></div>
+          </section>
+
           <div class="life-percent">
             <strong id="lifePercent">0%</strong>
           </div>
@@ -121,6 +161,7 @@
             <div class="life-map-view-controls">
               <button id="quickMemoryHomeButton" class="quick-memory-entry-button" type="button">记一记</button>
               <button id="contentCenterHomeButton" class="content-center-entry-button" type="button">内容中心</button>
+              <button id="materialCenterHomeButton" class="material-center-entry-button" type="button">资料中心</button>
               <button id="memorySearchHomeButton" class="memory-search-entry-button" type="button">搜索</button>
               <button id="memoryMapFilterHomeButton" class="memory-map-filter-entry-button" type="button">标签筛选</button>
               <div class="life-view-switch" role="tablist" aria-label="人生图谱显示层级">
@@ -173,7 +214,7 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.7</p>
+        <p class="eyebrow">v0.0.8</p>
         <h2>统一内容整理与浏览</h2>
         <p>内容中心支持关键词、标签、类型、日期与排序组合整理事件、记忆和计划。</p>
         <div class="button-row">
@@ -202,6 +243,7 @@
           </div>
           <button id="quickMemoryFullPageButton" class="quick-memory-entry-button full-page-control-button" type="button">记一记</button>
           <button id="contentCenterFullPageButton" class="content-center-entry-button full-page-control-button" type="button">内容中心</button>
+          <button id="materialCenterFullPageButton" class="material-center-entry-button full-page-control-button" type="button">资料中心</button>
           <button id="memorySearchFullPageButton" class="memory-search-entry-button full-page-control-button" type="button">搜索</button>
           <button id="memoryMapFilterFullPageButton" class="memory-map-filter-entry-button full-page-control-button" type="button">标签筛选</button>
           <button id="fullPageLocateToday" class="ghost-button full-page-control-button" type="button">定位今天</button>
@@ -283,6 +325,7 @@
         <section id="eventSection" class="content-kind-section hidden">
           <div class="content-kind-heading">
             <h3 id="eventSectionHeading">事件</h3>
+            <button id="eventListToggle" class="content-section-toggle hidden" type="button" aria-expanded="true">收起事件</button>
           </div>
 
           <form id="eventForm" class="event-form hidden">
@@ -299,12 +342,20 @@
               </div>
               <div id="eventSelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
               <div id="eventTagPicker" class="memory-tag-picker hidden">
-                <div id="eventTagOptions" class="memory-tag-option-list"></div>
-                <div class="memory-tag-create-row">
-                  <input id="eventNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
-                  <button id="createEventTag" class="ghost-button" type="button">新建并选中</button>
+                <div id="eventTagOptions" class="memory-tag-option-list">
+                  <input id="eventNewTagName" class="memory-tag-inline-create-input" maxlength="40" size="8" placeholder="＋ 新标签" autocomplete="off" aria-label="输入新标签名称，按回车创建并选中">
                 </div>
               </div>
+            </div>
+            <div class="content-form-attachment-field" data-pending-attachments="event">
+              <div class="content-form-attachment-header">
+                <span>附件</span>
+                <label class="attachment-upload-button content-form-attachment-add">＋ 添加附件
+                  <input id="eventPendingAttachments" class="attachment-file-input" type="file" multiple>
+                </label>
+              </div>
+              <div id="eventPendingAttachmentList" class="pending-attachment-list" aria-live="polite"></div>
+              <p class="attachment-storage-note">保存事件后自动加密上传，单个文件最大 50 MB。</p>
             </div>
             <div class="event-form-actions">
               <button id="cancelEventForm" class="ghost-button" type="button">取消</button>
@@ -318,6 +369,7 @@
         <section id="memorySection" class="content-kind-section hidden">
           <div class="content-kind-heading">
             <h3 id="memorySectionHeading">记忆</h3>
+            <button id="memoryListToggle" class="content-section-toggle hidden" type="button" aria-expanded="true">收起记忆</button>
           </div>
 
           <form id="memoryForm" class="memory-form hidden">
@@ -334,12 +386,20 @@
               </div>
               <div id="memorySelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
               <div id="memoryTagPicker" class="memory-tag-picker hidden">
-                <div id="memoryTagOptions" class="memory-tag-option-list"></div>
-                <div class="memory-tag-create-row">
-                  <input id="memoryNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
-                  <button id="createMemoryTag" class="ghost-button" type="button">新建并选中</button>
+                <div id="memoryTagOptions" class="memory-tag-option-list">
+                  <input id="memoryNewTagName" class="memory-tag-inline-create-input" maxlength="40" size="8" placeholder="＋ 新标签" autocomplete="off" aria-label="输入新标签名称，按回车创建并选中">
                 </div>
               </div>
+            </div>
+            <div class="content-form-attachment-field" data-pending-attachments="memory">
+              <div class="content-form-attachment-header">
+                <span>附件</span>
+                <label class="attachment-upload-button content-form-attachment-add">＋ 添加附件
+                  <input id="memoryPendingAttachments" class="attachment-file-input" type="file" multiple>
+                </label>
+              </div>
+              <div id="memoryPendingAttachmentList" class="pending-attachment-list" aria-live="polite"></div>
+              <p class="attachment-storage-note">保存记忆后自动加密上传，单个文件最大 50 MB。</p>
             </div>
             <div class="event-form-actions">
               <button id="cancelMemoryForm" class="ghost-button" type="button">取消</button>
@@ -353,11 +413,12 @@
         <section id="planSection" class="content-kind-section hidden">
           <div class="content-kind-heading">
             <h3 id="planSectionHeading">计划</h3>
+            <button id="planListToggle" class="content-section-toggle hidden" type="button" aria-expanded="true">收起计划</button>
           </div>
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.7">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.8">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -369,12 +430,20 @@
               </div>
               <div id="planSelectedTags" class="memory-tag-chip-list" aria-live="polite"></div>
               <div id="planTagPicker" class="memory-tag-picker hidden">
-                <div id="planTagOptions" class="memory-tag-option-list"></div>
-                <div class="memory-tag-create-row">
-                  <input id="planNewTagName" maxlength="40" placeholder="新标签名称" autocomplete="off">
-                  <button id="createPlanTag" class="ghost-button" type="button">新建并选中</button>
+                <div id="planTagOptions" class="memory-tag-option-list">
+                  <input id="planNewTagName" class="memory-tag-inline-create-input" maxlength="40" size="8" placeholder="＋ 新标签" autocomplete="off" aria-label="输入新标签名称，按回车创建并选中">
                 </div>
               </div>
+            </div>
+            <div class="content-form-attachment-field" data-pending-attachments="plan">
+              <div class="content-form-attachment-header">
+                <span>附件</span>
+                <label class="attachment-upload-button content-form-attachment-add">＋ 添加附件
+                  <input id="planPendingAttachments" class="attachment-file-input" type="file" multiple>
+                </label>
+              </div>
+              <div id="planPendingAttachmentList" class="pending-attachment-list" aria-live="polite"></div>
+              <p class="attachment-storage-note">保存计划后自动加密上传，单个文件最大 50 MB。</p>
             </div>
             <div class="event-form-actions">
               <button id="cancelPlanForm" class="ghost-button" type="button">取消</button>
@@ -383,6 +452,18 @@
           </form>
 
           <div id="planList" class="content-list plan-list"></div>
+        </section>
+
+        <section id="materialSection" class="content-kind-section material-section hidden">
+          <div class="content-kind-heading material-kind-heading">
+            <h3 id="materialSectionHeading">资料</h3>
+            <div class="material-heading-actions">
+              <span id="materialSectionCount" class="material-section-count">0</span>
+              <button id="materialSectionToggle" class="material-section-toggle hidden" type="button" aria-expanded="false">展开全部</button>
+            </div>
+          </div>
+          <p class="section-note compact-section-note material-section-note">按文件自身时间归属到人生时间轴；它仍然保留在原事件、记忆或计划的附件中。</p>
+          <div id="materialList" class="material-list"></div>
         </section>
       </div>
 
@@ -716,6 +797,96 @@
 
 
 
+    <div id="materialCenterModal" class="modal material-center-modal hidden" role="dialog" aria-modal="true" aria-labelledby="materialCenterTitle" aria-hidden="true">
+      <div class="modal-card material-center-card">
+        <header class="material-center-header">
+          <div>
+            <p class="eyebrow">人生资料库</p>
+            <h2 id="materialCenterTitle">浏览照片、文档与其他资料</h2>
+          </div>
+          <div class="material-center-header-actions">
+            <button id="scanMaterialDirectoryButton" class="ghost-button material-directory-scan-button" type="button">扫描目录</button>
+            <input id="materialDirectoryInput" class="hidden" type="file" multiple webkitdirectory directory>
+            <button id="importMaterialButton" class="ghost-button material-import-button" type="button">＋ 导入资料</button>
+            <input id="materialImportInput" class="hidden" type="file" multiple>
+            <button id="closeMaterialCenter" class="icon-button" type="button" aria-label="关闭资料中心">×</button>
+          </div>
+        </header>
+        <form id="materialCenterForm" class="material-center-form">
+          <div class="material-center-quick-row">
+            <label class="material-center-inline-field material-center-keyword">
+              <span>快速过滤</span>
+              <input id="materialCenterQuery" maxlength="120" autocomplete="off" placeholder="文件名、来源标题或文件类型">
+            </label>
+            <fieldset class="material-center-categories">
+              <legend>资料类型</legend>
+              <div class="material-center-category-options">
+                <label><input type="checkbox" name="material_category" value="image" checked> 图片</label>
+                <label><input type="checkbox" name="material_category" value="document" checked> 文档</label>
+                <label><input type="checkbox" name="material_category" value="other" checked> 其他</label>
+              </div>
+            </fieldset>
+          </div>
+          <div class="material-center-filter-row">
+            <label class="material-center-inline-field"><span>资料日期</span><input id="materialCenterDateFrom" type="date"></label>
+            <label class="material-center-inline-field"><span>-</span><input id="materialCenterDateTo" type="date"></label>
+            <label class="material-center-inline-field"><span>排序</span>
+              <select id="materialCenterSort">
+                <option value="timeline_desc">资料时间从新到旧</option>
+                <option value="timeline_asc">资料时间从旧到新</option>
+                <option value="added_desc">最近添加优先</option>
+              </select>
+            </label>
+            <div class="material-center-actions">
+              <button id="resetMaterialCenter" class="ghost-button" type="button">重置</button>
+              <button class="primary-button" type="submit">应用筛选</button>
+            </div>
+          </div>
+        </form>
+        <section class="material-center-results-section" aria-live="polite">
+          <div class="material-center-results-heading">
+            <strong id="materialCenterSummary">正在准备资料中心……</strong>
+            <div class="material-center-view-switch" role="group" aria-label="资料显示方式">
+              <button id="materialCenterTimelineView" class="material-center-view-button is-active" type="button" aria-pressed="true">时间轴</button>
+              <button id="materialCenterListView" class="material-center-view-button" type="button" aria-pressed="false">列表</button>
+            </div>
+            <span id="materialCenterLimitHint" class="hidden">滚动继续加载</span>
+          </div>
+          <div id="materialCenterResults" class="material-center-results"></div>
+        </section>
+      </div>
+    </div>
+
+
+    <div id="materialDirectoryScanModal" class="modal material-directory-scan-modal hidden" role="dialog" aria-modal="true" aria-labelledby="materialDirectoryScanTitle" aria-hidden="true">
+      <div class="modal-card material-directory-scan-card">
+        <header class="material-directory-scan-header">
+          <div>
+            <p class="eyebrow">目录扫描</p>
+            <h2 id="materialDirectoryScanTitle">批量导入人生资料</h2>
+          </div>
+          <button id="closeMaterialDirectoryScan" class="icon-button" type="button" aria-label="关闭目录扫描">×</button>
+        </header>
+        <div class="material-directory-scan-note">
+          由浏览器读取你主动选择的目录及子目录；不会读取绝对路径。系统文件、空文件和超过 50 MB 的文件自动排除，相同内容会在导入前标记为重复。
+        </div>
+        <div class="material-directory-scan-summary-row">
+          <strong id="materialDirectoryScanSummary">请选择一个目录</strong>
+          <span id="materialDirectoryScanProgress"></span>
+        </div>
+        <div class="material-directory-scan-toolbar">
+          <label><input id="materialDirectorySelectAll" type="checkbox"> 全选可导入</label>
+          <span id="materialDirectorySelectedCount">已选 0 份</span>
+        </div>
+        <div id="materialDirectoryScanList" class="material-directory-scan-list"></div>
+        <footer class="material-directory-scan-footer">
+          <button id="cancelMaterialDirectoryScan" class="ghost-button" type="button">取消</button>
+          <button id="importScannedMaterials" class="primary-button" type="button" disabled>导入选中 0</button>
+        </footer>
+      </div>
+    </div>
+
+
     <div id="contentCenterModal" class="modal content-center-modal hidden" role="dialog" aria-modal="true" aria-labelledby="contentCenterTitle" aria-hidden="true">
       <div class="modal-card content-center-card">
         <header class="content-center-header">
@@ -788,10 +959,8 @@
               <label><input type="radio" name="content_center_batch_operation" value="add" checked> 添加标签</label>
               <label><input type="radio" name="content_center_batch_operation" value="remove"> 移除标签</label>
             </div>
-            <div id="contentCenterBatchTagOptions" class="content-center-batch-tag-options"></div>
-            <div id="contentCenterBatchCreateRow" class="content-center-batch-create">
-              <input id="contentCenterBatchNewTagName" type="text" maxlength="40" autocomplete="off" placeholder="新标签名称">
-              <button id="contentCenterBatchCreateTag" class="ghost-button" type="button">新建并选中</button>
+            <div id="contentCenterBatchTagOptions" class="content-center-batch-tag-options">
+              <input id="contentCenterBatchNewTagName" class="content-center-batch-tag-inline-input" type="text" maxlength="40" autocomplete="off" placeholder="＋ 新标签" aria-label="新建标签，按回车创建并选中">
             </div>
             <div class="content-center-batch-footer">
               <span>一次最多处理当前结果中的 100 条内容</span>
@@ -921,6 +1090,31 @@
       </div>
     </div>
 
+    <div id="attachmentPreviewModal" class="attachment-preview-modal hidden" role="dialog" aria-modal="true" aria-labelledby="attachmentPreviewTitle" aria-hidden="true">
+      <div class="attachment-preview-shell">
+        <header class="attachment-preview-header">
+          <div class="attachment-preview-heading">
+            <p class="eyebrow">图片附件</p>
+            <h2 id="attachmentPreviewTitle">图片预览</h2>
+            <p id="attachmentPreviewMeta" class="attachment-preview-meta">—</p>
+          </div>
+          <button id="closeAttachmentPreview" class="icon-button attachment-preview-close" type="button" aria-label="关闭图片预览">×</button>
+        </header>
+        <div class="attachment-preview-stage">
+          <button id="attachmentPreviewPrevious" class="attachment-preview-nav attachment-preview-nav-previous" type="button" aria-label="上一张图片">‹</button>
+          <div class="attachment-preview-image-wrap">
+            <img id="attachmentPreviewImage" class="attachment-preview-image" alt="">
+            <p id="attachmentPreviewStatus" class="attachment-preview-status">正在解密图片…</p>
+          </div>
+          <button id="attachmentPreviewNext" class="attachment-preview-nav attachment-preview-nav-next" type="button" aria-label="下一张图片">›</button>
+        </div>
+        <footer class="attachment-preview-footer">
+          <span id="attachmentPreviewCounter">1 / 1</span>
+          <button id="downloadAttachmentPreview" class="secondary-button" type="button">下载原图</button>
+        </footer>
+      </div>
+    </div>
+
     <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
       <div class="modal-card">
         <p class="eyebrow">仅显示一次</p>
@@ -937,6 +1131,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/static/tinymce/tinymce.min.js"></script>
-  <script src="/assets/app.js?v=0.0.7"></script>
+  <script src="/assets/calendar_meta.js?v=0.0.8"></script>
+  <script src="/assets/app.js?v=0.0.8"></script>
 </body>
 </html>

@@ -1,4 +1,178 @@
-# CHANGELOG
+# Changelog
+
+## v0.0.8 - 2026-08-09
+
+### Stable
+
+- 正式完成“人生资料系统”阶段：加密附件、独立资料、资料双重时间关系、资料中心时间轴与目录批量导入形成完整闭环；
+- 首页快捷月历加入年月切换、农历、二十四节气与重要传统节日；右侧月/周视图同步复用；
+- 附件本地物理存储升级为 UUID 前两位 256 分片目录，并兼容旧平铺附件自动迁移；
+- `.lifevault` 导出、自动备份、导入检查与恢复全面改为磁盘流式路径，保持 format v2；
+- 资料中心采用 48 份/批分页追加，图片缩略图按可视区域懒加载；
+- 正式稳定版统一前端、FastAPI、Python 包和 `.lifevault` 生产者版本为 `0.0.8`；
+- 数据库稳定在 schema v7，`.lifevault` 稳定在 format v2；
+- 正式收口回归基线：192 项测试通过，JavaScript 语法检查与 Python 编译检查通过。
+
+## v0.0.8.9 - 大型资料库性能加固
+
+- `.lifevault` 手动导出改为磁盘流式组包，SQLite 快照和加密附件直接写入 ZIP，不再把整个仓库备份构造在内存中。
+- 自动备份同步使用磁盘流式组包，并对落盘后的备份执行磁盘读取校验。
+- `.lifevault` 导入检查与正式恢复改为流式上传到临时文件，再逐项校验/恢复；不再把整个备份上传内容读入内存，安全上限提升为 2 TB。
+- 自动备份历史读取改为磁盘包轻量检查，避免为了列出历史记录读取整个备份文件。
+- 附件元数据新增批量迭代接口；资料中心分页时不再一次性保存全部解密元数据。
+- 资料中心 API 新增 `offset`，默认每页 48 份，返回 `next_offset` / `has_more`。
+- 资料中心前端滚动接近底部自动加载下一页；时间轴和列表模式均复用已加载分页数据。
+- 资料中心图片缩略图使用 `IntersectionObserver` 懒加载，仅在进入可视区域附近时解密读取图片。
+- 保持附件元数据加密模型、schema v7 和 `.lifevault` format v2 不变。
+
+## v0.0.8.8 - 附件存储扩展性加固
+
+- 附件物理存储从单目录平铺升级为按附件 UUID 前两位分片，例如 `data/attachments/a7/<UUID>.lgatt`；目录按需创建，最多自然分散到 256 个分片。
+- 启动时自动检查旧版 `data/attachments/<UUID>.lgatt` 平铺文件，并尽力迁移到新分片目录；若迁移因权限或占用失败，读取链路仍兼容旧路径。
+- 新上传、独立资料导入、目录批量导入和备份恢复产生的附件均直接写入分片目录。
+- 删除附件时同时清理新版分片路径与旧版兼容路径，并自动移除已空的分片目录。
+- `.lifevault` 继续保持 format v2，包内附件逻辑路径仍为 `repository/attachments/<UUID>.lgatt`，不因本地物理分片改变备份格式。
+- 数据库 schema 保持 v7，无需数据库迁移。
+- 应用、前端及备份 producer 版本统一升级为 `0.0.8.8`。
+
+## v0.0.8.7 - 指定目录扫描与批量导入
+
+- 资料中心新增“扫描目录”，支持浏览器主动选择目录及子目录并生成导入预览。
+- 自动排除常见系统/隐藏文件、空文件及超过 50 MB 的文件。
+- 浏览器端计算 SHA-256，标记目录内重复；后端批量检查仓库已有相同内容，重复资料默认不选中。
+- 目录导入时后端再次校验重复，避免扫描后状态变化造成重复入库。
+- 导入资料保留目录内相对路径和根目录名称作为加密元数据；不读取或保存本机绝对路径。
+- 单次目录扫描上限暂定 1000 个文件，导入继续沿用现有 50 MB 单文件限制。
+- 前端、FastAPI、Python 包及备份生产者版本统一升级为 `0.0.8.7`。
+
+### Verification
+
+```text
+177 tests passed (split verification)
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.8.6 - 独立人生资料导入
+
+- 资料中心新增【导入资料】，照片、文档和其他文件无需先挂到事件/记忆/计划即可直接进入人生资料库。
+- 数据库 schema 从 v6 升级到 v7，`attachments.kind/content_id` 改为可选，使“资料本身”和“内容附件关系”正式解耦。
+- 原有内容附件关系完整保留；独立资料以 `kind/content_id = NULL` 表示，不创建伪内容。
+- 独立资料继续使用仓库主密钥加密存储，并自动参与资料中心、人生日期资料区、完整性检查和 `.lifevault` format v2 备份恢复。
+- 独立资料优先使用文件自身时间进入时间轴，没有可用文件时间时回退到资料导入时间。
+- 资料中心明确显示“独立资料 · 直接导入人生资料库”，并提供下载和永久删除操作。
+- 前端、FastAPI、Python 包及备份生产者版本统一升级为 `0.0.8.6`。
+
+### Verification
+
+```text
+174 tests passed (split verification)
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.8.5 - 资料中心时间轴视图
+
+- 资料中心默认升级为纵向主时间轴，按资料真实归属日期聚合展示照片、文档和其他文件。
+- 同一天资料归为一个日期节点，并按年份、月份组织，避免传统列表重复显示时间。
+- 日期节点展示“照片数 / 文件数”摘要，可直接打开对应人生日期详情。
+- 图片继续复用加密缩略图与沉浸式预览；文档和其他资料使用紧凑卡片展示。
+- 新增【时间轴 / 列表】显示方式切换，列表模式继续服务检索、最近添加排序和文件管理。
+- 无日期资料统一进入“时间未识别”区。
+- 资料中心单次展示上限由 100 份提高到 200 份；数据库 schema 仍为 v6，`.lifevault` format 仍为 v2。
+- 前端、FastAPI、Python 包及备份生产者版本统一升级为 `0.0.8.5`。
+
+### Verification
+
+```text
+165 tests passed
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.8.3.1 - 资料双重时间关系
+
+- 附件关系与资料自身时间正式分离：附件不会再因 EXIF/文件日期移动父事件、记忆或计划。
+- 图片优先使用 EXIF 拍摄时间；Office/PDF 优先使用文档内部创建/保存时间；普通文件回退到浏览器提供的文件修改时间。
+- 附件加密元数据新增独立的 `timeline_at / timeline_date / timeline_time_source`，不升级数据库 schema。
+- 日期/月/年详情新增“资料”区域，按资料自身时间展示附件，并保留“来自哪条事件/记忆/计划”的反向引用。
+- 人生图谱状态增加“有资料”标记，资料日期参与有内容日期导航。
+- 移除 v0.0.8.3 中“采用 EXIF 日期后移动整条内容”的交互。
+
+## v0.0.8.3 - 2026-08-08
+
+### Added
+
+- 图片附件上传时读取 EXIF 拍摄日期，优先使用 `DateTimeOriginal`，缺失时回退到 `DateTimeDigitized` / `DateTime`；
+- 支持 JPEG、TIFF、PNG eXIf 与 WebP EXIF 容器的拍摄时间解析，不新增 Pillow 等图片依赖；
+- 附件面板显示“拍摄于 YYYY-MM-DD HH:MM:SS”及“建议挂接日期 YYYY-MM-DD”，并可点击【采用】把当前整条内容移动到照片拍摄日；
+- 图片大图预览的悬浮信息同步显示 EXIF 拍摄时间；
+- v0.0.8.3 之前已经上传的附件会在第一次打开附件列表时自动补做一次 EXIF 识别并写回加密元数据。
+
+### Security
+
+- EXIF 拍摄日期与来源信息继续作为附件加密元数据保存到 SQLite，不新增明文索引文件；
+- 原始图片仍只以 `.lgatt` 加密密文保存，EXIF 识别不会生成明文副本。
+
+### Changed
+
+- 前端、FastAPI、Python 包及 `.lifevault` 生产者版本统一升级为 `0.0.8.3`；
+- 数据库 schema 继续保持 v6，`.lifevault` format 继续保持 v2。
+
+### Verification
+
+```text
+158 tests passed
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.8.2 - 2026-08-08
+
+### Added
+
+- 图片附件在附件面板中显示运行时缩略图，普通文档仍保持紧凑文件列表；
+- 点击缩略图可进入沉浸式大图预览，支持上一张/下一张、键盘左右键、Esc 关闭和下载原图；
+- 新建事件、记忆、计划时，尚未上传的本地图片附件也会显示小缩略图，便于保存前确认；
+- 图片预览复用现有加密附件下载链路，仅在浏览器内存中生成临时 Object URL，不新增私人明文缩略图文件。
+
+### Changed
+
+- 前端、FastAPI、Python 包及 `.lifevault` 生产者版本统一升级为 `0.0.8.2`；
+- 图片附件删除或仓库锁定时会释放相关临时预览资源。
+
+### Verification
+
+```text
+149 passed
+JavaScript syntax check passed
+Python compile check passed
+```
+
+## v0.0.8.1 - 2026-08-08
+
+### Added
+
+- 事件、记忆、计划卡片新增附件入口，支持上传、列出、下载和删除普通文件；
+- 附件原文件使用仓库主密钥 AEAD 加密后保存在 `data/attachments`，文件名与其他元数据继续加密存入 SQLite；
+- 新增附件 API：`GET/POST /api/v1/content/{kind}/{content_id}/attachments`、下载与删除接口；
+- `.lifevault` format v2 支持携带加密附件，并在导出、导入演练和正式恢复时校验附件；
+- 旧 `.lifevault` format v1（无附件）继续可导入；
+- 内容进入回收站时附件保留，彻底删除内容或清空回收站时同步清理附件文件。
+
+### Changed
+
+- 数据库 schema 从 v5 非破坏性升级到 v6，新增 `attachments` 表；
+- 仓库完整性检查新增附件文件验证；
+- 当前单个附件限制为 50 MB，后续版本再扩展大文件流式处理与图片预览。
+
+### Verification
+
+```text
+147 tests passed
+JavaScript syntax check passed
+Python compile check passed
+```
 
 ## v0.0.7 - 2026-08-08
 

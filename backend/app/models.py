@@ -202,6 +202,24 @@ class ContentUpdateRequest(BaseModel):
         return self
 
 
+class ContentMoveRequest(BaseModel):
+    time_scope: TimeScope = "day"
+    period_key: str = Field(min_length=4, max_length=10)
+    revision: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "ContentMoveRequest":
+        probe = ScopedContentRequest(
+            time_scope=self.time_scope,
+            period_key=self.period_key,
+            title="move",
+            content="",
+        )
+        probe.validate_scope_key(None)
+        self.period_key = probe.period_key or self.period_key
+        return self
+
+
 class ContentDeleteRequest(BaseModel):
     revision: int = Field(ge=1)
 
@@ -328,4 +346,23 @@ class ContentBulkTagRequest(BaseModel):
             cleaned.append(tag_id)
         if not cleaned:
             raise ValueError("请至少选择一个标签")
+        return cleaned
+
+
+class MaterialDuplicateCheckRequest(BaseModel):
+    sha256: list[str] = Field(min_length=1, max_length=1000)
+
+    @field_validator("sha256")
+    @classmethod
+    def clean_sha256(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            digest = str(raw or "").strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", digest) or digest in seen:
+                continue
+            seen.add(digest)
+            cleaned.append(digest)
+        if not cleaned:
+            raise ValueError("请提供有效的 SHA-256")
         return cleaned

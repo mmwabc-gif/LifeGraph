@@ -108,10 +108,10 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     assert checked.status_code == 200
     report = checked.json()["data"]
     assert report["valid"] is True
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 7
     assert report["encrypted_records_verified"] == 2
     assert report["record_counts"]["event"] == 1
-    assert report["producer_version"] == "0.0.7"
+    assert report["producer_version"] == "0.0.8"
 
     recovery_check = target_client.post(
         "/api/v1/backup/import/check",
@@ -153,7 +153,7 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     restored_report = restored.json()["data"]
     assert restored_report["restored"] is True
     assert restored_report["locked"] is True
-    assert restored_report["restored_schema_version"] == 5
+    assert restored_report["restored_schema_version"] == 7
 
     # The old session is revoked after repository replacement.
     assert target_client.get("/api/v1/profile", headers=target_headers).status_code == 401
@@ -312,3 +312,46 @@ def test_restore_failure_rolls_back_current_repository(
     detail = target_client.get("/api/v1/dates/2001-02-03", headers=target_headers)
     assert detail.status_code == 200
     assert detail.json()["data"]["events"][0]["title"] == "应当保留的事件"
+
+
+def test_lifevault_v1_package_without_attachments_remains_importable(tmp_path: Path) -> None:
+    source = make_client(tmp_path / "source-v1")
+    source_headers = initialize(
+        source,
+        name="旧备份来源",
+        pin="654321",
+        recovery="legacy-backup-recovery-secret",
+    )
+    add_event(source, source_headers, "旧格式兼容事件")
+    current_backup = export_backup(source, source_headers)
+
+    with zipfile.ZipFile(io.BytesIO(current_backup)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        manifest["format_version"] = 1
+        files = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name != "manifest.json"
+        }
+
+    legacy_buffer = io.BytesIO()
+    with zipfile.ZipFile(legacy_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for name, value in files.items():
+            archive.writestr(name, value)
+
+    target = make_client(tmp_path / "target-v1")
+    target_headers = initialize(
+        target,
+        name="兼容目标",
+        pin="123456",
+        recovery="legacy-target-recovery-secret",
+    )
+    checked = target.post(
+        "/api/v1/backup/import/check",
+        headers=target_headers,
+        **upload_payload(legacy_buffer.getvalue(), pin="654321"),
+    )
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["data"]["format_version"] == 1
+    assert checked.json()["data"]["attachment_files_verified"] == 0

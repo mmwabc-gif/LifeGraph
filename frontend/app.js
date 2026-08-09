@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.7";
+const frontendBuildVersion = "0.0.8";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -60,10 +60,60 @@ const fullPageLifeCanvas = document.getElementById("fullPageLifeCanvas");
 const fullPageDateTooltip = document.getElementById("fullPageDateTooltip");
 const fullPageDateTooltipTitle = document.getElementById("fullPageDateTooltipTitle");
 const fullPageDateTooltipMeta = document.getElementById("fullPageDateTooltipMeta");
+const homeMonthCalendarTitle = document.getElementById("homeMonthCalendarTitle");
+const homeMonthCalendarGrid = document.getElementById("homeMonthCalendarGrid");
+const homeMonthCalendarPickerButton = document.getElementById("homeMonthCalendarPickerButton");
+const homeMonthCalendarPicker = document.getElementById("homeMonthCalendarPicker");
+const homeMonthCalendarYear = document.getElementById("homeMonthCalendarYear");
+const homeMonthCalendarMonth = document.getElementById("homeMonthCalendarMonth");
+const homeMonthCalendarToday = document.getElementById("homeMonthCalendarToday");
+const homeMonthCalendarApply = document.getElementById("homeMonthCalendarApply");
+let homeMonthCalendarMonthKey = null;
 const quickMemoryHomeButton = document.getElementById("quickMemoryHomeButton");
 const quickMemoryFullPageButton = document.getElementById("quickMemoryFullPageButton");
 const contentCenterHomeButton = document.getElementById("contentCenterHomeButton");
 const contentCenterFullPageButton = document.getElementById("contentCenterFullPageButton");
+const materialCenterHomeButton = document.getElementById("materialCenterHomeButton");
+const materialCenterFullPageButton = document.getElementById("materialCenterFullPageButton");
+const materialCenterModal = document.getElementById("materialCenterModal");
+const materialCenterForm = document.getElementById("materialCenterForm");
+const materialCenterQuery = document.getElementById("materialCenterQuery");
+const materialCenterDateFrom = document.getElementById("materialCenterDateFrom");
+const materialCenterDateTo = document.getElementById("materialCenterDateTo");
+const materialCenterSort = document.getElementById("materialCenterSort");
+const materialCenterResults = document.getElementById("materialCenterResults");
+const materialCenterSummary = document.getElementById("materialCenterSummary");
+const materialCenterLimitHint = document.getElementById("materialCenterLimitHint");
+const materialCenterTimelineViewButton = document.getElementById("materialCenterTimelineView");
+const materialCenterListViewButton = document.getElementById("materialCenterListView");
+const importMaterialButton = document.getElementById("importMaterialButton");
+const materialImportInput = document.getElementById("materialImportInput");
+const scanMaterialDirectoryButton = document.getElementById("scanMaterialDirectoryButton");
+const materialDirectoryInput = document.getElementById("materialDirectoryInput");
+const materialDirectoryScanModal = document.getElementById("materialDirectoryScanModal");
+const closeMaterialDirectoryScanButton = document.getElementById("closeMaterialDirectoryScan");
+const cancelMaterialDirectoryScanButton = document.getElementById("cancelMaterialDirectoryScan");
+const materialDirectoryScanSummary = document.getElementById("materialDirectoryScanSummary");
+const materialDirectoryScanProgress = document.getElementById("materialDirectoryScanProgress");
+const materialDirectorySelectAll = document.getElementById("materialDirectorySelectAll");
+const materialDirectorySelectedCount = document.getElementById("materialDirectorySelectedCount");
+const materialDirectoryScanList = document.getElementById("materialDirectoryScanList");
+const importScannedMaterialsButton = document.getElementById("importScannedMaterials");
+const closeMaterialCenterButton = document.getElementById("closeMaterialCenter");
+const resetMaterialCenterButton = document.getElementById("resetMaterialCenter");
+let materialCenterReturnFocus = null;
+let materialCenterRequestSequence = 0;
+let materialCenterDrawerResumeState = null;
+let materialCenterViewMode = "timeline";
+let materialCenterLastData = null;
+let materialCenterBrowseParams = null;
+let materialCenterLoadingMore = false;
+let materialCenterLoadObserver = null;
+let materialThumbnailObserver = null;
+let materialDirectoryScanSequence = 0;
+let materialDirectoryScanItems = [];
+let materialDirectoryRootName = "";
+let materialDirectoryScanReturnFocus = null;
 const contentCenterModal = document.getElementById("contentCenterModal");
 const contentCenterForm = document.getElementById("contentCenterForm");
 const contentCenterQuery = document.getElementById("contentCenterQuery");
@@ -85,9 +135,7 @@ const contentCenterClearSelectionButton = document.getElementById("contentCenter
 const contentCenterBatchTagEditor = document.getElementById("contentCenterBatchTagEditor");
 const contentCenterBatchTargetSummary = document.getElementById("contentCenterBatchTargetSummary");
 const contentCenterBatchTagOptions = document.getElementById("contentCenterBatchTagOptions");
-const contentCenterBatchCreateRow = document.getElementById("contentCenterBatchCreateRow");
 const contentCenterBatchNewTagName = document.getElementById("contentCenterBatchNewTagName");
-const contentCenterBatchCreateTagButton = document.getElementById("contentCenterBatchCreateTag");
 const contentCenterApplyBatchTagsButton = document.getElementById("contentCenterApplyBatchTags");
 const contentCenterCloseBatchTagsButton = document.getElementById("contentCenterCloseBatchTags");
 let contentCenterReturnFocus = null;
@@ -129,6 +177,31 @@ let memoryMapFilterRevision = 0;
 const selectedMemoryMapTagIds = new Set();
 const draftMemoryMapTagIds = new Set();
 let memoryMapTagMatches = { dates: new Set(), months: new Set(), years: new Set(), contentCount: 0, counts: { event: 0, memory: 0, plan: 0 } };
+const materialSection = document.getElementById("materialSection");
+const materialSectionCount = document.getElementById("materialSectionCount");
+let materialSectionToggle = document.getElementById("materialSectionToggle");
+const materialList = document.getElementById("materialList");
+const MATERIAL_SECTION_COLLAPSED_LIMIT = 6;
+let materialSectionExpanded = false;
+let materialSectionTotal = 0;
+const attachmentPreviewModal = document.getElementById("attachmentPreviewModal");
+const attachmentPreviewStage = attachmentPreviewModal?.querySelector(".attachment-preview-stage");
+const attachmentPreviewTitle = document.getElementById("attachmentPreviewTitle");
+const attachmentPreviewMeta = document.getElementById("attachmentPreviewMeta");
+const attachmentPreviewImage = document.getElementById("attachmentPreviewImage");
+const attachmentPreviewStatus = document.getElementById("attachmentPreviewStatus");
+const attachmentPreviewCounter = document.getElementById("attachmentPreviewCounter");
+const attachmentPreviewPrevious = document.getElementById("attachmentPreviewPrevious");
+const attachmentPreviewNext = document.getElementById("attachmentPreviewNext");
+const downloadAttachmentPreviewButton = document.getElementById("downloadAttachmentPreview");
+const closeAttachmentPreviewButton = document.getElementById("closeAttachmentPreview");
+let attachmentPreviewItems = [];
+let attachmentPreviewIndex = -1;
+let attachmentPreviewReturnFocus = null;
+let attachmentPreviewLastWheelAt = 0;
+const attachmentObjectUrls = new Map();
+const attachmentObjectUrlPromises = new Map();
+
 const quickMemoryModal = document.getElementById("quickMemoryModal");
 const quickMemoryForm = document.getElementById("quickMemoryForm");
 const quickMemoryDateText = document.getElementById("quickMemoryDateText");
@@ -161,10 +234,13 @@ function showView(name) {
   settingsButton.classList.toggle("hidden", name !== "home");
   trashButton.classList.toggle("hidden", name !== "home");
   if (name !== "home") {
+    closeAttachmentPreview({ restoreFocus: false });
+    releaseAllAttachmentObjectUrls();
     closeDateDrawerNow();
     closeFullPageLifeViewNow();
     closeSettingsModalNow();
     closeMemoryMapFilterModalNow({ restoreFocus: false });
+    closeMaterialCenterModalNow({ restoreFocus: false });
   }
 }
 
@@ -202,7 +278,12 @@ function friendlyErrorMessage(error) {
     BACKUP_TOO_LARGE: "备份文件超过 512 MB 限制。",
     AUTO_BACKUP_VERIFY_FAILED: "最近备份验证失败。",
     INVALID_SEARCH_RANGE: "搜索开始日期不能晚于结束日期。",
+    INVALID_MATERIAL_RANGE: "资料开始日期不能晚于结束日期。",
     TAG_NAME_CONFLICT: "已经存在同名标签，请换一个名称。",
+    ATTACHMENT_TOO_LARGE: "单个附件不能超过 50 MB。",
+    ATTACHMENT_UPLOAD_FAILED: "附件上传失败。",
+    ATTACHMENT_NOT_FOUND: "附件不存在，或已经被删除。",
+    ATTACHMENT_TIMELINE_FALLBACK_FAILED: "无法从来源内容日期或附件添加时间确定资料归属日期。",
   };
   return messages[error?.code] || error?.message || "操作失败，请稍后重试。";
 }
@@ -480,9 +561,9 @@ function contentToEditableMemoryHtml(item) {
 function memoryTagElements(mode) {
   const ids = {
     quick: ["quickMemorySelectedTags", "quickMemoryTagPicker", "quickMemoryTagOptions", "toggleQuickMemoryTagPicker", "quickMemoryNewTagName", "createQuickMemoryTag"],
-    event: ["eventSelectedTags", "eventTagPicker", "eventTagOptions", "toggleEventTagPicker", "eventNewTagName", "createEventTag"],
-    drawer: ["memorySelectedTags", "memoryTagPicker", "memoryTagOptions", "toggleMemoryTagPicker", "memoryNewTagName", "createMemoryTag"],
-    plan: ["planSelectedTags", "planTagPicker", "planTagOptions", "togglePlanTagPicker", "planNewTagName", "createPlanTag"],
+    event: ["eventSelectedTags", "eventTagPicker", "eventTagOptions", "toggleEventTagPicker", "eventNewTagName", null],
+    drawer: ["memorySelectedTags", "memoryTagPicker", "memoryTagOptions", "toggleMemoryTagPicker", "memoryNewTagName", null],
+    plan: ["planSelectedTags", "planTagPicker", "planTagOptions", "togglePlanTagPicker", "planNewTagName", null],
   }[mode];
   if (!ids) return {};
   return {
@@ -491,7 +572,7 @@ function memoryTagElements(mode) {
     options: document.getElementById(ids[2]),
     toggle: document.getElementById(ids[3]),
     input: document.getElementById(ids[4]),
-    create: document.getElementById(ids[5]),
+    create: ids[5] ? document.getElementById(ids[5]) : null,
   };
 }
 
@@ -530,29 +611,32 @@ function renderMemoryTagSelector(mode) {
     });
   }
 
+  const inlineCreateInput = elements.input?.classList.contains("memory-tag-inline-create-input")
+    ? elements.input
+    : null;
   elements.options.replaceChildren();
   if (!availableMemoryTags.length) {
-    const empty = document.createElement("p");
+    const empty = document.createElement("span");
     empty.className = "memory-tag-picker-empty";
-    empty.textContent = "还没有标签，可以在下方新建。";
+    empty.textContent = "还没有标签";
     elements.options.appendChild(empty);
-    return;
-  }
-
-  availableMemoryTags.forEach((tag) => {
-    const option = document.createElement("button");
-    option.type = "button";
-    option.className = "memory-tag-option";
-    option.classList.toggle("is-selected", selectedIds.has(tag.id));
-    option.setAttribute("aria-pressed", selectedIds.has(tag.id) ? "true" : "false");
-    option.textContent = `#${tag.name}`;
-    option.addEventListener("click", () => {
-      if (selectedIds.has(tag.id)) selectedIds.delete(tag.id);
-      else selectedIds.add(tag.id);
-      renderMemoryTagSelector(mode);
+  } else {
+    availableMemoryTags.forEach((tag) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "memory-tag-option";
+      option.classList.toggle("is-selected", selectedIds.has(tag.id));
+      option.setAttribute("aria-pressed", selectedIds.has(tag.id) ? "true" : "false");
+      option.textContent = `#${tag.name}`;
+      option.addEventListener("click", () => {
+        if (selectedIds.has(tag.id)) selectedIds.delete(tag.id);
+        else selectedIds.add(tag.id);
+        renderMemoryTagSelector(mode);
+      });
+      elements.options.appendChild(option);
     });
-    elements.options.appendChild(option);
-  });
+  }
+  if (inlineCreateInput) elements.options.appendChild(inlineCreateInput);
 }
 
 function setMemoryTagSelection(mode, tags = []) {
@@ -636,17 +720,24 @@ async function createAndSelectMemoryTag(mode) {
     elements.input?.focus();
     return;
   }
-  const existing = availableMemoryTags.find((tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name));
-  if (existing) {
-    selectedMemoryTagIds[mode].add(existing.id);
-    if (elements.input) elements.input.value = "";
-    renderMemoryTagSelector(mode);
-    showToast(`已选中标签 #${existing.name}`, "success");
-    return;
-  }
+  if (elements.input?.disabled) return;
 
   setButtonBusy(elements.create, true, "新建中…");
+  if (elements.input) {
+    elements.input.disabled = true;
+    elements.input.setAttribute("aria-busy", "true");
+  }
   try {
+    await loadMemoryTags();
+    const existing = availableMemoryTags.find((tag) => memoryTagNameKey(tag.name) === memoryTagNameKey(name));
+    if (existing) {
+      selectedMemoryTagIds[mode].add(existing.id);
+      if (elements.input) elements.input.value = "";
+      renderMemoryTagSelector(mode);
+      showToast(`已选中标签 #${existing.name}`, "success");
+      return;
+    }
+
     const tag = await api("/api/v1/tags", {
       method: "POST",
       body: JSON.stringify({ name }),
@@ -656,11 +747,16 @@ async function createAndSelectMemoryTag(mode) {
     selectedMemoryTagIds[mode].add(tag.id);
     if (elements.input) elements.input.value = "";
     renderAllMemoryTagControls();
-    showToast(`标签 #${tag.name} 已创建`, "success");
+    showToast(`标签 #${tag.name} 已创建并选中`, "success");
   } catch (error) {
     showOperationError(error);
   } finally {
     setButtonBusy(elements.create, false);
+    if (elements.input) {
+      elements.input.disabled = false;
+      elements.input.removeAttribute("aria-busy");
+      elements.input.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -918,7 +1014,6 @@ function closeContentCenterBatchTagEditor({ restoreFocus = false } = {}) {
   contentCenterBatchTagEditor.classList.add("hidden");
   selectedContentCenterBatchTagIds.clear();
   if (contentCenterBatchNewTagName) contentCenterBatchNewTagName.value = "";
-  if (contentCenterBatchCreateRow) contentCenterBatchCreateRow.classList.remove("hidden");
   const addRadio = document.querySelector('input[name="content_center_batch_operation"][value="add"]');
   if (addRadio) addRadio.checked = true;
   if (restoreFocus && contentCenterBulkTagsButton && !contentCenterBulkTagsButton.disabled) {
@@ -966,9 +1061,8 @@ function renderContentCenterBatchTagOptions() {
   if (!availableMemoryTags.length) {
     const empty = document.createElement("span");
     empty.className = "content-center-batch-tag-empty";
-    empty.textContent = "暂无标签，可先新建一个标签。";
+    empty.textContent = "暂无标签，可直接输入新标签并按回车。";
     contentCenterBatchTagOptions.appendChild(empty);
-    return;
   }
   availableMemoryTags.forEach((tag) => {
     const button = document.createElement("button");
@@ -985,6 +1079,11 @@ function renderContentCenterBatchTagOptions() {
     });
     contentCenterBatchTagOptions.appendChild(button);
   });
+  if (contentCenterBatchNewTagName) {
+    const removing = selectedContentCenterBatchOperation() === "remove";
+    contentCenterBatchNewTagName.classList.toggle("hidden", removing);
+    if (!removing) contentCenterBatchTagOptions.appendChild(contentCenterBatchNewTagName);
+  }
 }
 
 async function openContentCenterBatchTagEditor() {
@@ -1000,7 +1099,6 @@ async function openContentCenterBatchTagEditor() {
   if (contentCenterBatchNewTagName) contentCenterBatchNewTagName.value = "";
   const addRadio = document.querySelector('input[name="content_center_batch_operation"][value="add"]');
   if (addRadio) addRadio.checked = true;
-  contentCenterBatchCreateRow?.classList.remove("hidden");
   renderContentCenterBatchTagOptions();
   updateContentCenterSelectionControls();
   contentCenterBatchTagEditor.classList.remove("hidden");
@@ -1021,10 +1119,15 @@ async function createContentCenterBatchTag() {
     selectedContentCenterBatchTagIds.add(existing.id);
     contentCenterBatchNewTagName.value = "";
     renderContentCenterBatchTagOptions();
+    contentCenterBatchNewTagName?.focus();
     showToast(`已选中标签 #${existing.name}`, "success");
     return;
   }
-  setButtonBusy(contentCenterBatchCreateTagButton, true, "新建中…");
+  const originalPlaceholder = contentCenterBatchNewTagName?.placeholder || "＋ 新标签";
+  if (contentCenterBatchNewTagName) {
+    contentCenterBatchNewTagName.disabled = true;
+    contentCenterBatchNewTagName.placeholder = "新建中…";
+  }
   try {
     const tag = await api("/api/v1/tags", {
       method: "POST",
@@ -1041,7 +1144,11 @@ async function createContentCenterBatchTag() {
   } catch (error) {
     showOperationError(error);
   } finally {
-    setButtonBusy(contentCenterBatchCreateTagButton, false);
+    if (contentCenterBatchNewTagName) {
+      contentCenterBatchNewTagName.disabled = false;
+      contentCenterBatchNewTagName.placeholder = originalPlaceholder;
+      contentCenterBatchNewTagName.focus();
+    }
   }
 }
 
@@ -1252,20 +1359,15 @@ async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags
   const options = document.createElement("div");
   options.className = "content-center-quick-tag-options";
 
-  const createRow = document.createElement("div");
-  createRow.className = "content-center-quick-tag-create";
   const input = document.createElement("input");
   input.type = "text";
   input.maxLength = 40;
   input.autocomplete = "off";
-  input.placeholder = "新标签名称";
-  const createButton = document.createElement("button");
-  createButton.type = "button";
-  createButton.className = "ghost-button";
-  createButton.textContent = "新建并选中";
-  createRow.append(input, createButton);
+  input.className = "content-center-quick-tag-inline-input";
+  input.placeholder = "＋ 新标签";
+  input.setAttribute("aria-label", "新建标签，按回车创建并选中");
 
-  editor.append(heading, options, createRow);
+  editor.append(heading, options);
 
   const updateSaveState = () => {
     const unchanged = draftIds.size === originalIds.size && [...draftIds].every((id) => originalIds.has(id));
@@ -1277,9 +1379,8 @@ async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags
     if (!availableMemoryTags.length) {
       const empty = document.createElement("span");
       empty.className = "content-center-quick-tag-empty";
-      empty.textContent = "暂无标签，可在下方直接新建。";
+      empty.textContent = "暂无标签，可直接输入新标签并按回车。";
       options.appendChild(empty);
-      return;
     }
     availableMemoryTags.forEach((tag) => {
       const chip = document.createElement("button");
@@ -1296,6 +1397,7 @@ async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags
       });
       options.appendChild(chip);
     });
+    options.appendChild(input);
   };
 
   const createAndSelectTag = async () => {
@@ -1313,11 +1415,14 @@ async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags
       input.value = "";
       renderOptions();
       updateSaveState();
+      input.focus();
       showToast(`已选中标签 #${existing.name}`, "success");
       return;
     }
 
-    setButtonBusy(createButton, true, "新建中…");
+    const originalPlaceholder = input.placeholder;
+    input.disabled = true;
+    input.placeholder = "新建中…";
     try {
       const tag = await api("/api/v1/tags", {
         method: "POST",
@@ -1334,11 +1439,11 @@ async function openContentCenterQuickTagEditor(item, card, trigger, readonlyTags
     } catch (error) {
       showOperationError(error);
     } finally {
-      setButtonBusy(createButton, false);
+      input.disabled = false;
+      input.placeholder = originalPlaceholder;
+      input.focus();
     }
   };
-
-  createButton.addEventListener("click", createAndSelectTag);
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -1495,7 +1600,7 @@ async function runContentCenterBrowse() {
   if (contentCenterDateTo.value) params.set("date_to", contentCenterDateTo.value);
   selectedContentCenterTagIds.forEach((tagId) => params.append("tag_id", tagId));
   params.set("sort", contentCenterSort.value || "date_desc");
-  params.set("limit", "100");
+  params.set("limit", "200");
 
   const requestSequence = ++contentCenterRequestSequence;
   setButtonBusy(submit, true, "整理中…");
@@ -1510,6 +1615,967 @@ async function runContentCenterBrowse() {
     if (requestSequence !== contentCenterRequestSequence) return;
     showOperationError(error);
     contentCenterSummary.textContent = "内容整理失败，请调整条件后重试";
+  } finally {
+    setButtonBusy(submit, false);
+  }
+}
+
+
+function isMaterialCenterOpen() {
+  return Boolean(materialCenterModal && !materialCenterModal.classList.contains("hidden"));
+}
+
+function selectedMaterialCenterCategories() {
+  if (!materialCenterForm) return [];
+  return Array.from(materialCenterForm.querySelectorAll('input[name="material_category"]:checked')).map((input) => input.value);
+}
+
+function materialCenterCategoryLabel(category) {
+  if (category === "image") return "图片";
+  if (category === "document") return "文档";
+  return "其他";
+}
+
+function closeMaterialCenterModalNow({ restoreFocus = true } = {}) {
+  if (isMaterialDirectoryScanOpen()) closeMaterialDirectoryScanModal({ restoreFocus: false });
+  if (!isMaterialCenterOpen()) return;
+  materialCenterRequestSequence += 1;
+  resetMaterialCenterPaging();
+  materialThumbnailObserver?.disconnect?.();
+  materialCenterDrawerResumeState = null;
+  materialCenterModal.classList.add("hidden");
+  materialCenterModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("material-center-open");
+  if (restoreFocus && materialCenterReturnFocus instanceof HTMLElement && document.contains(materialCenterReturnFocus)) {
+    materialCenterReturnFocus.focus();
+  }
+  materialCenterReturnFocus = null;
+}
+
+function suspendMaterialCenterForDrawer(trigger = null) {
+  if (!isMaterialCenterOpen()) return false;
+  materialCenterRequestSequence += 1;
+  materialCenterDrawerResumeState = {
+    scrollTop: materialCenterResults?.scrollTop || 0,
+    trigger: trigger instanceof HTMLElement ? trigger : null,
+  };
+  materialCenterModal.classList.add("hidden");
+  materialCenterModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("material-center-open");
+  return true;
+}
+
+function resumeMaterialCenterAfterDrawer() {
+  const resumeState = materialCenterDrawerResumeState;
+  if (!resumeState || !materialCenterModal || !currentProfile) return false;
+  materialCenterDrawerResumeState = null;
+  materialCenterModal.classList.remove("hidden");
+  materialCenterModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("material-center-open");
+  requestAnimationFrame(() => {
+    if (materialCenterResults) materialCenterResults.scrollTop = resumeState.scrollTop || 0;
+    if (resumeState.trigger instanceof HTMLElement && document.contains(resumeState.trigger)) {
+      resumeState.trigger.focus({ preventScroll: true });
+    }
+  });
+  return true;
+}
+
+function resetMaterialCenterFilters({ refresh = true } = {}) {
+  if (!materialCenterForm) return;
+  materialCenterForm.querySelectorAll('input[name="material_category"]').forEach((input) => { input.checked = true; });
+  materialCenterQuery.value = "";
+  materialCenterDateFrom.value = "";
+  materialCenterDateTo.value = "";
+  materialCenterSort.value = "timeline_desc";
+  if (refresh) runMaterialCenterBrowse();
+}
+
+async function openMaterialCenterModal() {
+  if (!materialCenterModal || !currentProfile) return;
+  materialCenterDrawerResumeState = null;
+  if (isContentCenterOpen()) closeContentCenterModalNow({ restoreFocus: false });
+  if (isMemorySearchOpen()) closeMemorySearchModalNow({ restoreFocus: false });
+  if (isMemoryMapFilterOpen()) closeMemoryMapFilterModalNow({ restoreFocus: false });
+  materialCenterReturnFocus = document.activeElement;
+  materialCenterModal.classList.remove("hidden");
+  materialCenterModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("material-center-open");
+  setMaterialCenterViewMode(materialCenterViewMode, { rerender: false });
+  await runMaterialCenterBrowse();
+}
+
+async function openMaterialCenterPeriod(scope, periodKey, trigger = null, target = null) {
+  const suspended = suspendMaterialCenterForDrawer(trigger);
+  const opened = await openPeriodDrawer(scope, periodKey);
+  if (opened !== true) {
+    if (suspended) resumeMaterialCenterAfterDrawer();
+    return;
+  }
+  if (target?.kind && target?.id) focusContentCenterTarget(target.kind, target.id);
+}
+
+function setMaterialCenterViewMode(mode, { rerender = true } = {}) {
+  materialCenterViewMode = mode === "list" ? "list" : "timeline";
+  const timelineActive = materialCenterViewMode === "timeline";
+  materialCenterTimelineViewButton?.classList.toggle("is-active", timelineActive);
+  materialCenterListViewButton?.classList.toggle("is-active", !timelineActive);
+  materialCenterTimelineViewButton?.setAttribute("aria-pressed", String(timelineActive));
+  materialCenterListViewButton?.setAttribute("aria-pressed", String(!timelineActive));
+  const addedOption = materialCenterSort?.querySelector('option[value="added_desc"]');
+  if (addedOption) addedOption.disabled = timelineActive;
+  if (timelineActive && materialCenterSort?.value === "added_desc") {
+    materialCenterSort.value = "timeline_desc";
+  }
+  if (rerender && materialCenterLastData) renderMaterialCenterResults(materialCenterLastData);
+}
+
+async function importIndependentMaterialFile(file, options = {}) {
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    const error = new Error(`“${file.name}”超过 50 MB，暂不能导入。`);
+    error.code = "MATERIAL_TOO_LARGE";
+    throw error;
+  }
+  const formData = new FormData();
+  formData.append("material_file", file, file.name);
+  if (Number.isFinite(file.lastModified) && file.lastModified > 0) {
+    formData.append("file_last_modified_ms", String(Math.trunc(file.lastModified)));
+  }
+  if (options.sourceRelativePath) formData.append("source_relative_path", String(options.sourceRelativePath));
+  if (options.sourceDirectoryName) formData.append("source_directory_name", String(options.sourceDirectoryName));
+  if (options.rejectDuplicate) formData.append("reject_duplicate", "true");
+  const headers = {};
+  if (token()) headers.Authorization = `Bearer ${token()}`;
+  const response = await fetch("/api/v1/materials/import", { method: "POST", headers, body: formData });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : { ok: false, error: { message: "响应为空" } };
+  } catch (_) {
+    payload = { ok: false, error: { message: `响应格式错误：HTTP ${response.status}` } };
+  }
+  if (!response.ok || !payload.ok) {
+    const error = new Error(payload.error?.message || `请求失败：${response.status}`);
+    error.code = payload.error?.code;
+    throw error;
+  }
+  return payload.data;
+}
+
+async function importIndependentMaterials(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length) return;
+  setButtonBusy(importMaterialButton, true, `导入中 0/${selected.length}`);
+  let imported = 0;
+  const failed = [];
+  for (let index = 0; index < selected.length; index += 1) {
+    const file = selected[index];
+    if (importMaterialButton) importMaterialButton.textContent = `导入中 ${index + 1}/${selected.length}`;
+    try {
+      await importIndependentMaterialFile(file);
+      imported += 1;
+    } catch (error) {
+      failed.push({ file, error });
+    }
+  }
+  setButtonBusy(importMaterialButton, false);
+  if (importMaterialButton) importMaterialButton.textContent = "＋ 导入资料";
+  if (imported) {
+    showToast(`已导入 ${imported} 份独立资料${failed.length ? `，${failed.length} 份失败` : ""}`, failed.length ? "info" : "success");
+    await runMaterialCenterBrowse();
+    await refreshContentStatuses();
+  }
+  if (failed.length) {
+    const first = failed[0];
+    const message = first?.error?.message || "导入失败";
+    showToast(`${first.file?.name || "资料"}：${message}`, "error");
+  }
+}
+
+const MAX_DIRECTORY_SCAN_FILES = 1000;
+const MATERIAL_DIRECTORY_EXCLUDED_NAMES = new Set([
+  ".ds_store", "thumbs.db", "desktop.ini", ".stfolder", "@eadir",
+]);
+const MATERIAL_DIRECTORY_EXCLUDED_SEGMENTS = new Set([
+  "$recycle.bin", "system volume information", "node_modules", "__pycache__",
+]);
+
+function isMaterialDirectoryScanOpen() {
+  return Boolean(materialDirectoryScanModal && !materialDirectoryScanModal.classList.contains("hidden"));
+}
+
+function materialFileCategory(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  if (type.startsWith("image/") || [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"].includes(ext)) return "image";
+  if (type.startsWith("text/") || type === "application/pdf" || type.includes("office") || type.includes("msword") || type.includes("excel") || type.includes("powerpoint") || type.includes("opendocument") || [".pdf", ".txt", ".md", ".rtf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".csv"].includes(ext)) return "document";
+  return "other";
+}
+
+function materialDirectoryRelativePath(file) {
+  return String(file?.webkitRelativePath || file?.name || "").replaceAll("\\", "/");
+}
+
+function materialDirectoryExclusionReason(file) {
+  const path = materialDirectoryRelativePath(file);
+  const parts = path.split("/").filter(Boolean);
+  const fileName = String(file?.name || "").toLowerCase();
+  if (MATERIAL_DIRECTORY_EXCLUDED_NAMES.has(fileName)) return "系统文件";
+  if (parts.some((part, index) => index > 0 && (part.startsWith(".") || MATERIAL_DIRECTORY_EXCLUDED_SEGMENTS.has(part.toLowerCase())))) return "隐藏/系统目录";
+  if (!file?.size) return "空文件";
+  if (file.size > MAX_ATTACHMENT_BYTES) return "超过 50 MB";
+  return "";
+}
+
+function materialDirectoryStatusLabel(item) {
+  const labels = {
+    hashing: "检查重复中",
+    ready: "可导入",
+    excluded: item.reason || "已排除",
+    duplicate_selection: "目录内重复",
+    duplicate_repository: "仓库已存在",
+    importing: "导入中",
+    imported: "已导入",
+    failed: "导入失败",
+  };
+  return labels[item.status] || item.status || "";
+}
+
+function materialDirectoryItemSelectable(item) {
+  return item?.status === "ready";
+}
+
+function updateMaterialDirectoryScanControls() {
+  const selectable = materialDirectoryScanItems.filter(materialDirectoryItemSelectable);
+  const selected = selectable.filter((item) => item.selected);
+  if (materialDirectorySelectedCount) materialDirectorySelectedCount.textContent = `已选 ${selected.length} 份`;
+  if (importScannedMaterialsButton) {
+    importScannedMaterialsButton.disabled = selected.length === 0;
+    importScannedMaterialsButton.textContent = `导入选中 ${selected.length}`;
+  }
+  if (materialDirectorySelectAll) {
+    materialDirectorySelectAll.disabled = selectable.length === 0;
+    materialDirectorySelectAll.checked = selectable.length > 0 && selected.length === selectable.length;
+    materialDirectorySelectAll.indeterminate = selected.length > 0 && selected.length < selectable.length;
+  }
+}
+
+function updateMaterialDirectoryScanSummary() {
+  const total = materialDirectoryScanItems.length;
+  const ready = materialDirectoryScanItems.filter((item) => item.status === "ready").length;
+  const duplicates = materialDirectoryScanItems.filter((item) => item.status === "duplicate_selection" || item.status === "duplicate_repository").length;
+  const excluded = materialDirectoryScanItems.filter((item) => item.status === "excluded").length;
+  const imported = materialDirectoryScanItems.filter((item) => item.status === "imported").length;
+  const folderLabel = materialDirectoryRootName ? `“${materialDirectoryRootName}”` : "所选目录";
+  if (materialDirectoryScanSummary) {
+    materialDirectoryScanSummary.textContent = `${folderLabel} · ${total} 个文件 · 可导入 ${ready} · 重复 ${duplicates} · 排除 ${excluded}${imported ? ` · 已导入 ${imported}` : ""}`;
+  }
+  updateMaterialDirectoryScanControls();
+}
+
+function renderMaterialDirectoryScanList() {
+  if (!materialDirectoryScanList) return;
+  materialDirectoryScanList.replaceChildren();
+  if (!materialDirectoryScanItems.length) {
+    const empty = document.createElement("div");
+    empty.className = "material-directory-scan-empty";
+    empty.textContent = "没有可显示的扫描结果";
+    materialDirectoryScanList.appendChild(empty);
+    updateMaterialDirectoryScanSummary();
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  materialDirectoryScanItems.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `material-directory-scan-item is-${item.status || "ready"}`;
+
+    const select = document.createElement("input");
+    select.type = "checkbox";
+    select.checked = Boolean(item.selected && materialDirectoryItemSelectable(item));
+    select.disabled = !materialDirectoryItemSelectable(item);
+    select.setAttribute("aria-label", `选择 ${item.relativePath || item.file?.name || "资料"}`);
+    select.addEventListener("change", () => {
+      item.selected = select.checked;
+      updateMaterialDirectoryScanControls();
+    });
+
+    const main = document.createElement("div");
+    main.className = "material-directory-scan-item-main";
+    const name = document.createElement("strong");
+    name.className = "material-directory-scan-item-name";
+    name.textContent = item.file?.name || "未命名资料";
+    name.title = item.relativePath || name.textContent;
+    const path = document.createElement("span");
+    path.className = "material-directory-scan-item-path";
+    path.textContent = item.relativePath || name.textContent;
+    path.title = path.textContent;
+    main.append(name, path);
+
+    const meta = document.createElement("div");
+    meta.className = "material-directory-scan-item-meta";
+    const modified = Number.isFinite(item.file?.lastModified) && item.file.lastModified > 0
+      ? new Date(item.file.lastModified).toLocaleString("zh-CN", { hour12: false })
+      : "时间未知";
+    meta.textContent = `${materialCenterCategoryLabel(item.category)} · ${formatAttachmentSize(item.file?.size || 0)} · ${modified}`;
+
+    const status = document.createElement("span");
+    status.className = `material-directory-scan-status is-${item.status || "ready"}`;
+    status.textContent = materialDirectoryStatusLabel(item);
+    if (item.status === "duplicate_repository" && item.duplicateName) status.title = `仓库已有：${item.duplicateName}`;
+    if (item.status === "failed" && item.errorMessage) status.title = item.errorMessage;
+
+    row.append(select, main, meta, status);
+    fragment.appendChild(row);
+  });
+  materialDirectoryScanList.appendChild(fragment);
+  updateMaterialDirectoryScanSummary();
+}
+
+function openMaterialDirectoryScanModal() {
+  if (!materialDirectoryScanModal) return;
+  materialDirectoryScanReturnFocus = document.activeElement;
+  materialDirectoryScanModal.classList.remove("hidden");
+  materialDirectoryScanModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("material-directory-scan-open");
+}
+
+function closeMaterialDirectoryScanModal({ restoreFocus = true } = {}) {
+  if (!isMaterialDirectoryScanOpen()) return;
+  materialDirectoryScanSequence += 1;
+  materialDirectoryScanModal.classList.add("hidden");
+  materialDirectoryScanModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("material-directory-scan-open");
+  if (materialDirectoryInput) materialDirectoryInput.value = "";
+  if (restoreFocus && materialDirectoryScanReturnFocus instanceof HTMLElement && document.contains(materialDirectoryScanReturnFocus)) {
+    materialDirectoryScanReturnFocus.focus();
+  }
+  materialDirectoryScanReturnFocus = null;
+}
+
+async function sha256File(file) {
+  if (!window.crypto?.subtle || typeof file?.arrayBuffer !== "function") return "";
+  const buffer = await file.arrayBuffer();
+  const digest = await window.crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function checkMaterialDirectoryExistingDuplicates(items) {
+  const hashes = Array.from(new Set(items.map((item) => item.sha256).filter(Boolean)));
+  if (!hashes.length) return;
+  const data = await api("/api/v1/materials/duplicates", {
+    method: "POST",
+    body: JSON.stringify({ sha256: hashes }),
+  }, true);
+  const matches = data?.matches || {};
+  items.forEach((item) => {
+    const existing = item.sha256 ? matches[item.sha256] : null;
+    if (!existing?.length || item.status !== "ready") return;
+    item.status = "duplicate_repository";
+    item.selected = false;
+    item.duplicateName = existing[0]?.filename || "已有资料";
+  });
+}
+
+async function startMaterialDirectoryScan(files) {
+  const allFiles = Array.from(files || []);
+  if (!allFiles.length) return;
+  const sequence = ++materialDirectoryScanSequence;
+  const rootPath = materialDirectoryRelativePath(allFiles[0]);
+  materialDirectoryRootName = rootPath.includes("/") ? rootPath.split("/")[0] : "所选目录";
+  const limited = allFiles.slice(0, MAX_DIRECTORY_SCAN_FILES);
+  materialDirectoryScanItems = limited.map((file, index) => {
+    const reason = materialDirectoryExclusionReason(file);
+    return {
+      id: `${index}-${file.name}-${file.size}-${file.lastModified}`,
+      file,
+      relativePath: materialDirectoryRelativePath(file),
+      category: materialFileCategory(file),
+      status: reason ? "excluded" : "hashing",
+      reason,
+      selected: false,
+      sha256: "",
+    };
+  });
+  openMaterialDirectoryScanModal();
+  if (allFiles.length > MAX_DIRECTORY_SCAN_FILES) {
+    showToast(`目录包含 ${allFiles.length} 个文件，本次先扫描前 ${MAX_DIRECTORY_SCAN_FILES} 个；可选择更小的子目录继续导入。`, "info");
+  }
+  if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = "正在检查重复…";
+  renderMaterialDirectoryScanList();
+
+  const seenHashes = new Map();
+  const candidates = materialDirectoryScanItems.filter((item) => item.status === "hashing");
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (sequence !== materialDirectoryScanSequence) return;
+    const item = candidates[index];
+    try {
+      item.sha256 = await sha256File(item.file);
+      if (item.sha256 && seenHashes.has(item.sha256)) {
+        item.status = "duplicate_selection";
+        item.selected = false;
+        item.duplicateName = seenHashes.get(item.sha256)?.file?.name || "同目录文件";
+      } else {
+        if (item.sha256) seenHashes.set(item.sha256, item);
+        item.status = "ready";
+        item.selected = true;
+      }
+    } catch (error) {
+      // If browser hashing is unavailable/fails, server-side duplicate rejection
+      // during import remains authoritative.
+      item.status = "ready";
+      item.selected = true;
+    }
+    if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = `检查重复 ${index + 1}/${candidates.length}`;
+    if ((index + 1) % 10 === 0 || index === candidates.length - 1) renderMaterialDirectoryScanList();
+  }
+
+  if (sequence !== materialDirectoryScanSequence) return;
+  try {
+    await checkMaterialDirectoryExistingDuplicates(materialDirectoryScanItems);
+  } catch (error) {
+    showToast(`仓库重复检查未完成：${error.message || "请求失败"}；导入时仍会再次检查。`, "info");
+  }
+  if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = "扫描完成";
+  renderMaterialDirectoryScanList();
+}
+
+async function importSelectedScannedMaterials() {
+  const selected = materialDirectoryScanItems.filter((item) => materialDirectoryItemSelectable(item) && item.selected);
+  if (!selected.length || !importScannedMaterialsButton) return;
+  setButtonBusy(importScannedMaterialsButton, true, `导入中 0/${selected.length}`);
+  let imported = 0;
+  let failed = 0;
+  for (let index = 0; index < selected.length; index += 1) {
+    const item = selected[index];
+    item.status = "importing";
+    item.selected = false;
+    importScannedMaterialsButton.textContent = `导入中 ${index + 1}/${selected.length}`;
+    if (index % 5 === 0) renderMaterialDirectoryScanList();
+    try {
+      await importIndependentMaterialFile(item.file, {
+        sourceRelativePath: item.relativePath,
+        sourceDirectoryName: materialDirectoryRootName,
+        rejectDuplicate: true,
+      });
+      item.status = "imported";
+      imported += 1;
+    } catch (error) {
+      if (error?.code === "MATERIAL_DUPLICATE") {
+        item.status = "duplicate_repository";
+        item.duplicateName = "导入时发现仓库已有相同文件";
+      } else {
+        item.status = "failed";
+        item.errorMessage = error?.message || "导入失败";
+        failed += 1;
+      }
+    }
+  }
+  setButtonBusy(importScannedMaterialsButton, false);
+  if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = `导入完成：成功 ${imported}${failed ? ` · 失败 ${failed}` : ""}`;
+  renderMaterialDirectoryScanList();
+  if (imported) {
+    await runMaterialCenterBrowse();
+    await refreshContentStatuses();
+    showToast(`已从目录导入 ${imported} 份资料${failed ? `，${failed} 份失败` : ""}`, failed ? "info" : "success");
+  } else if (failed) {
+    showToast("目录资料导入失败，请查看状态提示", "error");
+  }
+}
+
+async function deleteIndependentMaterial(attachment, button) {
+  if (!attachment?.is_independent) return;
+  const confirmed = await askConfirmation({
+    eyebrow: "删除独立资料",
+    title: `删除“${attachment.filename || "未命名资料"}”吗？`,
+    message: "这个操作不会删除任何事件、记忆或计划，但资料文件本身会从本地加密仓库中永久删除。",
+    confirmLabel: "删除资料",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+  setButtonBusy(button, true, "删除中…");
+  try {
+    await api(`/api/v1/materials/${encodeURIComponent(attachment.id)}`, { method: "DELETE" }, true);
+    releaseAttachmentObjectUrl(attachment.id);
+    showToast("独立资料已删除", "success");
+    await runMaterialCenterBrowse();
+    await refreshContentStatuses();
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function assignAttachmentTimelineFallback(attachment, button, { refreshMaterialCenter = false } = {}) {
+  setButtonBusy(button, true, "归入中…");
+  try {
+    const updated = await api(
+      `/api/v1/attachments/${encodeURIComponent(attachment.id)}/timeline-fallback`,
+      { method: "POST" },
+      true,
+    );
+    Object.assign(attachment, updated);
+    showToast(`已归入 ${updated.timeline_date || "可用日期"}`, "success");
+    if (refreshMaterialCenter) await runMaterialCenterBrowse();
+    return updated;
+  } catch (error) {
+    showOperationError(error);
+    return null;
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function ensureMaterialThumbnailObserver() {
+  if (materialThumbnailObserver || typeof IntersectionObserver === "undefined") return materialThumbnailObserver;
+  materialThumbnailObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      observer.unobserve(entry.target);
+      const loader = entry.target._lifegraphThumbnailLoader;
+      if (typeof loader === "function") loader();
+    });
+  }, { root: materialCenterResults || null, rootMargin: "240px 0px", threshold: 0.01 });
+  return materialThumbnailObserver;
+}
+
+function observeMaterialThumbnail(button, loader) {
+  button._lifegraphThumbnailLoader = loader;
+  const observer = ensureMaterialThumbnailObserver();
+  if (observer) observer.observe(button);
+  else loader();
+}
+
+function resetMaterialCenterPaging() {
+  materialCenterBrowseParams = null;
+  materialCenterLoadingMore = false;
+  materialCenterLoadObserver?.disconnect();
+  materialCenterLoadObserver = null;
+}
+
+function appendMaterialCenterLoadSentinel(data) {
+  materialCenterLoadObserver?.disconnect();
+  materialCenterLoadObserver = null;
+  if (!data?.has_more || !materialCenterResults) return;
+  const sentinel = document.createElement("div");
+  sentinel.className = "material-center-load-sentinel";
+  sentinel.textContent = materialCenterLoadingMore ? "正在加载更多资料……" : "继续向下滚动加载更多";
+  materialCenterResults.appendChild(sentinel);
+  if (typeof IntersectionObserver === "undefined") return;
+  materialCenterLoadObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) loadMoreMaterialCenterResults();
+  }, { root: materialCenterResults, rootMargin: "360px 0px", threshold: 0.01 });
+  materialCenterLoadObserver.observe(sentinel);
+}
+
+function createMaterialCenterCard(attachment, imageItems, imageIndexById, { timeline = false } = {}) {
+  const card = document.createElement("article");
+  card.className = `material-center-card-item is-${attachment.category || "other"}${timeline ? " is-timeline" : ""}`;
+
+  if (isImageAttachment(attachment)) {
+    const thumbnail = createAttachmentThumbnail(
+      attachment,
+      imageItems,
+      imageIndexById.get(attachment.id) || 0,
+      { lazy: true },
+    );
+    thumbnail.classList.add("material-center-thumbnail");
+    card.appendChild(thumbnail);
+  } else {
+    const icon = document.createElement("div");
+    icon.className = `material-center-file-icon is-${attachment.category || "other"}`;
+    icon.textContent = attachment.category === "document" ? "文" : "档";
+    card.appendChild(icon);
+  }
+
+  const main = document.createElement("div");
+  main.className = "material-center-item-main";
+  const titleRow = document.createElement("div");
+  titleRow.className = "material-center-item-title-row";
+  const title = document.createElement("strong");
+  title.className = "material-center-item-name";
+  title.textContent = attachment.filename || "未命名资料";
+  title.title = title.textContent;
+  const badge = document.createElement("span");
+  badge.className = `material-center-category-badge is-${attachment.category || "other"}`;
+  badge.textContent = materialCenterCategoryLabel(attachment.category);
+  titleRow.append(title, badge);
+
+  const meta = document.createElement("p");
+  meta.className = "material-center-item-meta";
+  const timelineMeta = timeline ? "" : (attachmentTimelineLabel(attachment) || "资料日期未识别");
+  meta.textContent = [
+    formatAttachmentSize(attachment.size_bytes),
+    attachment.media_type || "文件",
+    timelineMeta,
+  ].filter(Boolean).join(" · ");
+  meta.title = meta.textContent;
+
+  const relation = document.createElement("div");
+  relation.className = "material-center-item-relation";
+  const source = attachment.source_content;
+  if (source?.period_key) {
+    const sourceButton = document.createElement("button");
+    sourceButton.type = "button";
+    sourceButton.className = "material-center-source-button";
+    sourceButton.textContent = `来自 ${source.period_key} · ${materialSourceKindLabel(source.kind)}：${source.title || "未命名内容"}`;
+    sourceButton.title = sourceButton.textContent;
+    sourceButton.addEventListener("click", () => openMaterialCenterPeriod(
+      source.time_scope || "day",
+      source.period_key,
+      sourceButton,
+      source,
+    ));
+    relation.appendChild(sourceButton);
+  } else if (attachment.is_independent) {
+    const independent = document.createElement("span");
+    independent.className = "material-center-independent-label";
+    if (attachment.material_origin === "directory_import" && attachment.source_relative_path) {
+      independent.textContent = `目录导入 · ${attachment.source_relative_path}`;
+    } else {
+      independent.textContent = "独立资料 · 直接导入人生资料库";
+    }
+    independent.title = independent.textContent;
+    independent.title = "这份资料目前不依附任何事件、记忆或计划";
+    relation.appendChild(independent);
+  }
+  main.append(titleRow, meta, relation);
+
+  const actions = document.createElement("div");
+  actions.className = "material-center-item-actions";
+  if (!timeline && attachment.timeline_date) {
+    const dateButton = document.createElement("button");
+    dateButton.type = "button";
+    dateButton.className = "ghost-button material-center-date-button";
+    dateButton.textContent = `时间轴 ${attachment.timeline_date}`;
+    dateButton.title = `${attachmentTimelineSourceLabel(attachment)} · 打开资料归属日期`;
+    dateButton.addEventListener("click", () => openMaterialCenterPeriod("day", attachment.timeline_date, dateButton));
+    actions.appendChild(dateButton);
+  } else if (!attachment.timeline_date) {
+    const fallbackButton = document.createElement("button");
+    fallbackButton.type = "button";
+    fallbackButton.className = "ghost-button material-center-fallback-button";
+    fallbackButton.textContent = "归入来源/添加时间";
+    fallbackButton.title = "优先归入来源内容的明确日期；否则使用附件添加时间";
+    fallbackButton.addEventListener("click", () => assignAttachmentTimelineFallback(
+      attachment,
+      fallbackButton,
+      { refreshMaterialCenter: true },
+    ));
+    actions.appendChild(fallbackButton);
+  }
+  if (attachment.is_independent) {
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "ghost-button material-center-delete-button";
+    deleteButton.textContent = "删除";
+    deleteButton.addEventListener("click", () => deleteIndependentMaterial(attachment, deleteButton));
+    actions.appendChild(deleteButton);
+  }
+  const download = document.createElement("button");
+  download.type = "button";
+  download.className = "ghost-button";
+  download.textContent = "下载";
+  download.addEventListener("click", () => downloadAttachmentFile(attachment));
+  actions.appendChild(download);
+
+  card.append(main, actions);
+  return card;
+}
+
+function materialTimelineNodeSummary(items = []) {
+  const imageCount = items.filter((item) => item.category === "image").length;
+  const fileCount = items.length - imageCount;
+  const parts = [];
+  if (imageCount) parts.push(`${imageCount} 张照片`);
+  if (fileCount) parts.push(`${fileCount} 个文件`);
+  return parts.join(" · ") || `${items.length} 份资料`;
+}
+
+function bindMaterialTimelineCollapse(grid, items, toggleHost, imageItems, imageIndexById) {
+  const cards = items.map((attachment) =>
+    createMaterialCenterCard(attachment, imageItems, imageIndexById, { timeline: true }),
+  );
+  cards.forEach((card, index) => {
+    card.classList.toggle("hidden", index >= MATERIAL_SECTION_COLLAPSED_LIMIT);
+    grid.appendChild(card);
+  });
+
+  if (items.length <= MATERIAL_SECTION_COLLAPSED_LIMIT) return;
+
+  let expanded = false;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "material-timeline-toggle";
+  toggle.textContent = `展开全部（${items.length}）`;
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.addEventListener("click", () => {
+    expanded = !expanded;
+    cards.forEach((card, index) => {
+      card.classList.toggle("hidden", !expanded && index >= MATERIAL_SECTION_COLLAPSED_LIMIT);
+    });
+    toggle.textContent = expanded ? "收起" : `展开全部（${items.length}）`;
+    toggle.setAttribute("aria-expanded", String(expanded));
+  });
+  toggleHost.appendChild(toggle);
+}
+
+function renderMaterialCenterTimeline(items, imageItems, imageIndexById) {
+  materialCenterResults.classList.add("is-timeline-view");
+  const timeline = document.createElement("div");
+  timeline.className = "material-center-timeline";
+
+  const dated = items.filter((item) => item.timeline_date);
+  const undated = items.filter((item) => !item.timeline_date);
+  const ascending = materialCenterSort?.value === "timeline_asc";
+  dated.sort((left, right) => {
+    const a = String(left.timeline_at || left.timeline_date || "");
+    const b = String(right.timeline_at || right.timeline_date || "");
+    return ascending ? a.localeCompare(b) : b.localeCompare(a);
+  });
+
+  const years = new Map();
+  dated.forEach((attachment) => {
+    const [year, month] = String(attachment.timeline_date).split("-");
+    if (!years.has(year)) years.set(year, new Map());
+    const months = years.get(year);
+    if (!months.has(month)) months.set(month, new Map());
+    const dates = months.get(month);
+    if (!dates.has(attachment.timeline_date)) dates.set(attachment.timeline_date, []);
+    dates.get(attachment.timeline_date).push(attachment);
+  });
+
+  years.forEach((months, year) => {
+    const yearSection = document.createElement("section");
+    yearSection.className = "material-timeline-year";
+
+    const yearItems = [];
+    months.forEach((dates) => {
+      dates.forEach((dateItems) => yearItems.push(...dateItems));
+    });
+
+    const yearHeading = document.createElement("div");
+    yearHeading.className = "material-timeline-year-heading";
+    const yearHeadingText = document.createElement("h3");
+    yearHeadingText.className = "material-timeline-year-title";
+    yearHeadingText.textContent = `${year} 年 · ${yearItems.length} 份资料`;
+    const yearToggle = document.createElement("button");
+    yearToggle.type = "button";
+    yearToggle.className = "material-timeline-year-toggle";
+    yearToggle.textContent = "收起年度";
+    yearToggle.setAttribute("aria-expanded", "true");
+    yearHeading.append(yearHeadingText, yearToggle);
+    yearSection.appendChild(yearHeading);
+
+    const yearBody = document.createElement("div");
+    yearBody.className = "material-timeline-year-body";
+    let yearExpanded = true;
+    yearToggle.addEventListener("click", () => {
+      yearExpanded = !yearExpanded;
+      yearBody.classList.toggle("hidden", !yearExpanded);
+      yearToggle.textContent = yearExpanded ? "收起年度" : `展开年度（${yearItems.length}）`;
+      yearToggle.setAttribute("aria-expanded", String(yearExpanded));
+    });
+
+    months.forEach((dates, month) => {
+      const monthSection = document.createElement("section");
+      monthSection.className = "material-timeline-month";
+
+      const monthItems = [];
+      dates.forEach((dateItems) => monthItems.push(...dateItems));
+
+      const monthHeading = document.createElement("div");
+      monthHeading.className = "material-timeline-month-heading";
+      const monthHeadingText = document.createElement("h4");
+      monthHeadingText.className = "material-timeline-month-title";
+      monthHeadingText.textContent = `${Number(month)} 月 · ${monthItems.length} 份资料`;
+      const monthToggle = document.createElement("button");
+      monthToggle.type = "button";
+      monthToggle.className = "material-timeline-month-toggle";
+      monthToggle.textContent = "收起月份";
+      monthToggle.setAttribute("aria-expanded", "true");
+      monthHeading.append(monthHeadingText, monthToggle);
+      monthSection.appendChild(monthHeading);
+
+      const monthBody = document.createElement("div");
+      monthBody.className = "material-timeline-month-body";
+      let monthExpanded = true;
+      monthToggle.addEventListener("click", () => {
+        monthExpanded = !monthExpanded;
+        monthBody.classList.toggle("hidden", !monthExpanded);
+        monthToggle.textContent = monthExpanded ? "收起月份" : `展开月份（${monthItems.length}）`;
+        monthToggle.setAttribute("aria-expanded", String(monthExpanded));
+      });
+
+      dates.forEach((dateItems, timelineDate) => {
+        const row = document.createElement("div");
+        row.className = "material-timeline-date-row";
+        const rail = document.createElement("div");
+        rail.className = "material-timeline-date-rail";
+        const dateButton = document.createElement("button");
+        dateButton.type = "button";
+        dateButton.className = "material-timeline-date-button";
+        dateButton.textContent = timelineDate.slice(5);
+        dateButton.title = `打开 ${timelineDate} 人生详情`;
+        dateButton.addEventListener("click", () => openMaterialCenterPeriod("day", timelineDate, dateButton));
+        const dot = document.createElement("span");
+        dot.className = "material-timeline-dot";
+        dot.setAttribute("aria-hidden", "true");
+        rail.append(dateButton, dot);
+
+        const body = document.createElement("div");
+        body.className = "material-timeline-date-body";
+        const nodeHeader = document.createElement("div");
+        nodeHeader.className = "material-timeline-node-header";
+        const nodeMeta = document.createElement("div");
+        nodeMeta.className = "material-timeline-node-meta";
+        nodeMeta.textContent = materialTimelineNodeSummary(dateItems);
+        nodeHeader.appendChild(nodeMeta);
+        const grid = document.createElement("div");
+        grid.className = "material-timeline-grid";
+        bindMaterialTimelineCollapse(grid, dateItems, nodeHeader, imageItems, imageIndexById);
+        body.append(nodeHeader, grid);
+        row.append(rail, body);
+        monthBody.appendChild(row);
+      });
+      monthSection.appendChild(monthBody);
+      yearBody.appendChild(monthSection);
+    });
+    yearSection.appendChild(yearBody);
+    timeline.appendChild(yearSection);
+  });
+
+  if (undated.length) {
+    const unknown = document.createElement("section");
+    unknown.className = "material-timeline-undated";
+    const heading = document.createElement("div");
+    heading.className = "material-timeline-year-heading material-timeline-undated-heading";
+    const headingText = document.createElement("h3");
+    headingText.className = "material-timeline-undated-title";
+    headingText.textContent = "时间未识别";
+    heading.appendChild(headingText);
+    const grid = document.createElement("div");
+    grid.className = "material-timeline-grid material-timeline-undated-grid";
+    bindMaterialTimelineCollapse(grid, undated, heading, imageItems, imageIndexById);
+    unknown.append(heading, grid);
+    timeline.appendChild(unknown);
+  }
+  materialCenterResults.appendChild(timeline);
+}
+
+function renderMaterialCenterList(items, imageItems, imageIndexById) {
+  materialCenterResults.classList.remove("is-timeline-view");
+  items.forEach((attachment) => {
+    materialCenterResults.appendChild(createMaterialCenterCard(attachment, imageItems, imageIndexById));
+  });
+}
+
+function renderMaterialCenterResults(data) {
+  materialCenterLastData = data;
+  materialCenterLoadObserver?.disconnect();
+  materialCenterResults.replaceChildren();
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const counts = data?.counts || {};
+  const total = Number(data?.total || 0);
+  const loaded = items.length;
+  const summaryParts = [
+    total ? `共 ${total} 份 · 已加载 ${loaded}` : "当前条件下没有资料",
+    `图片 ${counts.image || 0}`,
+    `文档 ${counts.document || 0}`,
+    `其他 ${counts.other || 0}`,
+  ];
+  if (counts.undated) summaryParts.push(`未识别日期 ${counts.undated}`);
+  materialCenterSummary.textContent = summaryParts.join(" · ");
+  materialCenterLimitHint.textContent = data?.has_more ? "滚动继续加载" : (total ? "已加载全部" : "");
+  materialCenterLimitHint.classList.toggle("hidden", !total);
+
+  if (!items.length) {
+    materialCenterResults.classList.remove("is-timeline-view");
+    const empty = document.createElement("div");
+    empty.className = "material-center-empty";
+    empty.textContent = "可以清空关键词、选择更多资料类型，或放宽资料日期范围。";
+    materialCenterResults.appendChild(empty);
+    return;
+  }
+
+  const imageItems = items.filter(isImageAttachment);
+  const imageIndexById = new Map(imageItems.map((attachment, index) => [attachment.id, index]));
+  if (materialCenterViewMode === "list") {
+    renderMaterialCenterList(items, imageItems, imageIndexById);
+  } else {
+    renderMaterialCenterTimeline(items, imageItems, imageIndexById);
+  }
+  appendMaterialCenterLoadSentinel(data);
+}
+
+async function fetchMaterialCenterPage(params, { append = false } = {}) {
+  if (!isMaterialCenterOpen()) return;
+  const requestSequence = materialCenterRequestSequence;
+  const data = await api(`/api/v1/materials/browse?${params.toString()}`, {}, true);
+  if (requestSequence !== materialCenterRequestSequence || !isMaterialCenterOpen()) return;
+  if (!append || !materialCenterLastData) {
+    renderMaterialCenterResults(data);
+    return;
+  }
+  const existing = Array.isArray(materialCenterLastData.items) ? materialCenterLastData.items : [];
+  const incoming = Array.isArray(data?.items) ? data.items : [];
+  const seen = new Set(existing.map((item) => item.id));
+  const merged = existing.concat(incoming.filter((item) => !seen.has(item.id)));
+  renderMaterialCenterResults({ ...data, items: merged });
+}
+
+async function loadMoreMaterialCenterResults() {
+  if (materialCenterLoadingMore || !materialCenterLastData?.has_more || !materialCenterBrowseParams) return;
+  materialCenterLoadingMore = true;
+  const params = new URLSearchParams(materialCenterBrowseParams.toString());
+  params.set("offset", String(materialCenterLastData.next_offset || materialCenterLastData.items?.length || 0));
+  try {
+    await fetchMaterialCenterPage(params, { append: true });
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    materialCenterLoadingMore = false;
+  }
+}
+
+async function runMaterialCenterBrowse() {
+  if (!materialCenterForm || !isMaterialCenterOpen()) return;
+  const submit = materialCenterForm.querySelector('button[type="submit"]');
+  const categories = selectedMaterialCenterCategories();
+  if (!categories.length) {
+    showToast("请至少选择一种资料类型", "error");
+    return;
+  }
+  if (materialCenterDateFrom.value && materialCenterDateTo.value && materialCenterDateFrom.value > materialCenterDateTo.value) {
+    showToast("资料开始日期不能晚于结束日期", "error");
+    materialCenterDateFrom.focus();
+    return;
+  }
+
+  const params = new URLSearchParams();
+  const query = materialCenterQuery.value.trim();
+  if (query) params.set("q", query);
+  categories.forEach((category) => params.append("category", category));
+  if (materialCenterDateFrom.value) params.set("date_from", materialCenterDateFrom.value);
+  if (materialCenterDateTo.value) params.set("date_to", materialCenterDateTo.value);
+  params.set("sort", materialCenterSort.value || "timeline_desc");
+  params.set("limit", "48");
+  params.set("offset", "0");
+
+  ++materialCenterRequestSequence;
+  resetMaterialCenterPaging();
+  materialCenterBrowseParams = new URLSearchParams(params.toString());
+  setButtonBusy(submit, true, "筛选中…");
+  materialCenterSummary.textContent = "正在整理加密资料……";
+  materialCenterResults.replaceChildren();
+  materialCenterLimitHint.classList.add("hidden");
+  try {
+    await fetchMaterialCenterPage(params, { append: false });
+    materialCenterResults.scrollTop = 0;
+  } catch (error) {
+    showOperationError(error);
+    materialCenterSummary.textContent = "资料读取失败，请调整条件后重试";
   } finally {
     setButtonBusy(submit, false);
   }
@@ -1807,6 +2873,7 @@ function setMemoryMapTagMatchData(data = {}) {
 }
 
 function redrawMemoryMapFilterState() {
+  renderHomeMonthCalendar();
   renderLifeMapView(true);
   if (fullPageLifeOpen) drawFullPageLifeGrid(true);
 }
@@ -3262,6 +4329,7 @@ async function loadHome({ enterFullPage = false } = {}) {
     lifeDayMetric.style.setProperty("--metric-progress", `${Math.max(0, Math.min(100, progress.life.percent))}%`);
     yearPercentMetric.style.setProperty("--metric-progress", `${Math.max(0, Math.min(100, progress.year.percent))}%`);
     monthPercentMetric.style.setProperty("--metric-progress", `${Math.max(0, Math.min(100, progress.month.percent))}%`);
+    renderHomeMonthCalendar();
     initializeLifeNavigator(progress);
     showView("home");
     void refreshBackupHealthReminder();
@@ -3296,6 +4364,7 @@ async function refreshContentStatuses() {
   if (memoryMapFilterIsActive()) await refreshMemoryMapTagMatches({ redraw: false });
   lifeGridSignature = "";
   fullPageGridSignature = "";
+  renderHomeMonthCalendar();
   renderLifeMapView(true);
   if (fullPageLifeOpen) drawFullPageLifeGrid(true);
 }
@@ -3502,13 +4571,14 @@ function setNavigatorFromDate(isoDate) {
 function contentStateForRange(startDate, endDate) {
   const start = formatUtc(startDate);
   const end = formatUtc(endDate);
-  const aggregate = { has_event: false, has_memory: false, has_plan: false };
+  const aggregate = { has_event: false, has_memory: false, has_plan: false, has_material: false };
   for (const [dateKey, state] of Object.entries(contentStatus)) {
     if (dateKey < start || dateKey >= end) continue;
     aggregate.has_event ||= Boolean(state.has_event);
     aggregate.has_memory ||= Boolean(state.has_memory);
     aggregate.has_plan ||= Boolean(state.has_plan);
-    if (aggregate.has_event && aggregate.has_memory && aggregate.has_plan) break;
+    aggregate.has_material ||= Boolean(state.has_material);
+    if (aggregate.has_event && aggregate.has_memory && aggregate.has_plan && aggregate.has_material) break;
   }
   return aggregate;
 }
@@ -3518,6 +4588,7 @@ function contentStateLabel(state) {
   if (state.has_event) labels.push("有事件");
   if (state.has_memory) labels.push("有记忆");
   if (state.has_plan) labels.push("有计划");
+  if (state.has_material) labels.push("有资料");
   return labels.join("、");
 }
 
@@ -3567,8 +4638,9 @@ function appendHierarchyMarkers(cell, state) {
   cell.classList.toggle("has-event", Boolean(state.has_event));
   cell.classList.toggle("has-memory", Boolean(state.has_memory));
   cell.classList.toggle("has-plan", Boolean(state.has_plan));
+  cell.classList.toggle("has-material", Boolean(state.has_material));
 
-  if (!state.has_event && !state.has_plan) return;
+  if (!state.has_event && !state.has_plan && !state.has_material) return;
   const markers = document.createElement("span");
   markers.className = "hierarchy-markers";
   if (state.has_event) {
@@ -3582,6 +4654,12 @@ function appendHierarchyMarkers(cell, state) {
     planMarker.className = "hierarchy-plan-marker";
     planMarker.setAttribute("aria-hidden", "true");
     markers.appendChild(planMarker);
+  }
+  if (state.has_material) {
+    const materialMarker = document.createElement("i");
+    materialMarker.className = "hierarchy-material-marker";
+    materialMarker.setAttribute("aria-hidden", "true");
+    markers.appendChild(materialMarker);
   }
   cell.appendChild(markers);
 }
@@ -3646,7 +4724,7 @@ function renderYearGrid() {
     const rangeStart = start < bounds.birth ? bounds.birth : start;
     const rangeEnd = end > bounds.target ? bounds.target : end;
     if (rangeStart >= rangeEnd) continue;
-    const state = yearContentStatus[String(year)] || { has_event: false, has_memory: false, has_plan: false };
+    const state = yearContentStatus[String(year)] || { has_event: false, has_memory: false, has_plan: false, has_material: false };
     const cell = createHierarchyCell({
       label: String(year),
       ariaLabel: `${year}年`,
@@ -3683,7 +4761,7 @@ function renderMonthGrid() {
       const year = monthStart.getUTCFullYear();
       const month = monthStart.getUTCMonth() + 1;
       const periodKey = `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}`;
-      const state = monthContentStatus[periodKey] || { has_event: false, has_memory: false, has_plan: false };
+      const state = monthContentStatus[periodKey] || { has_event: false, has_memory: false, has_plan: false, has_material: false };
       const cell = createHierarchyCell({
         label: `${year}年${month}月`,
         ariaLabel: `${year}年${month}月`,
@@ -3781,6 +4859,7 @@ function fullPageContentLabel(isoDate) {
   if (state.has_event) labels.push("有事件");
   if (state.has_memory) labels.push("有记忆");
   if (state.has_plan) labels.push("有计划");
+  if (state.has_material) labels.push("有资料");
   return labels;
 }
 
@@ -3868,6 +4947,12 @@ function drawFullPageLifeGrid(force = false) {
       ctx.arc(x + cellSize / 2, y + cellSize / 2, Math.max(1, cellSize * .13), 0, Math.PI * 2);
       ctx.fillStyle = eventColor;
       ctx.fill();
+    }
+
+    if (state.has_material) {
+      const materialSize = Math.max(1.2, cellSize * .18);
+      ctx.fillStyle = "#7f6aa8";
+      ctx.fillRect(x + cellSize - materialSize - 1, y + 1, materialSize, materialSize);
     }
 
     if (memoryMapFilterIsActive()) {
@@ -4132,6 +5217,12 @@ function drawLifeGrid(progress, force = false) {
         ctx.fill();
       }
 
+      if (dateState?.has_material) {
+        const materialSize = Math.max(0.8, Math.min(1.5, cellWidth * 0.34, cellHeight * 0.3));
+        ctx.fillStyle = "#7f6aa8";
+        ctx.fillRect(x + cellDrawWidth - materialSize, y, materialSize, materialSize);
+      }
+
       if (memoryMapFilterIsActive()) {
         const isTagMatch = memoryMapScopeMatches("day", dateKey);
         if (!isTagMatch) {
@@ -4279,6 +5370,7 @@ function showGridMagnifier(event, resolved) {
   if (dateState.has_event) contentLabels.push("有事件");
   if (dateState.has_memory) contentLabels.push("有记忆");
   if (dateState.has_plan) contentLabels.push("有计划");
+  if (dateState.has_material) contentLabels.push("有资料");
   const contentLabel = contentLabels.length ? ` · ${contentLabels.join(" · ")}` : "";
 
   gridMagnifierDate.textContent = formatHoverDate(resolved.isoDate);
@@ -4363,6 +5455,7 @@ const contentFormConfigurations = {
     toggleButton: toggleEventFormButton,
     section: eventSection,
     heading: document.getElementById("eventSectionHeading"),
+    listToggle: document.getElementById("eventListToggle"),
     endpoint: "/api/v1/events",
     createLabel: "＋ 添加事件",
     openLabel: "收起表单",
@@ -4377,6 +5470,7 @@ const contentFormConfigurations = {
     toggleButton: toggleMemoryFormButton,
     section: memorySection,
     heading: document.getElementById("memorySectionHeading"),
+    listToggle: document.getElementById("memoryListToggle"),
     endpoint: "/api/v1/memories",
     createLabel: "＋ 添加记忆",
     openLabel: "收起表单",
@@ -4391,6 +5485,7 @@ const contentFormConfigurations = {
     toggleButton: togglePlanFormButton,
     section: planSection,
     heading: document.getElementById("planSectionHeading"),
+    listToggle: document.getElementById("planListToggle"),
     endpoint: "/api/v1/plans",
     createLabel: "＋ 添加计划",
     openLabel: "收起表单",
@@ -4402,7 +5497,61 @@ const contentFormConfigurations = {
   },
 };
 
-const EMPTY_CONTENT_STATE = { has_event: false, has_memory: false, has_plan: false };
+const contentSectionCollapsed = { event: false, memory: false, plan: false };
+let contentSectionCollapsePeriodKey = "";
+
+function periodScopeLabel(scope = selectedScope) {
+  if (scope === "year") return "年";
+  if (scope === "month") return "月";
+  if (scope === "day") return "日";
+  return "";
+}
+
+function scopedContentCreateLabel(kind, scope = selectedScope) {
+  const config = contentFormConfigurations[kind];
+  return `＋ 添加${periodScopeLabel(scope)}${config.itemLabel}`;
+}
+
+function resetContentSectionCollapseState() {
+  Object.keys(contentSectionCollapsed).forEach((kind) => {
+    contentSectionCollapsed[kind] = false;
+  });
+}
+
+function updateContentListCollapse(kind) {
+  const config = contentFormConfigurations[kind];
+  const list = config.section.querySelector(".content-list");
+  const toggle = config.listToggle;
+  if (!list || !toggle) return;
+  const itemCount = Number(config.section.dataset.itemCount || 0);
+  const collapsed = itemCount > 0 && Boolean(contentSectionCollapsed[kind]);
+  list.classList.toggle("hidden", collapsed);
+  toggle.classList.toggle("hidden", itemCount === 0);
+  toggle.hidden = itemCount === 0;
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.textContent = collapsed
+    ? `展开${config.itemLabel}（${itemCount}）`
+    : `收起${config.itemLabel}`;
+}
+
+Object.entries(contentFormConfigurations).forEach(([kind, config]) => {
+  config.listToggle?.addEventListener("click", () => {
+    contentSectionCollapsed[kind] = !contentSectionCollapsed[kind];
+    updateContentListCollapse(kind);
+  });
+});
+
+const EMPTY_CONTENT_STATE = { has_event: false, has_memory: false, has_plan: false, has_material: false };
+
+const pendingContentAttachments = {
+  event: [],
+  memory: [],
+  plan: [],
+};
+
+function pendingAttachmentSignature(file) {
+  return `${file.name}::${file.size}::${file.lastModified}::${file.type || ""}`;
+}
 
 function contentFormValue(kind) {
   const form = contentFormConfigurations[kind].form;
@@ -4413,6 +5562,7 @@ function contentFormValue(kind) {
     title: form.querySelector('[name="title"]')?.value || "",
     content,
     tagIds: [...selectedMemoryTagIds[tagModeForKind(kind)]].sort(),
+    attachments: pendingContentAttachments[kind].map((file) => pendingAttachmentSignature(file)),
   };
 }
 
@@ -4440,7 +5590,7 @@ async function confirmDiscardChanges() {
   return askConfirmation({
     eyebrow: "尚未保存",
     title: "放弃当前更改吗？",
-    message: "表单中还有未保存的文字。继续后，这些更改将不会保留。",
+    message: "表单中还有未保存的内容或待上传附件。继续后，这些更改将不会保留。",
     confirmLabel: "放弃更改",
     tone: "warning",
   });
@@ -4490,6 +5640,7 @@ function updateContentSectionVisibility(kind) {
   config.section.classList.toggle("hidden", itemCount === 0 && !formOpen);
   config.toggleButton.classList.toggle("is-active", formOpen);
   config.toggleButton.setAttribute("aria-expanded", formOpen ? "true" : "false");
+  updateContentListCollapse(kind);
 }
 
 function resetContentForm(kind, hide = true) {
@@ -4498,6 +5649,7 @@ function resetContentForm(kind, hide = true) {
   const cancel = config.form.querySelector('.event-form-actions button[type="button"]');
   if (kind === "memory") destroyMemoryRichEditor(memoryRichEditorIds.drawer);
   config.form.reset();
+  clearPendingContentAttachments(kind);
   resetMemoryTagSelector(tagModeForKind(kind));
   config.form.classList.toggle("hidden", hide);
   config.form.classList.remove("is-editing");
@@ -4506,7 +5658,7 @@ function resetContentForm(kind, hide = true) {
   delete config.form.dataset.initialSnapshot;
   config.toggleButton.textContent = kind === "plan" && config.toggleButton.disabled
     ? "该时间范围已过去"
-    : config.createLabel;
+    : scopedContentCreateLabel(kind);
   submit.textContent = config.saveLabel;
   cancel.textContent = "取消";
   updateContentSectionVisibility(kind);
@@ -4524,6 +5676,8 @@ function resetDrawerForms() {
 
 function closeDateDrawerNow() {
   drawerRequestSequence += 1;
+  contentSectionCollapsePeriodKey = "";
+  resetContentSectionCollapseState();
   selectedDate = null;
   selectedScope = null;
   selectedPeriodKey = null;
@@ -4540,7 +5694,7 @@ function closeDateDrawerNow() {
 async function requestCloseDateDrawer() {
   if (!(await confirmDiscardChanges())) return false;
   closeDateDrawerNow();
-  resumeContentCenterAfterDrawer();
+  if (!resumeContentCenterAfterDrawer()) resumeMaterialCenterAfterDrawer();
   return true;
 }
 
@@ -4667,6 +5821,13 @@ function periodChildButton(child, selectedKey) {
   button.classList.toggle("has-event", state.has_event);
   button.classList.toggle("has-memory", state.has_memory);
   button.classList.toggle("has-plan", state.has_plan);
+  button.classList.toggle("has-material", state.has_material);
+  if (state.has_material) {
+    const materialMarker = document.createElement("i");
+    materialMarker.className = "period-material-marker";
+    materialMarker.setAttribute("aria-hidden", "true");
+    button.appendChild(materialMarker);
+  }
   button.addEventListener("click", () => openPeriodDrawer(child.scope, child.period_key));
   return button;
 }
@@ -4694,6 +5855,49 @@ function dayChildrenForMonth(monthKey) {
   return children;
 }
 
+function decorateDayCalendarButton(button, child, options = {}) {
+  const calendarMeta = window.LifeGraphCalendarMeta?.getDateMeta?.(child.period_key) || null;
+  const materialMarker = button.querySelector(".period-material-marker");
+  button.replaceChildren();
+  button.classList.add("calendar-day-cell");
+
+  if (calendarMeta?.lunarDisplay) {
+    const watermark = document.createElement("span");
+    watermark.className = "calendar-day-watermark";
+    watermark.classList.toggle("is-solar-term", Boolean(calendarMeta.solarTerm));
+    watermark.classList.toggle("is-festival", Boolean(calendarMeta.festival));
+    watermark.setAttribute("aria-hidden", "true");
+    const watermarkCharacters = [...calendarMeta.lunarDisplay];
+    watermark.classList.add(`glyph-count-${watermarkCharacters.length}`);
+    watermarkCharacters.forEach((character, index) => {
+      const glyph = document.createElement("span");
+      glyph.className = `glyph glyph-${index + 1}`;
+      glyph.textContent = character;
+      watermark.appendChild(glyph);
+    });
+    button.appendChild(watermark);
+  }
+
+  const solarDay = document.createElement("span");
+  solarDay.className = "calendar-day-solar";
+  solarDay.textContent = child.label;
+  button.appendChild(solarDay);
+  if (materialMarker) button.appendChild(materialMarker);
+
+  const state = child.disabled ? null : statusForPeriod("day", child.period_key);
+  const stateText = state ? contentStateLabel(state) : "";
+  const tooltipBase = calendarMeta?.tooltip || child.period_key;
+  if (child.disabled) {
+    button.title = `${tooltipBase} · 不在当前人生图谱范围内`;
+    button.setAttribute("aria-label", `${tooltipBase}，不在当前人生图谱范围内`);
+  } else {
+    button.title = `${tooltipBase}${stateText ? ` · ${stateText}` : ""}`;
+    const actionLabel = options.actionLabel || "点击查看";
+    button.setAttribute("aria-label", `${tooltipBase}${stateText ? `，${stateText}` : ""}，${actionLabel}`);
+  }
+  return button;
+}
+
 function appendMonthCalendarCells(monthKey, selectedKey) {
   const [yearText, monthText] = monthKey.split("-");
   const firstDay = new Date(Date.UTC(Number(yearText), Number(monthText) - 1, 1));
@@ -4707,7 +5911,10 @@ function appendMonthCalendarCells(monthKey, selectedKey) {
     periodChildGrid.appendChild(placeholder);
   }
 
-  children.forEach((child) => periodChildGrid.appendChild(periodChildButton(child, selectedKey)));
+  children.forEach((child) => {
+    const button = periodChildButton(child, selectedKey);
+    periodChildGrid.appendChild(decorateDayCalendarButton(button, child));
+  });
 
   const trailing = (7 - ((mondayOffset + children.length) % 7)) % 7;
   for (let index = 0; index < trailing; index += 1) {
@@ -4715,6 +5922,130 @@ function appendMonthCalendarCells(monthKey, selectedKey) {
     placeholder.className = "period-day-placeholder";
     placeholder.setAttribute("aria-hidden", "true");
     periodChildGrid.appendChild(placeholder);
+  }
+}
+
+function homeMonthCalendarIsPickerOpen() {
+  return Boolean(homeMonthCalendarPicker && !homeMonthCalendarPicker.classList.contains("hidden"));
+}
+
+function closeHomeMonthCalendarPicker({ restoreFocus = false } = {}) {
+  if (!homeMonthCalendarPicker || !homeMonthCalendarPickerButton) return;
+  homeMonthCalendarPicker.classList.add("hidden");
+  homeMonthCalendarPickerButton.setAttribute("aria-expanded", "false");
+  if (restoreFocus) homeMonthCalendarPickerButton.focus({ preventScroll: true });
+}
+
+function validHomeCalendarYears() {
+  const bounds = getLifeBounds();
+  if (!bounds) return [];
+  const firstYear = bounds.birth.getUTCFullYear();
+  const lastDate = addUtcDays(bounds.target, -1);
+  const lastYear = lastDate.getUTCFullYear();
+  const years = [];
+  for (let year = firstYear; year <= lastYear; year += 1) {
+    if (Array.from({ length: 12 }, (_, index) => index + 1).some((month) => monthIntersectsLife(year, month))) {
+      years.push(year);
+    }
+  }
+  return years;
+}
+
+function syncHomeMonthCalendarMonthOptions(preferredMonth = null) {
+  if (!homeMonthCalendarYear || !homeMonthCalendarMonth) return;
+  const year = Number(homeMonthCalendarYear.value);
+  const fallbackMonth = Number(preferredMonth || homeMonthCalendarMonth.value || currentProgress?.today?.slice(5, 7) || 1);
+  homeMonthCalendarMonth.replaceChildren();
+  const availableMonths = [];
+  for (let month = 1; month <= 12; month += 1) {
+    if (!monthIntersectsLife(year, month)) continue;
+    availableMonths.push(month);
+    const option = document.createElement("option");
+    option.value = String(month);
+    option.textContent = `${month} 月`;
+    homeMonthCalendarMonth.appendChild(option);
+  }
+  if (!availableMonths.length) return;
+  const selectedMonth = availableMonths.includes(fallbackMonth)
+    ? fallbackMonth
+    : availableMonths.reduce((best, month) => Math.abs(month - fallbackMonth) < Math.abs(best - fallbackMonth) ? month : best, availableMonths[0]);
+  homeMonthCalendarMonth.value = String(selectedMonth);
+}
+
+function syncHomeMonthCalendarPicker() {
+  if (!currentProgress?.today || !homeMonthCalendarYear || !homeMonthCalendarMonth) return;
+  const monthKey = homeMonthCalendarMonthKey || currentProgress.today.slice(0, 7);
+  const [yearText, monthText] = monthKey.split("-");
+  const years = validHomeCalendarYears();
+  homeMonthCalendarYear.replaceChildren();
+  years.forEach((year) => {
+    const option = document.createElement("option");
+    option.value = String(year);
+    option.textContent = `${year} 年`;
+    homeMonthCalendarYear.appendChild(option);
+  });
+  if (!years.length) return;
+  const year = years.includes(Number(yearText)) ? Number(yearText) : years[0];
+  homeMonthCalendarYear.value = String(year);
+  syncHomeMonthCalendarMonthOptions(Number(monthText));
+}
+
+function openHomeMonthCalendarPicker() {
+  if (!homeMonthCalendarPicker || !homeMonthCalendarPickerButton) return;
+  syncHomeMonthCalendarPicker();
+  homeMonthCalendarPicker.classList.remove("hidden");
+  homeMonthCalendarPickerButton.setAttribute("aria-expanded", "true");
+  requestAnimationFrame(() => homeMonthCalendarYear?.focus({ preventScroll: true }));
+}
+
+function setHomeMonthCalendarMonth(monthKey, { closePicker = true } = {}) {
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) return;
+  const [yearText, monthText] = monthKey.split("-");
+  if (!monthIntersectsLife(Number(yearText), Number(monthText))) return;
+  homeMonthCalendarMonthKey = monthKey;
+  renderHomeMonthCalendar();
+  syncHomeMonthCalendarPicker();
+  if (closePicker) closeHomeMonthCalendarPicker({ restoreFocus: true });
+}
+
+function renderHomeMonthCalendar() {
+  if (!homeMonthCalendarGrid || !homeMonthCalendarTitle || !currentProgress?.today) return;
+
+  const todayMonthKey = currentProgress.today.slice(0, 7);
+  if (!homeMonthCalendarMonthKey) homeMonthCalendarMonthKey = todayMonthKey;
+  const [activeYearText, activeMonthText] = homeMonthCalendarMonthKey.split("-");
+  if (!monthIntersectsLife(Number(activeYearText), Number(activeMonthText))) homeMonthCalendarMonthKey = todayMonthKey;
+  const monthKey = homeMonthCalendarMonthKey;
+  const [yearText, monthText] = monthKey.split("-");
+  homeMonthCalendarTitle.textContent = `${Number(yearText)} 年 ${Number(monthText)} 月`;
+  homeMonthCalendarPickerButton?.classList.toggle("is-away-from-current", monthKey !== todayMonthKey);
+  homeMonthCalendarGrid.replaceChildren();
+
+  const firstDay = new Date(Date.UTC(Number(yearText), Number(monthText) - 1, 1));
+  const mondayOffset = (firstDay.getUTCDay() + 6) % 7;
+  const children = dayChildrenForMonth(monthKey);
+
+  for (let index = 0; index < mondayOffset; index += 1) {
+    const placeholder = document.createElement("span");
+    placeholder.className = "hero-month-day-placeholder";
+    placeholder.setAttribute("aria-hidden", "true");
+    homeMonthCalendarGrid.appendChild(placeholder);
+  }
+
+  children.forEach((child) => {
+    const button = periodChildButton(child, currentProgress.today);
+    button.classList.add("hero-month-day");
+    homeMonthCalendarGrid.appendChild(
+      decorateDayCalendarButton(button, child, { actionLabel: "点击查看或添加" }),
+    );
+  });
+
+  const trailing = (7 - ((mondayOffset + children.length) % 7)) % 7;
+  for (let index = 0; index < trailing; index += 1) {
+    const placeholder = document.createElement("span");
+    placeholder.className = "hero-month-day-placeholder";
+    placeholder.setAttribute("aria-hidden", "true");
+    homeMonthCalendarGrid.appendChild(placeholder);
   }
 }
 
@@ -4742,7 +6073,8 @@ function weekChildrenForDay(dayKey) {
 
 function appendSelectedWeekCells(dayKey, selectedKey) {
   weekChildrenForDay(dayKey).forEach((child) => {
-    periodChildGrid.appendChild(periodChildButton(child, selectedKey));
+    const button = periodChildButton(child, selectedKey);
+    periodChildGrid.appendChild(decorateDayCalendarButton(button, child));
   });
 }
 
@@ -4776,7 +6108,7 @@ function renderPeriodNavigator(detail) {
 function periodContentStatusEntries(scope) {
   const source = scope === "year" ? yearContentStatus : (scope === "month" ? monthContentStatus : contentStatus);
   return Object.entries(source || {})
-    .filter(([, value]) => value && (value.has_event || value.has_memory || value.has_plan))
+    .filter(([, value]) => value && (value.has_event || value.has_memory || value.has_plan || value.has_material))
     .map(([key]) => key)
     .sort();
 }
@@ -5237,6 +6569,662 @@ function prepareMemoryCardCollapse(article, body, button) {
   });
 }
 
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+function formatAttachmentSize(sizeBytes) {
+  const size = Number(sizeBytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function formatAttachmentTimelineTime(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!match) return text;
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+}
+
+function attachmentTimelineLabel(attachment) {
+  if (!attachment?.timeline_at) return "";
+  const source = String(attachment.timeline_time_source || "");
+  const time = formatAttachmentTimelineTime(attachment.timeline_at);
+  if (source.startsWith("exif:")) return `拍摄于 ${time}`;
+  if (source === "document:created") return `文档创建于 ${time}`;
+  if (source === "document:modified") return `文档保存于 ${time}`;
+  if (source === "file:last_modified") return `文件修改于 ${time}`;
+  if (source === "content:date") return `来源内容日期 ${String(attachment.timeline_date || time).slice(0, 10)}`;
+  if (source === "attachment:added") return `附件添加于 ${time}`;
+  return `资料时间 ${time}`;
+}
+
+function attachmentTimelineSourceLabel(attachment) {
+  const source = String(attachment?.timeline_time_source || "");
+  if (source.startsWith("exif:")) return "照片 EXIF";
+  if (source === "document:created") return "文档内部创建时间";
+  if (source === "document:modified") return "文档内部保存时间";
+  if (source === "file:last_modified") return "文件修改时间";
+  if (source === "content:date") return "来源内容日期";
+  if (source === "attachment:added") return "附件添加时间";
+  return "资料元数据";
+}
+
+function isImageAttachment(attachment) {
+  return String(attachment?.media_type || "").toLowerCase().startsWith("image/");
+}
+
+function isImageFile(file) {
+  return String(file?.type || "").toLowerCase().startsWith("image/");
+}
+
+async function fetchAttachmentBlob(attachment) {
+  const headers = {};
+  if (token()) headers.Authorization = `Bearer ${token()}`;
+  const response = await fetch(
+    `/api/v1/attachments/${encodeURIComponent(attachment.id)}/download`,
+    { headers },
+  );
+  if (!response.ok) {
+    let message = `读取附件失败：${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.error?.message || message;
+    } catch (_) {}
+    const error = new Error(message);
+    error.code = response.status === 404 ? "ATTACHMENT_NOT_FOUND" : "ATTACHMENT_READ_FAILED";
+    throw error;
+  }
+  return response.blob();
+}
+
+async function attachmentObjectUrl(attachment) {
+  const cached = attachmentObjectUrls.get(attachment.id);
+  if (cached) return cached;
+  const pending = attachmentObjectUrlPromises.get(attachment.id);
+  if (pending) return pending;
+  const promise = fetchAttachmentBlob(attachment)
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      attachmentObjectUrls.set(attachment.id, url);
+      attachmentObjectUrlPromises.delete(attachment.id);
+      return url;
+    })
+    .catch((error) => {
+      attachmentObjectUrlPromises.delete(attachment.id);
+      throw error;
+    });
+  attachmentObjectUrlPromises.set(attachment.id, promise);
+  return promise;
+}
+
+function releaseAttachmentObjectUrl(attachmentId) {
+  const url = attachmentObjectUrls.get(attachmentId);
+  if (url) URL.revokeObjectURL(url);
+  attachmentObjectUrls.delete(attachmentId);
+  attachmentObjectUrlPromises.delete(attachmentId);
+}
+
+function releaseAllAttachmentObjectUrls() {
+  attachmentObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  attachmentObjectUrls.clear();
+  attachmentObjectUrlPromises.clear();
+}
+
+function isAttachmentPreviewOpen() {
+  return Boolean(attachmentPreviewModal && !attachmentPreviewModal.classList.contains("hidden"));
+}
+
+function isAttachmentPreviewFullscreen() {
+  return Boolean(attachmentPreviewModal && document.fullscreenElement === attachmentPreviewModal);
+}
+
+async function setAttachmentPreviewFullscreen(enabled) {
+  if (!attachmentPreviewModal || !isAttachmentPreviewOpen()) return;
+  if (enabled) {
+    attachmentPreviewModal.classList.add("is-fullscreen-zoom");
+    if (!isAttachmentPreviewFullscreen() && attachmentPreviewModal.requestFullscreen) {
+      try {
+        await attachmentPreviewModal.requestFullscreen({ navigationUI: "hide" });
+      } catch (_error) {
+        // 浏览器拒绝 Fullscreen API 时仍保留沉浸式放大样式。
+      }
+    }
+    return;
+  }
+  attachmentPreviewModal.classList.remove("is-fullscreen-zoom");
+  if (isAttachmentPreviewFullscreen() && document.exitFullscreen) {
+    try {
+      await document.exitFullscreen();
+    } catch (_error) {
+      // 退出全屏失败时仍恢复页面内预览样式。
+    }
+  }
+}
+
+async function toggleAttachmentPreviewFullscreen() {
+  const shouldEnter = !isAttachmentPreviewFullscreen() && !attachmentPreviewModal?.classList.contains("is-fullscreen-zoom");
+  await setAttachmentPreviewFullscreen(shouldEnter);
+}
+
+async function renderAttachmentPreview() {
+  if (!isAttachmentPreviewOpen()) return;
+  const attachment = attachmentPreviewItems[attachmentPreviewIndex];
+  if (!attachment) {
+    closeAttachmentPreview();
+    return;
+  }
+  attachmentPreviewTitle.textContent = attachment.filename || "未命名图片";
+  const previewMetaParts = [formatAttachmentSize(attachment.size_bytes), attachment.media_type || "图片"];
+  const timelineLabel = attachmentTimelineLabel(attachment);
+  if (timelineLabel) previewMetaParts.push(timelineLabel);
+  attachmentPreviewMeta.textContent = previewMetaParts.join(" · ");
+  attachmentPreviewCounter.textContent = `${attachmentPreviewIndex + 1} / ${attachmentPreviewItems.length}`;
+  const canNavigate = attachmentPreviewItems.length > 1;
+  attachmentPreviewPrevious.disabled = !canNavigate;
+  attachmentPreviewNext.disabled = !canNavigate;
+  attachmentPreviewImage.removeAttribute("src");
+  attachmentPreviewImage.alt = attachment.filename || "图片附件";
+  attachmentPreviewImage.classList.add("is-loading");
+  attachmentPreviewStatus.classList.remove("hidden", "is-error");
+  attachmentPreviewStatus.textContent = "正在解密图片…";
+  const expectedId = attachment.id;
+  try {
+    const url = await attachmentObjectUrl(attachment);
+    if (!isAttachmentPreviewOpen() || attachmentPreviewItems[attachmentPreviewIndex]?.id !== expectedId) return;
+    attachmentPreviewImage.src = url;
+    attachmentPreviewImage.classList.remove("is-loading");
+    attachmentPreviewStatus.classList.add("hidden");
+  } catch (error) {
+    if (!isAttachmentPreviewOpen() || attachmentPreviewItems[attachmentPreviewIndex]?.id !== expectedId) return;
+    attachmentPreviewImage.classList.remove("is-loading");
+    attachmentPreviewStatus.textContent = friendlyErrorMessage(error);
+    attachmentPreviewStatus.classList.add("is-error");
+  }
+}
+
+function openAttachmentPreview(items, index, returnFocus = null) {
+  if (!attachmentPreviewModal) return;
+  const images = (items || []).filter(isImageAttachment);
+  const target = items?.[index];
+  const normalizedIndex = Math.max(0, images.findIndex((item) => item.id === target?.id));
+  if (!images.length) return;
+  attachmentPreviewItems = images;
+  attachmentPreviewIndex = normalizedIndex;
+  attachmentPreviewReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+  attachmentPreviewModal.classList.remove("hidden");
+  attachmentPreviewModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("attachment-preview-open");
+  renderAttachmentPreview();
+  window.requestAnimationFrame(() => closeAttachmentPreviewButton?.focus());
+}
+
+function closeAttachmentPreview({ restoreFocus = true } = {}) {
+  if (!attachmentPreviewModal || attachmentPreviewModal.classList.contains("hidden")) return;
+  if (isAttachmentPreviewFullscreen() && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => {});
+  }
+  attachmentPreviewModal.classList.remove("is-fullscreen-zoom");
+  attachmentPreviewModal.classList.add("hidden");
+  attachmentPreviewModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("attachment-preview-open");
+  attachmentPreviewImage?.removeAttribute("src");
+  attachmentPreviewStatus?.classList.remove("is-error");
+  attachmentPreviewItems = [];
+  attachmentPreviewIndex = -1;
+  if (restoreFocus && attachmentPreviewReturnFocus instanceof HTMLElement && document.contains(attachmentPreviewReturnFocus)) {
+    attachmentPreviewReturnFocus.focus({ preventScroll: true });
+  }
+  attachmentPreviewReturnFocus = null;
+}
+
+function navigateAttachmentPreview(delta) {
+  if (!isAttachmentPreviewOpen() || attachmentPreviewItems.length < 2) return;
+  attachmentPreviewIndex = (attachmentPreviewIndex + delta + attachmentPreviewItems.length) % attachmentPreviewItems.length;
+  renderAttachmentPreview();
+}
+
+function createAttachmentThumbnail(attachment, images, imageIndex, { lazy = false } = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "attachment-thumbnail-button";
+  button.setAttribute("aria-label", `预览图片：${attachment.filename || "未命名图片"}`);
+  const image = document.createElement("img");
+  image.className = "attachment-thumbnail-image";
+  image.alt = "";
+  const placeholder = document.createElement("span");
+  placeholder.className = "attachment-thumbnail-placeholder";
+  placeholder.textContent = "图片";
+  button.append(image, placeholder);
+  const loadThumbnail = () => {
+    if (button.dataset.thumbnailStarted === "1") return;
+    button.dataset.thumbnailStarted = "1";
+    attachmentObjectUrl(attachment)
+      .then((url) => {
+        if (!document.contains(button)) return;
+        image.src = url;
+        button.classList.add("is-loaded");
+      })
+      .catch(() => {
+        if (!document.contains(button)) return;
+        placeholder.textContent = "无法预览";
+        button.classList.add("is-error");
+      });
+  };
+  if (lazy) observeMaterialThumbnail(button, loadThumbnail);
+  else loadThumbnail();
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openAttachmentPreview(images, imageIndex, button);
+  });
+  return button;
+}
+
+const pendingAttachmentElements = {
+  event: {
+    input: document.getElementById("eventPendingAttachments"),
+    list: document.getElementById("eventPendingAttachmentList"),
+  },
+  memory: {
+    input: document.getElementById("memoryPendingAttachments"),
+    list: document.getElementById("memoryPendingAttachmentList"),
+  },
+  plan: {
+    input: document.getElementById("planPendingAttachments"),
+    list: document.getElementById("planPendingAttachmentList"),
+  },
+};
+
+function renderPendingContentAttachments(kind) {
+  const elements = pendingAttachmentElements[kind];
+  if (!elements?.list) return;
+  elements.list.replaceChildren();
+  const files = pendingContentAttachments[kind] || [];
+  if (!files.length) {
+    const empty = document.createElement("span");
+    empty.className = "attachment-empty";
+    empty.textContent = "尚未选择附件";
+    elements.list.appendChild(empty);
+    return;
+  }
+
+  files.forEach((file, index) => {
+    const row = document.createElement("div");
+    row.className = "attachment-item pending-attachment-item";
+    if (isImageFile(file)) {
+      const preview = document.createElement("span");
+      preview.className = "pending-attachment-thumbnail";
+      const image = document.createElement("img");
+      image.alt = "";
+      const localUrl = URL.createObjectURL(file);
+      image.addEventListener("load", () => URL.revokeObjectURL(localUrl), { once: true });
+      image.addEventListener("error", () => URL.revokeObjectURL(localUrl), { once: true });
+      image.src = localUrl;
+      preview.appendChild(image);
+      row.appendChild(preview);
+    }
+    const main = document.createElement("div");
+    main.className = "attachment-item-main";
+    const name = document.createElement("span");
+    name.className = "attachment-name";
+    name.textContent = file.name || "未命名附件";
+    const meta = document.createElement("span");
+    meta.className = "attachment-meta";
+    meta.textContent = `${formatAttachmentSize(file.size)} · ${file.type || "文件"}`;
+    main.append(name, meta);
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "attachment-link-button is-danger";
+    removeButton.textContent = "移除";
+    removeButton.addEventListener("click", () => {
+      pendingContentAttachments[kind].splice(index, 1);
+      renderPendingContentAttachments(kind);
+    });
+    row.append(main, removeButton);
+    elements.list.appendChild(row);
+  });
+}
+
+function clearPendingContentAttachments(kind) {
+  pendingContentAttachments[kind] = [];
+  const elements = pendingAttachmentElements[kind];
+  if (elements?.input) elements.input.value = "";
+  renderPendingContentAttachments(kind);
+}
+
+function addPendingContentAttachments(kind, files) {
+  const current = pendingContentAttachments[kind] || [];
+  const known = new Set(current.map((file) => pendingAttachmentSignature(file)));
+  let oversizedCount = 0;
+  Array.from(files || []).forEach((file) => {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      oversizedCount += 1;
+      return;
+    }
+    const signature = pendingAttachmentSignature(file);
+    if (known.has(signature)) return;
+    known.add(signature);
+    current.push(file);
+  });
+  pendingContentAttachments[kind] = current;
+  renderPendingContentAttachments(kind);
+  if (oversizedCount) showToast(`${oversizedCount} 个附件超过 50 MB，未加入待上传列表。`, "error");
+}
+
+async function uploadPendingContentAttachments(kind, contentId) {
+  const queued = [...(pendingContentAttachments[kind] || [])];
+  const failed = [];
+  let uploaded = 0;
+  for (const file of queued) {
+    try {
+      await uploadAttachmentFile(kind, contentId, file);
+      uploaded += 1;
+    } catch (error) {
+      failed.push({ file, error });
+    }
+  }
+  pendingContentAttachments[kind] = failed.map((entry) => entry.file);
+  renderPendingContentAttachments(kind);
+  return { uploaded, failed };
+}
+
+Object.entries(pendingAttachmentElements).forEach(([kind, elements]) => {
+  elements.input?.addEventListener("change", () => {
+    addPendingContentAttachments(kind, elements.input.files);
+    elements.input.value = "";
+  });
+  renderPendingContentAttachments(kind);
+});
+
+async function uploadAttachmentFile(kind, contentId, file) {
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    const error = new Error(`“${file.name}”超过 50 MB，暂不能上传。`);
+    error.code = "ATTACHMENT_TOO_LARGE";
+    throw error;
+  }
+  const formData = new FormData();
+  formData.append("attachment_file", file, file.name);
+  if (Number.isFinite(file.lastModified) && file.lastModified > 0) {
+    formData.append("file_last_modified_ms", String(Math.trunc(file.lastModified)));
+  }
+  const headers = {};
+  if (token()) headers.Authorization = `Bearer ${token()}`;
+  const response = await fetch(
+    `/api/v1/content/${encodeURIComponent(kind)}/${encodeURIComponent(contentId)}/attachments`,
+    { method: "POST", headers, body: formData },
+  );
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : { ok: false, error: { message: "响应为空" } };
+  } catch (_) {
+    payload = { ok: false, error: { message: `响应格式错误：HTTP ${response.status}` } };
+  }
+  if (!response.ok || !payload.ok) {
+    const error = new Error(payload.error?.message || `请求失败：${response.status}`);
+    error.code = payload.error?.code;
+    throw error;
+  }
+  return payload.data;
+}
+
+async function downloadAttachmentFile(attachment) {
+  const blob = await fetchAttachmentBlob(attachment);
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = attachment.filename || "attachment";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+function attachmentEmptyState() {
+  const empty = document.createElement("p");
+  empty.className = "attachment-empty";
+  empty.textContent = "还没有附件。可以添加照片、文档或其他文件。";
+  return empty;
+}
+
+async function refreshAttachmentPanel(panel, kind, item, button) {
+  const contentId = item.id;
+  const list = panel.querySelector(".attachment-list");
+  list.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "attachment-empty";
+  loading.textContent = "正在读取附件…";
+  list.appendChild(loading);
+  try {
+    const attachments = await api(
+      `/api/v1/content/${encodeURIComponent(kind)}/${encodeURIComponent(contentId)}/attachments`,
+      {},
+      true,
+    );
+    button.textContent = `附件 ${attachments.length}`;
+    list.replaceChildren();
+    if (!attachments.length) {
+      list.appendChild(attachmentEmptyState());
+      return;
+    }
+    const imageAttachments = attachments.filter(isImageAttachment);
+    const imageIndexById = new Map(imageAttachments.map((attachment, index) => [attachment.id, index]));
+    attachments.forEach((attachment) => {
+      const row = document.createElement("div");
+      row.className = "attachment-item";
+      if (isImageAttachment(attachment)) {
+        row.classList.add("has-thumbnail");
+        row.appendChild(
+          createAttachmentThumbnail(
+            attachment,
+            imageAttachments,
+            imageIndexById.get(attachment.id) || 0,
+          ),
+        );
+      }
+
+      const main = document.createElement("div");
+      main.className = "attachment-item-main";
+      const name = document.createElement("strong");
+      name.className = "attachment-name";
+      name.textContent = attachment.filename || "未命名附件";
+      const meta = document.createElement("span");
+      meta.className = "attachment-meta";
+      meta.textContent = `${formatAttachmentSize(attachment.size_bytes)} · ${attachment.media_type || "文件"}`;
+      main.append(name, meta);
+      const timelineLabel = attachmentTimelineLabel(attachment);
+      if (timelineLabel) {
+        const timelineMeta = document.createElement("span");
+        timelineMeta.className = "attachment-timeline-meta";
+        timelineMeta.textContent = timelineLabel;
+        main.appendChild(timelineMeta);
+      }
+      if (attachment.timeline_date) {
+        const timelineRow = document.createElement("span");
+        timelineRow.className = "attachment-timeline-date";
+        const timelineButton = document.createElement("button");
+        timelineButton.type = "button";
+        timelineButton.className = "attachment-timeline-date-button";
+        timelineButton.textContent = `时间轴归属 ${attachment.timeline_date}`;
+        timelineButton.title = `${attachmentTimelineSourceLabel(attachment)} · 打开 ${attachment.timeline_date} 的人生资料`;
+        timelineButton.addEventListener("click", () => openPeriodDrawer("day", attachment.timeline_date));
+        timelineRow.appendChild(timelineButton);
+        main.appendChild(timelineRow);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "attachment-item-actions";
+      if (!attachment.timeline_date) {
+        const fallbackButton = document.createElement("button");
+        fallbackButton.type = "button";
+        fallbackButton.className = "attachment-link-button";
+        fallbackButton.textContent = "归入来源/添加时间";
+        fallbackButton.title = "优先归入来源内容的明确日期；否则使用附件添加时间";
+        fallbackButton.addEventListener("click", async () => {
+          const updated = await assignAttachmentTimelineFallback(attachment, fallbackButton);
+          if (updated) await refreshAttachmentPanel(panel, kind, item, button);
+        });
+        actions.appendChild(fallbackButton);
+      }
+      const downloadButton = document.createElement("button");
+      downloadButton.type = "button";
+      downloadButton.className = "attachment-link-button";
+      downloadButton.textContent = "下载";
+      downloadButton.addEventListener("click", async () => {
+        setButtonBusy(downloadButton, true, "下载中…");
+        try {
+          await downloadAttachmentFile(attachment);
+        } catch (error) {
+          showOperationError(error);
+        } finally {
+          setButtonBusy(downloadButton, false);
+        }
+      });
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "attachment-link-button is-danger";
+      deleteButton.textContent = "删除";
+      deleteButton.addEventListener("click", async () => {
+        const confirmed = await askConfirmation({
+          eyebrow: "删除附件",
+          title: `删除“${attachment.filename || "未命名附件"}”吗？`,
+          message: "附件会从本地加密仓库中永久删除；正文内容不会被删除。",
+          confirmLabel: "删除附件",
+          tone: "danger",
+        });
+        if (!confirmed) return;
+        setButtonBusy(deleteButton, true, "删除中…");
+        try {
+          await api(
+            `/api/v1/content/${encodeURIComponent(kind)}/${encodeURIComponent(contentId)}/attachments/${encodeURIComponent(attachment.id)}`,
+            { method: "DELETE" },
+            true,
+          );
+          releaseAttachmentObjectUrl(attachment.id);
+          if (attachmentPreviewItems.some((item) => item.id === attachment.id)) {
+            closeAttachmentPreview({ restoreFocus: false });
+          }
+          showToast("附件已删除", "success");
+          await refreshAttachmentPanel(panel, kind, item, button);
+        } catch (error) {
+          showOperationError(error);
+        } finally {
+          setButtonBusy(deleteButton, false);
+        }
+      });
+      actions.append(downloadButton, deleteButton);
+      row.append(main, actions);
+      list.appendChild(row);
+    });
+  } catch (error) {
+    list.replaceChildren();
+    const failed = document.createElement("p");
+    failed.className = "attachment-empty is-error";
+    failed.textContent = friendlyErrorMessage(error);
+    list.appendChild(failed);
+  }
+}
+
+function createAttachmentPanel(kind, item, button) {
+  const panel = document.createElement("section");
+  panel.className = "attachment-panel hidden";
+  panel.setAttribute("aria-label", `${item.title}的附件`);
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "attachment-panel-toolbar";
+  const heading = document.createElement("strong");
+  heading.textContent = "附件";
+  const uploadLabel = document.createElement("label");
+  uploadLabel.className = "attachment-upload-button";
+  uploadLabel.textContent = "＋ 添加附件";
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.className = "attachment-file-input";
+  uploadLabel.appendChild(input);
+  toolbar.append(heading, uploadLabel);
+
+  const list = document.createElement("div");
+  list.className = "attachment-list";
+  const note = document.createElement("p");
+  note.className = "attachment-storage-note";
+  note.textContent = "单个附件最多 50 MB；文件内容会使用当前仓库主密钥加密后保存在本地。";
+  panel.append(toolbar, list, note);
+
+  input.addEventListener("change", async () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    uploadLabel.classList.add("is-busy");
+    input.disabled = true;
+    try {
+      for (const file of files) {
+        await uploadAttachmentFile(kind, item.id, file);
+      }
+      showToast(files.length > 1 ? `已添加 ${files.length} 个附件` : "附件已添加", "success");
+      await refreshAttachmentPanel(panel, kind, item, button);
+    } catch (error) {
+      showOperationError(error);
+    } finally {
+      input.value = "";
+      input.disabled = false;
+      uploadLabel.classList.remove("is-busy");
+    }
+  });
+  return panel;
+}
+
+closeAttachmentPreviewButton?.addEventListener("click", () => closeAttachmentPreview());
+attachmentPreviewModal?.addEventListener("click", (event) => {
+  if (event.target === attachmentPreviewModal) closeAttachmentPreview();
+});
+attachmentPreviewPrevious?.addEventListener("click", () => navigateAttachmentPreview(-1));
+attachmentPreviewNext?.addEventListener("click", () => navigateAttachmentPreview(1));
+attachmentPreviewStage?.addEventListener("wheel", (event) => {
+  if (!isAttachmentPreviewOpen()) return;
+  event.preventDefault();
+  if (attachmentPreviewItems.length < 2) return;
+  const now = performance.now();
+  if (now - attachmentPreviewLastWheelAt < 320) return;
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!delta) return;
+  attachmentPreviewLastWheelAt = now;
+  navigateAttachmentPreview(delta > 0 ? 1 : -1);
+}, { passive: false });
+attachmentPreviewImage?.addEventListener("mousedown", (event) => {
+  if (event.button === 1) event.preventDefault();
+});
+attachmentPreviewImage?.addEventListener("auxclick", async (event) => {
+  if (event.button !== 1 || !isAttachmentPreviewOpen()) return;
+  event.preventDefault();
+  await toggleAttachmentPreviewFullscreen();
+});
+attachmentPreviewImage?.addEventListener("contextmenu", (event) => {
+  if (!isAttachmentPreviewOpen()) return;
+  event.preventDefault();
+  closeAttachmentPreview();
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!attachmentPreviewModal || document.fullscreenElement === attachmentPreviewModal) return;
+  attachmentPreviewModal.classList.remove("is-fullscreen-zoom");
+});
+downloadAttachmentPreviewButton?.addEventListener("click", async () => {
+  const attachment = attachmentPreviewItems[attachmentPreviewIndex];
+  if (!attachment) return;
+  setButtonBusy(downloadAttachmentPreviewButton, true, "下载中…");
+  try {
+    await downloadAttachmentFile(attachment);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(downloadAttachmentPreviewButton, false);
+  }
+});
+
 function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _allowAction = true) {
   const list = document.getElementById(elementId);
   const config = contentFormConfigurations[kind];
@@ -5271,6 +7259,13 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
       collapseButton.setAttribute("aria-expanded", "true");
       collapseButton.setAttribute("aria-label", `折叠或展开记忆：${item.title}`);
     }
+
+    const attachmentButton = document.createElement("button");
+    attachmentButton.type = "button";
+    attachmentButton.className = "content-attachment-button";
+    attachmentButton.textContent = `附件 ${Number.isInteger(item.attachment_count) ? item.attachment_count : 0}`;
+    attachmentButton.setAttribute("aria-expanded", "false");
+    attachmentButton.setAttribute("aria-label", `查看或添加附件：${item.title}`);
 
     const menuId = `content-menu-${kind}-${item.id}`;
     const moreButton = document.createElement("button");
@@ -5316,9 +7311,21 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
     menu.addEventListener("click", (event) => event.stopPropagation());
 
     if (collapseButton) actions.appendChild(collapseButton);
-    actions.append(moreButton, menu);
+    actions.append(attachmentButton, moreButton, menu);
     header.appendChild(actions);
     article.appendChild(header);
+
+    const attachmentPanel = createAttachmentPanel(kind, item, attachmentButton);
+    attachmentButton.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      closeOpenContentMenu();
+      const opening = attachmentPanel.classList.contains("hidden");
+      attachmentPanel.classList.toggle("hidden", !opening);
+      attachmentButton.setAttribute("aria-expanded", opening ? "true" : "false");
+      if (opening) {
+        await refreshAttachmentPanel(attachmentPanel, kind, item, attachmentButton);
+      }
+    });
 
     let memoryBody = null;
     if (item.content) {
@@ -5347,6 +7354,7 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
     }
 
     appendMemoryTagBadges(article, item.tags || []);
+    article.appendChild(attachmentPanel);
 
     const meta = document.createElement("small");
     const metaParts = [`创建于 ${formatDateTime(item.created_at)}`];
@@ -5362,6 +7370,148 @@ function renderContentList(elementId, items, _emptyText, kind, cardClass = "", _
   updateContentSectionVisibility(kind);
 }
 
+function materialSourceKindLabel(kind) {
+  if (kind === "event") return "事件";
+  if (kind === "memory") return "记忆";
+  if (kind === "plan") return "计划";
+  return "内容";
+}
+
+function ensureMaterialSectionToggle() {
+  if (!materialSectionToggle?.isConnected) {
+    const heading = materialSection?.querySelector(".material-kind-heading");
+    if (!heading) return null;
+    let actions = heading.querySelector(".material-heading-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.className = "material-heading-actions";
+      heading.appendChild(actions);
+    }
+    materialSectionToggle = actions.querySelector("#materialSectionToggle");
+    if (!materialSectionToggle) {
+      materialSectionToggle = document.createElement("button");
+      materialSectionToggle.id = "materialSectionToggle";
+      materialSectionToggle.className = "material-section-toggle hidden";
+      materialSectionToggle.type = "button";
+      materialSectionToggle.setAttribute("aria-expanded", "false");
+      materialSectionToggle.textContent = "展开全部";
+      actions.appendChild(materialSectionToggle);
+    }
+  }
+  if (materialSectionToggle.dataset.collapseBound !== "1") {
+    materialSectionToggle.dataset.collapseBound = "1";
+    materialSectionToggle.addEventListener("click", () => {
+      materialSectionExpanded = !materialSectionExpanded;
+      updateMaterialSectionCollapse();
+    });
+  }
+  return materialSectionToggle;
+}
+
+function updateMaterialSectionCollapse() {
+  if (!materialList) return;
+  const cards = Array.from(materialList.querySelectorAll(".material-item"));
+  const total = Math.max(materialSectionTotal, cards.length);
+  const hasOverflow = total > MATERIAL_SECTION_COLLAPSED_LIMIT;
+  cards.forEach((card, index) => {
+    card.classList.toggle(
+      "hidden",
+      hasOverflow && !materialSectionExpanded && index >= MATERIAL_SECTION_COLLAPSED_LIMIT,
+    );
+  });
+  const toggle = ensureMaterialSectionToggle();
+  if (!toggle) return;
+  toggle.classList.toggle("hidden", !hasOverflow);
+  toggle.hidden = !hasOverflow;
+  toggle.setAttribute("aria-expanded", String(hasOverflow && materialSectionExpanded));
+  toggle.textContent = materialSectionExpanded ? "收起" : `展开全部（${total}）`;
+}
+
+function renderMaterialList(materials = []) {
+  if (!materialSection || !materialList) return;
+  const items = Array.isArray(materials) ? materials : [];
+  materialSectionExpanded = false;
+  materialSectionTotal = items.length;
+  materialSection.classList.toggle("hidden", items.length === 0);
+  if (materialSectionCount) materialSectionCount.textContent = String(items.length);
+  materialList.replaceChildren();
+  if (!items.length) {
+    updateMaterialSectionCollapse();
+    return;
+  }
+
+  const imageMaterials = items.filter(isImageAttachment);
+  const imageIndexById = new Map(imageMaterials.map((attachment, index) => [attachment.id, index]));
+  items.forEach((attachment) => {
+    const card = document.createElement("article");
+    card.className = "material-item";
+    if (isImageAttachment(attachment)) {
+      card.classList.add("has-thumbnail");
+      card.appendChild(
+        createAttachmentThumbnail(
+          attachment,
+          imageMaterials,
+          imageIndexById.get(attachment.id) || 0,
+        ),
+      );
+    }
+
+    const main = document.createElement("div");
+    main.className = "material-item-main";
+    const name = document.createElement("strong");
+    name.className = "material-name";
+    name.textContent = attachment.filename || "未命名资料";
+    const meta = document.createElement("span");
+    meta.className = "material-meta";
+    const timelineLabel = attachmentTimelineLabel(attachment);
+    meta.textContent = [
+      formatAttachmentSize(attachment.size_bytes),
+      attachment.media_type || "文件",
+      timelineLabel,
+    ].filter(Boolean).join(" · ");
+    main.append(name, meta);
+
+    const source = attachment.source_content;
+    if (source?.period_key) {
+      const sourceButton = document.createElement("button");
+      sourceButton.type = "button";
+      sourceButton.className = "material-source-button";
+      sourceButton.textContent = `来自 ${source.period_key} · ${materialSourceKindLabel(source.kind)}：${source.title || "未命名内容"}`;
+      sourceButton.title = "打开它所属的事件、记忆或计划";
+      sourceButton.addEventListener("click", () => openPeriodDrawer(source.time_scope || "day", source.period_key));
+      main.appendChild(sourceButton);
+    } else if (attachment.is_independent) {
+      const independent = document.createElement("span");
+      independent.className = "material-source-independent";
+      independent.textContent = "独立资料";
+      main.appendChild(independent);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "material-item-actions";
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.className = "attachment-link-button";
+    downloadButton.textContent = "下载";
+    downloadButton.addEventListener("click", async () => {
+      setButtonBusy(downloadButton, true, "下载中…");
+      try {
+        await downloadAttachmentFile(attachment);
+      } catch (error) {
+        showOperationError(error);
+      } finally {
+        setButtonBusy(downloadButton, false);
+      }
+    });
+    actions.appendChild(downloadButton);
+    card.append(main, actions);
+    materialList.appendChild(card);
+  });
+  updateMaterialSectionCollapse();
+}
+
+ensureMaterialSectionToggle();
+
 function scopeCopy(scope) {
   if (scope === "year") return { noun: "这一年", eyebrow: "年度详情" };
   if (scope === "month") return { noun: "这个月", eyebrow: "月份详情" };
@@ -5370,6 +7520,11 @@ function scopeCopy(scope) {
 
 function renderPeriodDetail(detail) {
   const copy = scopeCopy(detail.scope);
+  const collapsePeriodKey = `${detail.scope}:${selectedPeriodKey || detail.date || detail.label || ""}`;
+  if (contentSectionCollapsePeriodKey !== collapsePeriodKey) {
+    contentSectionCollapsePeriodKey = collapsePeriodKey;
+    resetContentSectionCollapseState();
+  }
   document.getElementById("dateDrawerEyebrow").textContent = `${detail.time_state_label} · ${copy.eyebrow}`;
   if (detail.scope === "day") {
     document.getElementById("dateDrawerTitle").textContent = `${detail.date} · ${detail.weekday}`;
@@ -5380,13 +7535,18 @@ function renderPeriodDetail(detail) {
   }
 
   renderPeriodNavigator(detail);
+  toggleEventFormButton.textContent = scopedContentCreateLabel("event", detail.scope);
+  toggleMemoryFormButton.textContent = scopedContentCreateLabel("memory", detail.scope);
   renderContentList("eventList", detail.events, `${copy.noun}还没有事件。`, "event");
   renderContentList("memoryList", detail.memories, `${copy.noun}还没有个人记忆。`, "memory", "memory-card");
   renderContentList("planList", detail.plans, `${copy.noun}还没有未来计划。`, "plan", "plan-card", detail.plan_allowed);
+  renderMaterialList(detail.materials || []);
 
   const planUnavailable = !detail.plan_allowed;
   togglePlanFormButton.disabled = planUnavailable;
-  togglePlanFormButton.textContent = planUnavailable ? "计划不可新增" : "＋ 添加计划";
+  togglePlanFormButton.textContent = planUnavailable
+    ? `${periodScopeLabel(detail.scope)}计划不可新增`
+    : scopedContentCreateLabel("plan", detail.scope);
   planAvailability.textContent = detail.scope === "day"
     ? "过去日期不能新增未来计划，但此前保存的计划仍会显示。"
     : "已经结束的年份或月份不能新增未来计划，但此前保存的计划仍会显示。";
@@ -5450,6 +7610,44 @@ function togglePlanForm(forceOpen = null) {
   return toggleContentForm("plan", forceOpen);
 }
 
+materialCenterHomeButton?.addEventListener("click", openMaterialCenterModal);
+materialCenterFullPageButton?.addEventListener("click", openMaterialCenterModal);
+scanMaterialDirectoryButton?.addEventListener("click", () => materialDirectoryInput?.click());
+materialDirectoryInput?.addEventListener("change", async () => {
+  const files = Array.from(materialDirectoryInput.files || []);
+  if (!files.length) return;
+  await startMaterialDirectoryScan(files);
+});
+importMaterialButton?.addEventListener("click", () => materialImportInput?.click());
+materialImportInput?.addEventListener("change", async () => {
+  const files = Array.from(materialImportInput.files || []);
+  materialImportInput.value = "";
+  await importIndependentMaterials(files);
+});
+closeMaterialDirectoryScanButton?.addEventListener("click", () => closeMaterialDirectoryScanModal());
+cancelMaterialDirectoryScanButton?.addEventListener("click", () => closeMaterialDirectoryScanModal());
+materialDirectoryScanModal?.addEventListener("click", (event) => {
+  if (event.target === materialDirectoryScanModal) closeMaterialDirectoryScanModal();
+});
+materialDirectorySelectAll?.addEventListener("change", () => {
+  materialDirectoryScanItems.forEach((item) => {
+    if (materialDirectoryItemSelectable(item)) item.selected = materialDirectorySelectAll.checked;
+  });
+  renderMaterialDirectoryScanList();
+});
+importScannedMaterialsButton?.addEventListener("click", importSelectedScannedMaterials);
+materialCenterTimelineViewButton?.addEventListener("click", () => setMaterialCenterViewMode("timeline"));
+materialCenterListViewButton?.addEventListener("click", () => setMaterialCenterViewMode("list"));
+closeMaterialCenterButton?.addEventListener("click", () => closeMaterialCenterModalNow());
+resetMaterialCenterButton?.addEventListener("click", () => resetMaterialCenterFilters());
+materialCenterModal?.addEventListener("click", (event) => {
+  if (event.target === materialCenterModal) closeMaterialCenterModalNow();
+});
+materialCenterForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runMaterialCenterBrowse();
+});
+
 contentCenterHomeButton?.addEventListener("click", openContentCenterModal);
 contentCenterFullPageButton?.addEventListener("click", openContentCenterModal);
 closeContentCenterButton?.addEventListener("click", () => closeContentCenterModalNow());
@@ -5475,7 +7673,6 @@ contentCenterClearSelectionButton?.addEventListener("click", clearContentCenterB
 contentCenterBulkTagsButton?.addEventListener("click", openContentCenterBatchTagEditor);
 contentCenterCloseBatchTagsButton?.addEventListener("click", () => closeContentCenterBatchTagEditor({ restoreFocus: true }));
 contentCenterApplyBatchTagsButton?.addEventListener("click", applyContentCenterBatchTags);
-contentCenterBatchCreateTagButton?.addEventListener("click", createContentCenterBatchTag);
 contentCenterBatchNewTagName?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -5483,8 +7680,10 @@ contentCenterBatchNewTagName?.addEventListener("keydown", (event) => {
 });
 document.querySelectorAll('input[name="content_center_batch_operation"]').forEach((input) => {
   input.addEventListener("change", () => {
-    const removing = selectedContentCenterBatchOperation() === "remove";
-    contentCenterBatchCreateRow?.classList.toggle("hidden", removing);
+    renderContentCenterBatchTagOptions();
+    if (selectedContentCenterBatchOperation() === "add") {
+      requestAnimationFrame(() => contentCenterBatchNewTagName?.focus());
+    }
   });
 });
 
@@ -5515,7 +7714,6 @@ memorySearchForm?.addEventListener("submit", async (event) => {
 toggleEventFormButton.addEventListener("click", () => toggleEventForm());
 document.getElementById("cancelEventForm").addEventListener("click", () => toggleContentForm("event", false));
 document.getElementById("toggleEventTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("event"));
-document.getElementById("createEventTag")?.addEventListener("click", () => createAndSelectMemoryTag("event"));
 document.getElementById("eventNewTagName")?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -5524,7 +7722,6 @@ document.getElementById("eventNewTagName")?.addEventListener("keydown", (event) 
 toggleMemoryFormButton.addEventListener("click", () => toggleMemoryForm());
 document.getElementById("cancelMemoryForm").addEventListener("click", () => toggleContentForm("memory", false));
 document.getElementById("toggleMemoryTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("drawer"));
-document.getElementById("createMemoryTag")?.addEventListener("click", () => createAndSelectMemoryTag("drawer"));
 document.getElementById("memoryNewTagName")?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -5533,7 +7730,6 @@ document.getElementById("memoryNewTagName")?.addEventListener("keydown", (event)
 togglePlanFormButton.addEventListener("click", () => togglePlanForm());
 document.getElementById("cancelPlanForm").addEventListener("click", () => toggleContentForm("plan", false));
 document.getElementById("togglePlanTagPicker")?.addEventListener("click", () => toggleMemoryTagPicker("plan"));
-document.getElementById("createPlanTag")?.addEventListener("click", () => createAndSelectMemoryTag("plan"));
 document.getElementById("planNewTagName")?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -5547,6 +7743,28 @@ expandDateDrawerButton?.addEventListener("click", toggleDateDrawerExpanded);
 previousContentDateButton?.addEventListener("click", () => navigateContentDate(-1, { source: "button" }));
 nextContentDateButton?.addEventListener("click", () => navigateContentDate(1, { source: "button" }));
 dateDrawerBackdrop.addEventListener("click", requestCloseDateDrawer);
+homeMonthCalendarPickerButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (homeMonthCalendarIsPickerOpen()) closeHomeMonthCalendarPicker();
+  else openHomeMonthCalendarPicker();
+});
+homeMonthCalendarPicker?.addEventListener("click", (event) => event.stopPropagation());
+homeMonthCalendarYear?.addEventListener("change", () => syncHomeMonthCalendarMonthOptions());
+homeMonthCalendarApply?.addEventListener("click", () => {
+  if (!homeMonthCalendarYear?.value || !homeMonthCalendarMonth?.value) return;
+  const monthKey = `${homeMonthCalendarYear.value}-${String(Number(homeMonthCalendarMonth.value)).padStart(2, "0")}`;
+  setHomeMonthCalendarMonth(monthKey);
+});
+homeMonthCalendarToday?.addEventListener("click", () => {
+  if (!currentProgress?.today) return;
+  setHomeMonthCalendarMonth(currentProgress.today.slice(0, 7));
+});
+document.addEventListener("click", (event) => {
+  if (homeMonthCalendarIsPickerOpen() && !event.target.closest(".hero-month-calendar-picker")) {
+    closeHomeMonthCalendarPicker();
+  }
+});
+
 document.addEventListener("click", (event) => {
   if (!openContentMenu) return;
   const actionContainer = openContentMenu.closest(".content-card-actions");
@@ -5556,7 +7774,7 @@ document.addEventListener("keydown", async (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !event.altKey && !event.shiftKey) {
     if (
       !views.home.classList.contains("hidden") && currentProfile &&
-      !isQuickMemoryOpen() && !isContentCenterOpen() && !isMemorySearchOpen() && !isMemoryMapFilterOpen() &&
+      !isQuickMemoryOpen() && !isContentCenterOpen() && !isMaterialCenterOpen() && !isMemorySearchOpen() && !isMemoryMapFilterOpen() && !isAttachmentPreviewOpen() &&
       confirmModal.classList.contains("hidden") &&
       settingsModal.classList.contains("hidden") &&
       resetPinModal.classList.contains("hidden") &&
@@ -5568,11 +7786,30 @@ document.addEventListener("keydown", async (event) => {
       return;
     }
   }
+  if (event.key === "Escape" && homeMonthCalendarIsPickerOpen()) {
+    event.preventDefault();
+    closeHomeMonthCalendarPicker({ restoreFocus: true });
+    return;
+  }
+  if (isAttachmentPreviewOpen() && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault();
+    navigateAttachmentPreview(event.key === "ArrowLeft" ? -1 : 1);
+    return;
+  }
   if (await handleDrawerOpenShortcut(event)) return;
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     if (await handleDrawerKeyboardNavigation(event)) return;
   }
   if (event.key !== "Escape") return;
+  if (isAttachmentPreviewOpen()) {
+    if (isAttachmentPreviewFullscreen() || attachmentPreviewModal?.classList.contains("is-fullscreen-zoom")) {
+      event.preventDefault();
+      await setAttachmentPreviewFullscreen(false);
+      return;
+    }
+    closeAttachmentPreview();
+    return;
+  }
   if (openContentMenu) {
     closeOpenContentMenu({ restoreFocus: true });
     return;
@@ -5595,6 +7832,14 @@ document.addEventListener("keydown", async (event) => {
       return;
     }
     closeContentCenterModalNow();
+    return;
+  }
+  if (isMaterialDirectoryScanOpen()) {
+    closeMaterialDirectoryScanModal();
+    return;
+  }
+  if (isMaterialCenterOpen()) {
+    closeMaterialCenterModalNow();
     return;
   }
   if (isMemoryMapFilterOpen()) {
@@ -5664,10 +7909,28 @@ async function submitScopedContent(kind) {
       body: JSON.stringify(requestBody),
     }, true);
     await syncContentTags(kind, savedItem.id, selectedMemoryTagIds[tagModeForKind(kind)]);
+    const attachmentResult = await uploadPendingContentAttachments(kind, savedItem.id);
     await refreshContentStatuses();
     renderLifeMapView(true);
+
+    if (attachmentResult.failed.length) {
+      formNode.dataset.editId = savedItem.id;
+      formNode.dataset.editRevision = String(savedItem.revision);
+      formNode.classList.add("is-editing");
+      config.toggleButton.textContent = "取消编辑";
+      submit.textContent = "保存修改";
+      const cancelButton = formNode.querySelector('.event-form-actions button[type="button"]');
+      if (cancelButton) cancelButton.textContent = "取消编辑";
+      updateContentSectionVisibility(kind);
+      const firstError = attachmentResult.failed[0]?.error;
+      const detail = firstError?.message ? `：${firstError.message}` : "";
+      showToast(`内容已保存，但有 ${attachmentResult.failed.length} 个附件上传失败，可再次保存重试${detail}`, "error");
+      return;
+    }
+
     resetAllContentForms();
-    showToast(editId ? config.editMessage : config.createMessage, "success");
+    const attachmentMessage = attachmentResult.uploaded ? `，并上传 ${attachmentResult.uploaded} 个附件` : "";
+    showToast(`${editId ? config.editMessage : config.createMessage}${attachmentMessage}`, "success");
     await openPeriodDrawer(selectedScope, selectedPeriodKey);
   } catch (error) {
     showOperationError(error);
