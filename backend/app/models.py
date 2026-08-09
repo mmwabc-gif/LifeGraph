@@ -366,6 +366,48 @@ class ContentBulkTagRequest(BaseModel):
         return cleaned
 
 
+class AttachmentTimelineUpdateRequest(BaseModel):
+    timeline_date: date
+    timeline_time: str | None = Field(default=None, max_length=8)
+
+    @field_validator("timeline_time")
+    @classmethod
+    def clean_timeline_time(cls, value: str | None) -> str | None:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            return None
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?", cleaned):
+            raise ValueError("资料时间必须为 HH:MM 或 HH:MM:SS")
+        return cleaned
+
+
+class MaterialScanSourceCreateRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=2048)
+    include_subdirectories: bool = True
+
+    @field_validator("path")
+    @classmethod
+    def clean_path(cls, value: str) -> str:
+        cleaned = str(value or "").strip().strip('"')
+        if not cleaned:
+            raise ValueError("扫描目录不能为空")
+        return cleaned
+
+
+class MaterialScanSourceUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class MaterialScanJobRequest(BaseModel):
+    source_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("source_id")
+    @classmethod
+    def clean_source_id(cls, value: str | None) -> str | None:
+        cleaned = str(value or "").strip()
+        return cleaned or None
+
+
 class MaterialDuplicateCheckRequest(BaseModel):
     sha256: list[str] = Field(min_length=1, max_length=1000)
 

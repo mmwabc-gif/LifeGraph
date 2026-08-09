@@ -17,6 +17,7 @@ venv/
 .env
 
 # Runtime data and secrets
+github-recovery-codes.txt
 data/*
 !data/.gitkeep
 *.lifevault

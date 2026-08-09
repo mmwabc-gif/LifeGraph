@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.9";
+const frontendBuildVersion = "0.0.10";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -86,12 +86,37 @@ const materialCenterSummary = document.getElementById("materialCenterSummary");
 const materialCenterLimitHint = document.getElementById("materialCenterLimitHint");
 const materialCenterTimelineViewButton = document.getElementById("materialCenterTimelineView");
 const materialCenterListViewButton = document.getElementById("materialCenterListView");
+const materialTimelineBackfillPanel = document.getElementById("materialTimelineBackfillPanel");
+const materialTimelineBackfillStatus = document.getElementById("materialTimelineBackfillStatus");
+const materialTimelineBackfillProgress = document.getElementById("materialTimelineBackfillProgress");
+const materialTimelineBackfillButton = document.getElementById("materialTimelineBackfillButton");
 const importMaterialButton = document.getElementById("importMaterialButton");
 const materialImportInput = document.getElementById("materialImportInput");
 const largeMaterialUploadPanel = document.getElementById("largeMaterialUploadPanel");
 const largeMaterialUploadSummary = document.getElementById("largeMaterialUploadSummary");
 const largeMaterialUploadList = document.getElementById("largeMaterialUploadList");
 const cleanupStaleLargeUploadsButton = document.getElementById("cleanupStaleLargeUploadsButton");
+const reviewMaterialTimeButton = document.getElementById("reviewMaterialTimeButton");
+const materialTimeCorrectionModal = document.getElementById("materialTimeCorrectionModal");
+const closeMaterialTimeCorrectionButton = document.getElementById("closeMaterialTimeCorrection");
+const cancelMaterialTimeCorrectionButton = document.getElementById("cancelMaterialTimeCorrection");
+const materialTimeCorrectionForm = document.getElementById("materialTimeCorrectionForm");
+const materialTimeCorrectionFilename = document.getElementById("materialTimeCorrectionFilename");
+const materialTimeCorrectionCurrent = document.getElementById("materialTimeCorrectionCurrent");
+const materialTimeCorrectionDate = document.getElementById("materialTimeCorrectionDate");
+const materialTimeCorrectionTime = document.getElementById("materialTimeCorrectionTime");
+const manageMaterialScanSourcesButton = document.getElementById("manageMaterialScanSourcesButton");
+const materialAutoScanModal = document.getElementById("materialAutoScanModal");
+const closeMaterialAutoScanButton = document.getElementById("closeMaterialAutoScan");
+const materialScanSourceForm = document.getElementById("materialScanSourceForm");
+const materialScanSourcePath = document.getElementById("materialScanSourcePath");
+const materialScanSourceRecursive = document.getElementById("materialScanSourceRecursive");
+const addMaterialScanSourceButton = document.getElementById("addMaterialScanSource");
+const materialScannerStatus = document.getElementById("materialScannerStatus");
+const startMaterialScannerButton = document.getElementById("startMaterialScanner");
+const pauseMaterialScannerButton = document.getElementById("pauseMaterialScanner");
+const materialScanSourceSummary = document.getElementById("materialScanSourceSummary");
+const materialScanSourceList = document.getElementById("materialScanSourceList");
 const scanMaterialDirectoryButton = document.getElementById("scanMaterialDirectoryButton");
 const materialDirectoryInput = document.getElementById("materialDirectoryInput");
 const materialDirectoryScanModal = document.getElementById("materialDirectoryScanModal");
@@ -109,15 +134,38 @@ let materialCenterReturnFocus = null;
 let materialCenterRequestSequence = 0;
 let materialCenterDrawerResumeState = null;
 let materialCenterViewMode = "timeline";
+let materialCenterTimeStatus = "all";
+let materialTimeCorrectionAttachment = null;
+let materialTimeCorrectionReturnFocus = null;
+let materialTimelineAxisAutoResolve = null;
 let materialCenterLastData = null;
 let materialCenterBrowseParams = null;
 let materialCenterLoadingMore = false;
 let materialCenterLoadObserver = null;
 let materialThumbnailObserver = null;
+let materialTimelineBackfillPollTimer = null;
+let materialTimelineBackfillLastState = null;
+let materialTimelineAxisYear = null;
+let materialTimelineAxisMonth = null;
+let materialTimelineAxisDay = null;
+let materialTimelineYearWindowStart = null;
+let materialTimelineAxisRequestSequence = 0;
+let materialTimelineAxisLastData = null;
+let materialTimelineDayLoadingMore = false;
+const materialTimelineExpandedMinuteGroups = new Set();
+const MATERIAL_TIMELINE_DAY_PAGE_SIZE = 100;
+const MATERIAL_TIMELINE_MINUTE_GROUP_THRESHOLD = 4;
+const MATERIAL_TIMELINE_YEAR_MIN_WIDTH = 72;
+const MATERIAL_TIMELINE_YEAR_MIN_ITEMS = 7;
+const MATERIAL_TIMELINE_YEAR_MAX_ITEMS = 21;
 let materialDirectoryScanSequence = 0;
 let materialDirectoryScanItems = [];
 let materialDirectoryRootName = "";
 let materialDirectoryScanReturnFocus = null;
+let materialAutoScanReturnFocus = null;
+let materialScannerPollTimer = null;
+let materialScannerLastState = "idle";
+let materialScanSources = [];
 const LARGE_UPLOAD_STORAGE_KEY = "lifegraph.large-material-uploads.v1";
 const MAX_LARGE_MATERIAL_BYTES = 2 * 1024 * 1024 * 1024 * 1024;
 const LARGE_UPLOAD_MAX_RETRIES = 3;
@@ -194,10 +242,15 @@ let memoryMapTagMatches = { dates: new Set(), months: new Set(), years: new Set(
 const materialSection = document.getElementById("materialSection");
 const materialSectionCount = document.getElementById("materialSectionCount");
 let materialSectionToggle = document.getElementById("materialSectionToggle");
+const materialSectionLoadMore = document.getElementById("materialSectionLoadMore");
 const materialList = document.getElementById("materialList");
 const MATERIAL_SECTION_COLLAPSED_LIMIT = 6;
+const PERIOD_MATERIAL_PAGE_SIZE = 12;
 let materialSectionExpanded = false;
 let materialSectionTotal = 0;
+let materialSectionItems = [];
+let materialSectionNextOffset = null;
+let materialSectionLoadingMore = false;
 const attachmentPreviewModal = document.getElementById("attachmentPreviewModal");
 const attachmentPreviewStage = attachmentPreviewModal?.querySelector(".attachment-preview-stage");
 const attachmentPreviewTitle = document.getElementById("attachmentPreviewTitle");
@@ -1680,11 +1733,104 @@ function materialCenterCategoryLabel(category) {
   return "其他";
 }
 
+function stopMaterialTimelineBackfillPolling() {
+  if (materialTimelineBackfillPollTimer) {
+    window.clearTimeout(materialTimelineBackfillPollTimer);
+    materialTimelineBackfillPollTimer = null;
+  }
+}
+
+function scheduleMaterialTimelineBackfillPolling() {
+  stopMaterialTimelineBackfillPolling();
+  if (!isMaterialCenterOpen()) return;
+  materialTimelineBackfillPollTimer = window.setTimeout(() => {
+    refreshMaterialTimelineBackfillStatus({ silent: true });
+  }, 1200);
+}
+
+function renderMaterialTimelineBackfillStatus(data) {
+  if (!materialTimelineBackfillPanel || !materialTimelineBackfillStatus || !materialTimelineBackfillButton) return;
+  const total = Number(data?.total || 0);
+  const indexed = Number(data?.indexed || 0);
+  const undated = Number(data?.undated || 0);
+  const pending = Number(data?.pending || 0);
+  const failed = Number(data?.failed_count || 0);
+  const percent = Math.max(0, Math.min(100, Number(data?.progress_percent || 0)));
+  const state = String(data?.state || "idle");
+  const completed = indexed + undated;
+  materialTimelineBackfillLastState = state;
+
+  if (!total || (pending === 0 && state === "completed" && failed === 0)) {
+    materialTimelineBackfillPanel.classList.add("hidden");
+    stopMaterialTimelineBackfillPolling();
+    return;
+  }
+  materialTimelineBackfillPanel.classList.remove("hidden");
+  if (materialTimelineBackfillProgress) {
+    materialTimelineBackfillProgress.value = percent;
+    materialTimelineBackfillProgress.textContent = `${percent.toFixed(1)}%`;
+  }
+
+  const pieces = [`已整理 ${completed}/${total}`];
+  if (undated) pieces.push(`待确认时间 ${undated}`);
+  if (failed) pieces.push(`本轮失败 ${failed}`);
+  if (data?.current_filename) pieces.push(`正在处理：${data.current_filename}`);
+  if (state === "paused") pieces.push("已暂停，可继续");
+  if (state === "cancelled") pieces.push("仓库锁定后已停止，可重新继续");
+  if (state === "error" && data?.last_error) pieces.push(`最近错误：${data.last_error}`);
+  materialTimelineBackfillStatus.textContent = pieces.join(" · ");
+
+  if (state === "running") {
+    materialTimelineBackfillButton.textContent = "暂停整理";
+    materialTimelineBackfillButton.disabled = false;
+    scheduleMaterialTimelineBackfillPolling();
+  } else {
+    materialTimelineBackfillButton.textContent = failed ? "重试未完成项" : (state === "paused" ? "继续整理" : "整理时间索引");
+    materialTimelineBackfillButton.disabled = pending <= 0;
+    stopMaterialTimelineBackfillPolling();
+  }
+}
+
+async function refreshMaterialTimelineBackfillStatus({ silent = false } = {}) {
+  if (!materialTimelineBackfillPanel || !currentProfile) return null;
+  try {
+    const data = await api("/api/v1/materials/timeline-backfill", {}, true);
+    renderMaterialTimelineBackfillStatus(data);
+    return data;
+  } catch (error) {
+    stopMaterialTimelineBackfillPolling();
+    if (!silent) showOperationError(error);
+    return null;
+  }
+}
+
+async function toggleMaterialTimelineBackfill() {
+  if (!materialTimelineBackfillButton) return;
+  const running = materialTimelineBackfillLastState === "running";
+  setButtonBusy(materialTimelineBackfillButton, true, running ? "暂停中…" : "启动中…");
+  let data = null;
+  try {
+    const endpoint = running
+      ? "/api/v1/materials/timeline-backfill/pause"
+      : "/api/v1/materials/timeline-backfill/start";
+    data = await api(endpoint, { method: "POST" }, true);
+    if (running) showToast("资料时间索引整理已暂停", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(materialTimelineBackfillButton, false);
+    if (data) renderMaterialTimelineBackfillStatus(data);
+  }
+}
+
 function closeMaterialCenterModalNow({ restoreFocus = true } = {}) {
   if (isMaterialDirectoryScanOpen()) closeMaterialDirectoryScanModal({ restoreFocus: false });
+  if (isMaterialAutoScanOpen()) closeMaterialAutoScanModal({ restoreFocus: false });
+  if (materialTimeCorrectionModal && !materialTimeCorrectionModal.classList.contains("hidden")) closeMaterialTimeCorrectionModal({ restoreFocus: false });
   if (!isMaterialCenterOpen()) return;
   materialCenterRequestSequence += 1;
   resetMaterialCenterPaging();
+  stopMaterialTimelineBackfillPolling();
   materialThumbnailObserver?.disconnect?.();
   materialCenterDrawerResumeState = null;
   materialCenterModal.classList.add("hidden");
@@ -1732,6 +1878,8 @@ function resetMaterialCenterFilters({ refresh = true } = {}) {
   materialCenterDateFrom.value = "";
   materialCenterDateTo.value = "";
   materialCenterSort.value = "timeline_desc";
+  materialCenterTimeStatus = "all";
+  updateMaterialTimeReviewButton();
   if (refresh) runMaterialCenterBrowse();
 }
 
@@ -1745,8 +1893,13 @@ async function openMaterialCenterModal() {
   materialCenterModal.classList.remove("hidden");
   materialCenterModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("material-center-open");
+  if (materialCenterViewMode === "timeline") resetMaterialTimelineAxisToToday();
   setMaterialCenterViewMode(materialCenterViewMode, { rerender: false });
-  await Promise.all([runMaterialCenterBrowse(), loadLargeUploadMaintenanceStatus()]);
+  await Promise.all([
+    runMaterialCenterBrowse(),
+    loadLargeUploadMaintenanceStatus(),
+    refreshMaterialTimelineBackfillStatus({ silent: true }),
+  ]);
 }
 
 async function openMaterialCenterPeriod(scope, periodKey, trigger = null, target = null) {
@@ -1764,14 +1917,18 @@ function setMaterialCenterViewMode(mode, { rerender = true } = {}) {
   const timelineActive = materialCenterViewMode === "timeline";
   materialCenterTimelineViewButton?.classList.toggle("is-active", timelineActive);
   materialCenterListViewButton?.classList.toggle("is-active", !timelineActive);
-  materialCenterTimelineViewButton?.setAttribute("aria-pressed", String(timelineActive));
-  materialCenterListViewButton?.setAttribute("aria-pressed", String(!timelineActive));
+  materialCenterTimelineViewButton?.setAttribute("aria-selected", String(timelineActive));
+  materialCenterListViewButton?.setAttribute("aria-selected", String(!timelineActive));
   const addedOption = materialCenterSort?.querySelector('option[value="added_desc"]');
   if (addedOption) addedOption.disabled = timelineActive;
   if (timelineActive && materialCenterSort?.value === "added_desc") {
     materialCenterSort.value = "timeline_desc";
   }
-  if (rerender && materialCenterLastData) renderMaterialCenterResults(materialCenterLastData);
+  materialCenterForm?.classList.toggle("hidden", timelineActive);
+  materialCenterForm?.querySelectorAll("input, select, button").forEach((control) => {
+    control.disabled = timelineActive;
+  });
+  if (rerender && isMaterialCenterOpen()) runMaterialCenterBrowse();
 }
 
 function largeUploadTaskFingerprint(fileOrRecord, options = {}) {
@@ -2720,6 +2877,286 @@ async function importIndependentMaterials(files) {
   }
 }
 
+function isMaterialAutoScanOpen() {
+  return Boolean(materialAutoScanModal && !materialAutoScanModal.classList.contains("hidden"));
+}
+
+function stopMaterialScannerPolling() {
+  if (materialScannerPollTimer) {
+    window.clearTimeout(materialScannerPollTimer);
+    materialScannerPollTimer = null;
+  }
+}
+
+function scheduleMaterialScannerPolling() {
+  stopMaterialScannerPolling();
+  if (!isMaterialAutoScanOpen()) return;
+  materialScannerPollTimer = window.setTimeout(() => refreshMaterialScannerStatus({ silent: true }), 1000);
+}
+
+function openMaterialAutoScanModal() {
+  if (!materialAutoScanModal || !currentProfile) return;
+  materialAutoScanReturnFocus = document.activeElement;
+  materialAutoScanModal.classList.remove("hidden");
+  materialAutoScanModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("material-auto-scan-open");
+  Promise.all([
+    refreshMaterialScanSources({ silent: true }),
+    refreshMaterialScannerStatus({ silent: true }),
+  ]).catch(() => {});
+  requestAnimationFrame(() => materialScanSourcePath?.focus());
+}
+
+function closeMaterialAutoScanModal({ restoreFocus = true } = {}) {
+  if (!isMaterialAutoScanOpen()) return;
+  stopMaterialScannerPolling();
+  materialAutoScanModal.classList.add("hidden");
+  materialAutoScanModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("material-auto-scan-open");
+  if (restoreFocus && materialAutoScanReturnFocus instanceof HTMLElement && document.contains(materialAutoScanReturnFocus)) {
+    materialAutoScanReturnFocus.focus();
+  }
+  materialAutoScanReturnFocus = null;
+}
+
+function scanSourceCountText(counts = {}) {
+  const imported = Number(counts.imported || 0);
+  const duplicate = Number(counts.duplicate || 0);
+  const missing = Number(counts.missing || 0);
+  const failed = Number(counts.failed || 0);
+  const pieces = [];
+  if (imported) pieces.push(`已入库 ${imported}`);
+  if (duplicate) pieces.push(`重复 ${duplicate}`);
+  if (missing) pieces.push(`源缺失 ${missing}`);
+  if (failed) pieces.push(`失败 ${failed}`);
+  return pieces.join(" · ") || "尚未扫描";
+}
+
+function renderMaterialScanSources(sources = materialScanSources) {
+  if (!materialScanSourceList) return;
+  materialScanSourceList.innerHTML = "";
+  materialScanSources = Array.isArray(sources) ? sources : [];
+  if (materialScanSourceSummary) {
+    const enabled = materialScanSources.filter((source) => source.enabled).length;
+    materialScanSourceSummary.textContent = materialScanSources.length ? `${materialScanSources.length} 个目录 · 启用 ${enabled}` : "尚未配置";
+  }
+  if (startMaterialScannerButton && !["waiting", "running", "pausing"].includes(materialScannerLastState)) {
+    startMaterialScannerButton.disabled = materialScanSources.length === 0;
+  }
+  if (!materialScanSources.length) {
+    const empty = document.createElement("div");
+    empty.className = "material-scan-source-empty";
+    empty.textContent = "还没有自动扫描目录。添加照片、视频或文档所在的本机文件夹即可。";
+    materialScanSourceList.appendChild(empty);
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  materialScanSources.forEach((source) => {
+    const row = document.createElement("article");
+    row.className = `material-scan-source-row${source.enabled ? "" : " is-disabled"}${source.available === false ? " is-offline" : ""}`;
+
+    const main = document.createElement("div");
+    main.className = "material-scan-source-main";
+    const title = document.createElement("strong");
+    title.textContent = source.label || "扫描目录";
+    const path = document.createElement("span");
+    path.className = "material-scan-source-path-text";
+    path.textContent = source.path || "";
+    path.title = path.textContent;
+    const meta = document.createElement("span");
+    meta.className = "material-scan-source-meta";
+    const availability = source.available === false ? "目录当前不可访问" : (source.include_subdirectories ? "包含子目录" : "仅当前目录");
+    const scanTime = source.last_scan_completed_at ? ` · 最近完成 ${formatDateTime(source.last_scan_completed_at)}` : "";
+    meta.textContent = `${availability} · ${scanSourceCountText(source.file_counts)}${scanTime}`;
+    main.append(title, path, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "material-scan-source-actions";
+    const scan = document.createElement("button");
+    scan.type = "button";
+    scan.className = "ghost-button";
+    scan.textContent = "扫描";
+    scan.disabled = source.available === false;
+    scan.addEventListener("click", () => startMaterialScanner(source.id, scan));
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "ghost-button";
+    toggle.textContent = source.enabled ? "停用" : "启用";
+    toggle.addEventListener("click", () => toggleMaterialScanSource(source, toggle));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button danger-text-button";
+    remove.textContent = "移除";
+    remove.addEventListener("click", () => removeMaterialScanSource(source, remove));
+    actions.append(scan, toggle, remove);
+    row.append(main, actions);
+    fragment.appendChild(row);
+  });
+  materialScanSourceList.appendChild(fragment);
+}
+
+async function refreshMaterialScanSources({ silent = false } = {}) {
+  try {
+    const data = await api("/api/v1/materials/scan-sources", {}, true);
+    renderMaterialScanSources(data || []);
+    return data;
+  } catch (error) {
+    if (!silent) showOperationError(error);
+    return null;
+  }
+}
+
+function renderMaterialScannerStatus(data = {}) {
+  const state = String(data.state || "idle");
+  const previousState = materialScannerLastState;
+  materialScannerLastState = state;
+  if (materialScannerStatus) {
+    if (state === "idle") {
+      materialScannerStatus.textContent = "空闲；解锁后会自动检查已启用目录";
+    } else if (state === "waiting") {
+      materialScannerStatus.textContent = "等待后台自动扫描…";
+    } else if (["running", "pausing"].includes(state)) {
+      const pieces = [
+        `目录 ${Number(data.processed_sources || 0)}/${Number(data.total_sources || 0)}`,
+        `发现 ${Number(data.discovered_files || 0)}`,
+        `新增 ${Number(data.imported_files || 0)}`,
+      ];
+      if (Number(data.skipped_files || 0)) pieces.push(`未变化 ${Number(data.skipped_files)}`);
+      if (Number(data.duplicate_files || 0)) pieces.push(`重复 ${Number(data.duplicate_files)}`);
+      if (Number(data.failed_files || 0)) pieces.push(`失败 ${Number(data.failed_files)}`);
+      if (Number(data.unavailable_sources || 0)) pieces.push(`不可访问目录 ${Number(data.unavailable_sources)}`);
+      if (data.current_file) pieces.push(`正在处理 ${data.current_file}`);
+      materialScannerStatus.textContent = pieces.join(" · ");
+    } else if (state === "completed") {
+      materialScannerStatus.textContent = `扫描完成 · 新增 ${Number(data.imported_files || 0)} · 未变化 ${Number(data.skipped_files || 0)} · 重复 ${Number(data.duplicate_files || 0)}${Number(data.failed_files || 0) ? ` · 失败 ${Number(data.failed_files)}` : ""}`;
+    } else if (state === "paused") {
+      materialScannerStatus.textContent = `已暂停 · 已发现 ${Number(data.discovered_files || 0)} · 已新增 ${Number(data.imported_files || 0)}`;
+    } else if (state === "failed") {
+      materialScannerStatus.textContent = `扫描失败${data.error ? `：${data.error}` : ""}`;
+    } else {
+      materialScannerStatus.textContent = state;
+    }
+  }
+  const running = ["waiting", "running", "pausing"].includes(state);
+  if (startMaterialScannerButton) {
+    startMaterialScannerButton.disabled = running || materialScanSources.length === 0;
+    startMaterialScannerButton.textContent = state === "paused" ? "继续扫描" : "立即扫描全部";
+  }
+  if (pauseMaterialScannerButton) pauseMaterialScannerButton.disabled = !["waiting", "running"].includes(state);
+  if (["waiting", "running", "pausing"].includes(state)) scheduleMaterialScannerPolling();
+  else stopMaterialScannerPolling();
+
+  if (["completed", "paused", "failed"].includes(state) && state !== previousState) {
+    refreshMaterialScanSources({ silent: true });
+    if (state === "completed" && Number(data.imported_files || 0) > 0 && isMaterialCenterOpen()) {
+      runMaterialCenterBrowse();
+      refreshContentStatuses();
+    }
+  }
+}
+
+async function refreshMaterialScannerStatus({ silent = false } = {}) {
+  if (!currentProfile) return null;
+  try {
+    const data = await api("/api/v1/materials/scanner", {}, true);
+    renderMaterialScannerStatus(data || {});
+    return data;
+  } catch (error) {
+    stopMaterialScannerPolling();
+    if (!silent) showOperationError(error);
+    return null;
+  }
+}
+
+async function addMaterialScanSource(event) {
+  event?.preventDefault?.();
+  const path = String(materialScanSourcePath?.value || "").trim();
+  if (!path || !addMaterialScanSourceButton) return;
+  setButtonBusy(addMaterialScanSourceButton, true, "添加中…");
+  try {
+    const source = await api("/api/v1/materials/scan-sources", {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        include_subdirectories: Boolean(materialScanSourceRecursive?.checked),
+      }),
+    }, true);
+    if (materialScanSourcePath) materialScanSourcePath.value = "";
+    await refreshMaterialScanSources({ silent: true });
+    showToast(`已添加扫描源：${source.label || source.path}`, "success");
+    await startMaterialScanner(source.id);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(addMaterialScanSourceButton, false);
+  }
+}
+
+async function toggleMaterialScanSource(source, button) {
+  setButtonBusy(button, true, source.enabled ? "停用中…" : "启用中…");
+  try {
+    await api(`/api/v1/materials/scan-sources/${encodeURIComponent(source.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: !source.enabled }),
+    }, true);
+    await refreshMaterialScanSources({ silent: true });
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function removeMaterialScanSource(source, button) {
+  const confirmed = await askConfirmation({
+    eyebrow: "移除自动扫描源",
+    title: `停止扫描“${source.label || source.path}”吗？`,
+    message: "只会移除这个目录的自动扫描配置；已经进入 LifeGraph 的加密资料副本会完整保留。",
+    confirmLabel: "移除扫描源",
+    tone: "warning",
+  });
+  if (!confirmed) return;
+  setButtonBusy(button, true, "移除中…");
+  try {
+    await api(`/api/v1/materials/scan-sources/${encodeURIComponent(source.id)}`, { method: "DELETE" }, true);
+    await refreshMaterialScanSources({ silent: true });
+    showToast("扫描源已移除，已入库资料保持不变", "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function startMaterialScanner(sourceId = null, button = null) {
+  const targetButton = button || startMaterialScannerButton;
+  if (targetButton) setButtonBusy(targetButton, true, "启动中…");
+  try {
+    const data = await api("/api/v1/materials/scanner/start", {
+      method: "POST",
+      body: JSON.stringify({ source_id: sourceId || null }),
+    }, true);
+    renderMaterialScannerStatus(data || {});
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    if (targetButton) setButtonBusy(targetButton, false);
+  }
+}
+
+async function pauseMaterialScanner() {
+  if (!pauseMaterialScannerButton) return;
+  setButtonBusy(pauseMaterialScannerButton, true, "暂停中…");
+  try {
+    const data = await api("/api/v1/materials/scanner/pause", { method: "POST" }, true);
+    renderMaterialScannerStatus(data || {});
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(pauseMaterialScannerButton, false);
+  }
+}
+
 const MAX_DIRECTORY_SCAN_FILES = 1000;
 const MATERIAL_DIRECTORY_EXCLUDED_NAMES = new Set([
   ".ds_store", "thumbs.db", "desktop.ini", ".stfolder", "@eadir",
@@ -3071,6 +3508,94 @@ async function assignAttachmentTimelineFallback(attachment, button, { refreshMat
   }
 }
 
+function updateMaterialTimeReviewButton() {
+  if (!reviewMaterialTimeButton) return;
+  const active = materialCenterTimeStatus === "review";
+  reviewMaterialTimeButton.classList.toggle("is-active", active);
+  reviewMaterialTimeButton.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+async function openMaterialTimeReviewList() {
+  materialCenterTimeStatus = materialCenterTimeStatus === "review" ? "all" : "review";
+  updateMaterialTimeReviewButton();
+  if (materialCenterTimeStatus === "review") {
+    materialCenterQuery.value = "";
+    materialCenterDateFrom.value = "";
+    materialCenterDateTo.value = "";
+    setMaterialCenterViewMode("list", { rerender: false });
+  }
+  await runMaterialCenterBrowse();
+}
+
+function isMaterialTimeCorrectionOpen() {
+  return Boolean(materialTimeCorrectionModal && !materialTimeCorrectionModal.classList.contains("hidden"));
+}
+
+function closeMaterialTimeCorrectionModal({ restoreFocus = true } = {}) {
+  if (!isMaterialTimeCorrectionOpen()) return;
+  materialTimeCorrectionModal.classList.add("hidden");
+  materialTimeCorrectionModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("material-time-correction-open");
+  materialTimeCorrectionAttachment = null;
+  if (restoreFocus && materialTimeCorrectionReturnFocus instanceof HTMLElement && document.contains(materialTimeCorrectionReturnFocus)) {
+    materialTimeCorrectionReturnFocus.focus({ preventScroll: true });
+  }
+  materialTimeCorrectionReturnFocus = null;
+}
+
+function openMaterialTimeCorrectionModal(attachment, trigger = null) {
+  if (!materialTimeCorrectionModal || !attachment) return;
+  materialTimeCorrectionAttachment = attachment;
+  materialTimeCorrectionReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  materialTimeCorrectionFilename.textContent = attachment.filename || "未命名资料";
+  materialTimeCorrectionCurrent.textContent = attachment.timeline_date
+    ? `当前：${attachmentTimelineLabel(attachment) || attachment.timeline_date} · ${attachmentTimelineSourceLabel(attachment)}`
+    : "当前：时间待确认";
+  materialTimeCorrectionDate.value = String(attachment.timeline_date || currentProgress?.today || "").slice(0, 10);
+  const precision = String(attachment.time_precision || "");
+  const rawTime = String(attachment.timeline_at || "");
+  materialTimeCorrectionTime.value = ["minute", "second"].includes(precision) && rawTime.includes("T")
+    ? rawTime.slice(11, 19)
+    : "";
+  materialTimeCorrectionModal.classList.remove("hidden");
+  materialTimeCorrectionModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("material-time-correction-open");
+  requestAnimationFrame(() => materialTimeCorrectionDate?.focus());
+}
+
+async function saveMaterialTimeCorrection(event) {
+  event.preventDefault();
+  if (!materialTimeCorrectionAttachment || !materialTimeCorrectionForm) return;
+  const submit = materialTimeCorrectionForm.querySelector('button[type="submit"]');
+  if (!materialTimeCorrectionDate.value) {
+    showToast("请选择资料日期", "error");
+    materialTimeCorrectionDate.focus();
+    return;
+  }
+  setButtonBusy(submit, true, "保存中…");
+  try {
+    const updated = await api(
+      `/api/v1/attachments/${encodeURIComponent(materialTimeCorrectionAttachment.id)}/timeline`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          timeline_date: materialTimeCorrectionDate.value,
+          timeline_time: materialTimeCorrectionTime.value || null,
+        }),
+      },
+      true,
+    );
+    Object.assign(materialTimeCorrectionAttachment, updated);
+    closeMaterialTimeCorrectionModal({ restoreFocus: false });
+    showToast(`资料时间已修正为 ${updated.timeline_date}`, "success");
+    await Promise.all([runMaterialCenterBrowse(), refreshContentStatuses()]);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(submit, false);
+  }
+}
+
 function ensureMaterialThumbnailObserver() {
   if (materialThumbnailObserver || typeof IntersectionObserver === "undefined") return materialThumbnailObserver;
   materialThumbnailObserver = new IntersectionObserver((entries, observer) => {
@@ -3236,6 +3761,15 @@ function createMaterialCenterCard(attachment, imageItems, imageIndexById, { time
       { refreshMaterialCenter: true },
     ));
     actions.appendChild(fallbackButton);
+  }
+  if (!timeline) {
+    const correctTimeButton = document.createElement("button");
+    correctTimeButton.type = "button";
+    correctTimeButton.className = "ghost-button material-center-time-correct-button";
+    correctTimeButton.textContent = "修正时间";
+    correctTimeButton.title = "手工确认这份资料在人生时间轴中的日期与具体时间";
+    correctTimeButton.addEventListener("click", () => openMaterialTimeCorrectionModal(attachment, correctTimeButton));
+    actions.appendChild(correctTimeButton);
   }
   if (attachment.is_independent) {
     const deleteButton = document.createElement("button");
@@ -3456,8 +3990,799 @@ function renderMaterialCenterTimeline(items, imageItems, imageIndexById) {
   materialCenterResults.appendChild(timeline);
 }
 
+function materialTimelineLifeYearBounds() {
+  if (currentProgress?.birth_date && currentProgress?.target_date) {
+    const birth = parseIsoDate(currentProgress.birth_date);
+    const target = addUtcDays(parseIsoDate(currentProgress.target_date), -1);
+    return {
+      startYear: birth.getUTCFullYear(),
+      endYear: target.getUTCFullYear(),
+    };
+  }
+  const currentYear = new Date().getFullYear();
+  return { startYear: currentYear - 50, endYear: currentYear + 49 };
+}
+
+function materialTimelineDefaultDate() {
+  if (currentProgress?.today) return String(currentProgress.today).slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
+}
+
+function resetMaterialTimelineDayViewState() {
+  materialTimelineExpandedMinuteGroups.clear();
+  materialTimelineDayLoadingMore = false;
+}
+
+function resetMaterialTimelineAxisToToday() {
+  const { startYear, endYear } = materialTimelineLifeYearBounds();
+  const defaultDate = materialTimelineDefaultDate();
+  const [defaultYear, defaultMonth] = defaultDate.split("-").map(Number);
+  materialTimelineAxisYear = Math.min(endYear, Math.max(startYear, Number.isInteger(defaultYear) ? defaultYear : new Date().getFullYear()));
+  materialTimelineAxisMonth = Number.isInteger(defaultMonth) && defaultMonth >= 1 && defaultMonth <= 12 ? defaultMonth : 1;
+  materialTimelineAxisDay = null;
+  materialTimelineAxisAutoResolve = "year";
+  materialTimelineYearWindowStart = null;
+  resetMaterialTimelineDayViewState();
+}
+
+function initializeMaterialTimelineAxis() {
+  const { startYear, endYear } = materialTimelineLifeYearBounds();
+  const defaultDate = materialTimelineDefaultDate();
+  const [defaultYear, defaultMonth] = defaultDate.split("-").map(Number);
+  if (!Number.isInteger(materialTimelineAxisYear) || materialTimelineAxisYear < startYear || materialTimelineAxisYear > endYear) {
+    materialTimelineAxisYear = Math.min(endYear, Math.max(startYear, defaultYear));
+  }
+  if (!Number.isInteger(materialTimelineAxisMonth) || materialTimelineAxisMonth < 1 || materialTimelineAxisMonth > 12) {
+    materialTimelineAxisMonth = Number.isInteger(defaultMonth) ? defaultMonth : 1;
+  }
+  if (materialTimelineAxisDay !== null && (!Number.isInteger(materialTimelineAxisDay) || materialTimelineAxisDay < 1 || materialTimelineAxisDay > 31)) {
+    materialTimelineAxisDay = null;
+  }
+}
+
+function materialTimelineYearWindowCapacity() {
+  const available = Math.max(420, Number(materialCenterResults?.clientWidth || 0));
+  const usable = Math.max(320, available - 104);
+  let capacity = Math.floor(usable / MATERIAL_TIMELINE_YEAR_MIN_WIDTH);
+  capacity = Math.max(MATERIAL_TIMELINE_YEAR_MIN_ITEMS, Math.min(MATERIAL_TIMELINE_YEAR_MAX_ITEMS, capacity));
+  if (capacity % 2 === 0 && capacity > MATERIAL_TIMELINE_YEAR_MIN_ITEMS) capacity -= 1;
+  return capacity;
+}
+
+function materialTimelineYearWindowForSelection({ recenter = false } = {}) {
+  initializeMaterialTimelineAxis();
+  const { startYear, endYear } = materialTimelineLifeYearBounds();
+  const capacity = Math.min(materialTimelineYearWindowCapacity(), endYear - startYear + 1);
+  const maxStart = Math.max(startYear, endYear - capacity + 1);
+  if (materialTimelineYearWindowStart === null || recenter) {
+    materialTimelineYearWindowStart = materialTimelineAxisYear - Math.floor(capacity / 2);
+  }
+  materialTimelineYearWindowStart = Math.max(startYear, Math.min(maxStart, materialTimelineYearWindowStart));
+  return {
+    startYear: materialTimelineYearWindowStart,
+    endYear: Math.min(endYear, materialTimelineYearWindowStart + capacity - 1),
+    capacity,
+    lifeStartYear: startYear,
+    lifeEndYear: endYear,
+  };
+}
+
+function materialTimelineDensityClass(count, maxCount) {
+  const value = Number(count || 0);
+  if (value <= 0) return "is-empty";
+  if (maxCount <= 0) return "is-low";
+  const ratio = value / maxCount;
+  if (ratio >= 0.66) return "is-high";
+  if (ratio >= 0.25) return "is-medium";
+  return "is-low";
+}
+
+function createMaterialTimelineAxisTick(item, { level, maxCount }) {
+  const button = document.createElement("button");
+  button.type = "button";
+  const totalCount = Number(item.total_count || 0);
+  const hasData = totalCount > 0;
+  button.className = `material-time-axis-tick ${materialTimelineDensityClass(totalCount, maxCount)}`;
+  const value = level === "year" ? Number(item.year) : level === "month" ? Number(item.month) : Number(item.day);
+  const selected = level === "year"
+    ? value === materialTimelineAxisYear
+    : level === "month"
+      ? value === materialTimelineAxisMonth
+      : value === materialTimelineAxisDay;
+  button.classList.toggle("is-selected", selected && hasData);
+  button.dataset.periodKey = String(item.period_key || "");
+  button.disabled = !hasData;
+  button.setAttribute("aria-disabled", String(!hasData));
+  button.title = hasData ? `${item.period_key} · ${totalCount} 份资料` : `${item.period_key} · 暂无资料`;
+
+  const label = document.createElement("span");
+  label.className = "material-time-axis-label";
+  const valueLabel = document.createElement("span");
+  valueLabel.className = "material-time-axis-label-value";
+  valueLabel.textContent = level === "year" ? String(value) : level === "month" ? `${value}月` : String(value);
+  label.appendChild(valueLabel);
+  if (hasData) {
+    const inlineCount = document.createElement("span");
+    inlineCount.className = "material-time-axis-inline-count";
+    inlineCount.textContent = `[${totalCount}]`;
+    label.appendChild(inlineCount);
+  }
+  button.appendChild(label);
+
+  if (hasData) {
+    button.addEventListener("click", () => {
+      resetMaterialTimelineDayViewState();
+      if (level === "year") {
+        materialTimelineAxisYear = value;
+        materialTimelineAxisDay = null;
+        materialTimelineAxisAutoResolve = "year";
+        materialTimelineYearWindowStart = materialTimelineYearWindowForSelection({ recenter: true }).startYear;
+      } else if (level === "month") {
+        materialTimelineAxisMonth = value;
+        materialTimelineAxisDay = null;
+        materialTimelineAxisAutoResolve = "month";
+      } else {
+        materialTimelineAxisDay = value;
+        materialTimelineAxisAutoResolve = null;
+      }
+      runMaterialTimelineAxis();
+    });
+  }
+  return button;
+}
+
+function createMaterialTimelineAxisRow({ level, items, yearWindow = null }) {
+  const row = document.createElement("section");
+  row.className = `material-time-axis-row is-${level}`;
+
+  const name = document.createElement("strong");
+  name.className = "material-time-axis-row-name";
+  name.textContent = level === "year" ? "年" : level === "month" ? "月" : "日";
+  row.appendChild(name);
+
+  const previousSlot = document.createElement("div");
+  previousSlot.className = "material-time-axis-page-slot";
+  if (level === "year" && yearWindow) {
+    const previous = document.createElement("button");
+    previous.type = "button";
+    previous.className = "material-time-axis-page-button is-previous";
+    previous.textContent = "‹";
+    previous.title = "显示更早年份";
+    previous.disabled = yearWindow.startYear <= yearWindow.lifeStartYear;
+    previous.addEventListener("click", () => {
+      const shift = Math.max(1, Math.floor(yearWindow.capacity / 2));
+      materialTimelineYearWindowStart = Math.max(yearWindow.lifeStartYear, yearWindow.startYear - shift);
+      runMaterialTimelineAxis();
+    });
+    previousSlot.appendChild(previous);
+  }
+  row.appendChild(previousSlot);
+
+  const track = document.createElement("div");
+  track.className = "material-time-axis-track";
+  track.style.setProperty("--axis-items", String(Math.max(1, items.length)));
+  const maxCount = Math.max(0, ...items.map((item) => Number(item.total_count || 0)));
+  items.forEach((item) => track.appendChild(createMaterialTimelineAxisTick(item, { level, maxCount })));
+  row.appendChild(track);
+
+  const nextSlot = document.createElement("div");
+  nextSlot.className = "material-time-axis-page-slot";
+  if (level === "year" && yearWindow) {
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "material-time-axis-page-button is-next";
+    next.textContent = "›";
+    next.title = "显示更晚年份";
+    next.disabled = yearWindow.endYear >= yearWindow.lifeEndYear;
+    next.addEventListener("click", () => {
+      const shift = Math.max(1, Math.floor(yearWindow.capacity / 2));
+      const maxStart = Math.max(yearWindow.lifeStartYear, yearWindow.lifeEndYear - yearWindow.capacity + 1);
+      materialTimelineYearWindowStart = Math.min(maxStart, yearWindow.startYear + shift);
+      runMaterialTimelineAxis();
+    });
+    nextSlot.appendChild(next);
+  }
+  row.appendChild(nextSlot);
+  return row;
+}
+
+function materialDayTimelineTimeText(value, precision = "") {
+  const text = String(value || "").trim();
+  const normalizedPrecision = String(precision || "").trim().toLowerCase();
+  const match = text.match(/T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match || ["year", "month", "day", "unknown"].includes(normalizedPrecision)) return "";
+  if (normalizedPrecision === "minute") return `${match[1]}:${match[2]}`;
+  return `${match[1]}:${match[2]}:${match[3] || "00"}`;
+}
+
+function materialDayTimelineCategoryIcon(attachment) {
+  if (isImageAttachment(attachment)) return "图";
+  if (isVideoAttachment(attachment)) return "影";
+  if (attachment?.category === "document") return "文";
+  return "档";
+}
+
+function materialDayTimelineCategoryLabel(attachment) {
+  if (isImageAttachment(attachment)) return "图片";
+  if (isVideoAttachment(attachment)) return "视频";
+  return materialCenterCategoryLabel(attachment?.category || "other");
+}
+
+function createMaterialDayTimelineAction(attachment, allItems, itemIndex) {
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "ghost-button material-day-time-action";
+  if (isImageAttachment(attachment)) {
+    action.textContent = "查看";
+    action.addEventListener("click", () => openAttachmentPreview(allItems, itemIndex, action));
+    return action;
+  }
+  if (isVideoAttachment(attachment)) {
+    action.textContent = "播放";
+    action.addEventListener("click", () => openVideoPlayer(attachment, action));
+    return action;
+  }
+  action.textContent = "下载";
+  action.addEventListener("click", async () => {
+    setButtonBusy(action, true, "准备中…");
+    try {
+      await downloadAttachmentFile(attachment);
+    } catch (error) {
+      showOperationError(error);
+    } finally {
+      setButtonBusy(action, false);
+    }
+  });
+  return action;
+}
+
+function createMaterialDayTimelineEntry(attachment, allItems, itemIndex) {
+  const row = document.createElement("article");
+  row.className = "material-day-time-entry";
+  row.dataset.attachmentId = String(attachment.id || "");
+
+  const point = document.createElement("span");
+  point.className = `material-day-time-point is-${attachment.category || "other"}`;
+  point.setAttribute("aria-hidden", "true");
+
+  const card = document.createElement("div");
+  card.className = "material-day-time-card";
+
+  const top = document.createElement("div");
+  top.className = "material-day-time-card-top";
+  const time = document.createElement("time");
+  time.className = "material-day-time-value";
+  time.textContent = materialDayTimelineTimeText(attachment.timeline_at, attachment.time_precision) || "时间未精确";
+  if (attachment.timeline_at) time.dateTime = String(attachment.timeline_at);
+  const badge = document.createElement("span");
+  badge.className = `material-day-time-kind is-${attachment.category || "other"}`;
+  badge.textContent = materialDayTimelineCategoryLabel(attachment);
+  top.append(time, badge);
+
+  const name = document.createElement("strong");
+  name.className = "material-day-time-filename";
+  name.textContent = attachment.filename || "未命名资料";
+  name.title = name.textContent;
+
+  const meta = document.createElement("div");
+  meta.className = "material-day-time-meta";
+  const metaParts = [formatAttachmentSize(attachment.size_bytes)];
+  if (isVideoAttachment(attachment) && attachment.duration_seconds !== null && attachment.duration_seconds !== undefined) {
+    const duration = formatVideoDuration(attachment.duration_seconds);
+    if (duration) metaParts.push(`时长 ${duration}`);
+  }
+  const endTime = materialDayTimelineTimeText(attachment.timeline_end_at, "second");
+  if (endTime) metaParts.push(`至 ${endTime}`);
+  meta.textContent = metaParts.join(" · ");
+
+  const action = createMaterialDayTimelineAction(attachment, allItems, itemIndex);
+  card.append(top, name, meta, action);
+  row.append(point, card);
+  return row;
+}
+
+function materialDayTimelineBucketMode(minuteItems) {
+  const occupiedMinutes = Array.isArray(minuteItems) ? minuteItems.length : 0;
+  if (occupiedMinutes > 720) return "hour";
+  if (occupiedMinutes > 240) return "ten-minute";
+  return "minute";
+}
+
+function materialDayTimelineBucketKey(timeText, mode) {
+  const match = String(timeText || "").match(/^(\d{2}):(\d{2})/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (mode === "hour") return `${String(hour).padStart(2, "0")}:00`;
+  if (mode === "ten-minute") {
+    const bucketMinute = Math.floor(minute / 10) * 10;
+    return `${String(hour).padStart(2, "0")}:${String(bucketMinute).padStart(2, "0")}`;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function materialDayTimelineBucketLabel(key, mode) {
+  const match = String(key || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return key || "时间段";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (mode === "hour") return `${match[1]}:00–${match[1]}:59`;
+  if (mode === "ten-minute") {
+    const endMinute = Math.min(59, minute + 9);
+    return `${match[1]}:${match[2]}–${match[1]}:${String(endMinute).padStart(2, "0")}`;
+  }
+  return `${match[1]}:${match[2]}`;
+}
+
+function materialDayTimelineMinuteBucketCounts(dayData, mode) {
+  const counts = new Map();
+  const minuteItems = Array.isArray(dayData?.minutes?.items) ? dayData.minutes.items : [];
+  minuteItems.forEach((item) => {
+    const timeText = String(item?.time || String(item?.period_key || "").slice(11, 16));
+    const key = materialDayTimelineBucketKey(timeText, mode);
+    if (!key) return;
+    counts.set(key, Number(counts.get(key) || 0) + Number(item?.total_count || 0));
+  });
+  return counts;
+}
+
+function createMaterialDayTimelineGroupItem({ item, index, allItems }) {
+  const row = document.createElement("div");
+  row.className = "material-day-time-group-item";
+
+  const time = document.createElement("time");
+  time.className = "material-day-time-value";
+  time.textContent = materialDayTimelineTimeText(item.timeline_at, item.time_precision) || "时间未精确";
+  if (item.timeline_at) time.dateTime = String(item.timeline_at);
+
+  const kind = document.createElement("span");
+  kind.className = `material-day-time-kind is-${item.category || "other"}`;
+  kind.textContent = materialDayTimelineCategoryLabel(item);
+
+  const name = document.createElement("strong");
+  name.className = "material-day-time-filename";
+  name.textContent = item.filename || "未命名资料";
+  name.title = name.textContent;
+
+  const meta = document.createElement("span");
+  meta.className = "material-day-time-meta";
+  const metaParts = [formatAttachmentSize(item.size_bytes)];
+  if (isVideoAttachment(item) && item.duration_seconds !== null && item.duration_seconds !== undefined) {
+    const duration = formatVideoDuration(item.duration_seconds);
+    if (duration) metaParts.push(`时长 ${duration}`);
+  }
+  meta.textContent = metaParts.join(" · ");
+
+  row.append(time, kind, name, meta, createMaterialDayTimelineAction(item, allItems, index));
+  return row;
+}
+
+function createMaterialDayTimelineGroup({ key, mode, totalCount, loadedEntries, allItems }) {
+  const row = document.createElement("article");
+  row.className = "material-day-time-group";
+  row.dataset.bucketKey = key;
+
+  const point = document.createElement("span");
+  point.className = "material-day-time-point is-group";
+  point.setAttribute("aria-hidden", "true");
+
+  const card = document.createElement("div");
+  card.className = "material-day-time-group-card";
+
+  const groupId = `${materialTimelineAxisYear}-${String(materialTimelineAxisMonth).padStart(2, "0")}-${String(materialTimelineAxisDay).padStart(2, "0")}T${key}/${mode}`;
+  const expanded = materialTimelineExpandedMinuteGroups.has(groupId);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "material-day-time-group-toggle";
+  toggle.setAttribute("aria-expanded", String(expanded));
+
+  const label = document.createElement("strong");
+  label.textContent = materialDayTimelineBucketLabel(key, mode);
+  const count = document.createElement("span");
+  count.textContent = `${totalCount} 项`;
+  const loaded = document.createElement("span");
+  loaded.className = "material-day-time-group-loaded";
+  loaded.textContent = loadedEntries.length < totalCount
+    ? `已加载 ${loadedEntries.length}/${totalCount}`
+    : "点击展开";
+  toggle.append(label, count, loaded);
+
+  const body = document.createElement("div");
+  body.className = "material-day-time-group-body";
+  body.hidden = !expanded;
+
+  if (loadedEntries.length) {
+    loadedEntries.forEach(({ item, index }) => {
+      body.appendChild(createMaterialDayTimelineGroupItem({ item, index, allItems }));
+    });
+  } else {
+    const pending = document.createElement("p");
+    pending.className = "material-day-time-group-pending";
+    pending.textContent = "该时间段的文件名尚未加载，可使用下方“继续加载”读取下一批轻量资料。";
+    body.appendChild(pending);
+  }
+
+  toggle.addEventListener("click", () => {
+    const nextExpanded = !materialTimelineExpandedMinuteGroups.has(groupId);
+    if (nextExpanded) materialTimelineExpandedMinuteGroups.add(groupId);
+    else materialTimelineExpandedMinuteGroups.delete(groupId);
+    toggle.setAttribute("aria-expanded", String(nextExpanded));
+    body.hidden = !nextExpanded;
+  });
+
+  card.append(toggle, body);
+  row.append(point, card);
+  return row;
+}
+
+function createMaterialDayTimeAxis(dayData, dayCount) {
+  const section = document.createElement("section");
+  section.className = "material-day-time-axis";
+  const selectedDay = Number(materialTimelineAxisDay || 1);
+  const safeDayCount = Math.max(1, Number(dayCount || 1));
+  const axisX = ((selectedDay - 0.5) / safeDayCount) * 100;
+  section.style.setProperty("--day-axis-x", `${Math.max(1.5, Math.min(98.5, axisX))}%`);
+  section.classList.toggle("is-left-facing", selectedDay > safeDayCount / 2);
+
+  const startCap = document.createElement("div");
+  startCap.className = "material-day-time-cap is-start";
+  startCap.textContent = "00:00";
+  section.appendChild(startCap);
+
+  const allItems = Array.isArray(dayData?.page?.items) ? dayData.page.items : [];
+  const preciseItems = [];
+  const impreciseItems = [];
+  allItems.forEach((item, index) => {
+    const timeText = materialDayTimelineTimeText(item.timeline_at, item.time_precision);
+    const target = timeText ? preciseItems : impreciseItems;
+    target.push({ item, index, timeText });
+  });
+
+  if (impreciseItems.length) {
+    const unknown = document.createElement("div");
+    unknown.className = "material-day-time-unknown";
+    const title = document.createElement("strong");
+    title.textContent = `当天时间未精确到时分秒 · ${impreciseItems.length} 项`;
+    const list = document.createElement("div");
+    list.className = "material-day-time-unknown-list";
+    impreciseItems.forEach(({ item, index }) => {
+      const entry = createMaterialDayTimelineEntry(item, allItems, index);
+      entry.classList.add("is-imprecise");
+      list.appendChild(entry);
+    });
+    unknown.append(title, list);
+    section.appendChild(unknown);
+  }
+
+  const minuteItems = Array.isArray(dayData?.minutes?.items) ? dayData.minutes.items : [];
+  const bucketMode = materialDayTimelineBucketMode(minuteItems);
+  const bucketCounts = materialDayTimelineMinuteBucketCounts(dayData, bucketMode);
+  const loadedByBucket = new Map();
+  preciseItems.forEach((entry) => {
+    const key = materialDayTimelineBucketKey(entry.timeText, bucketMode);
+    if (!key) return;
+    if (!loadedByBucket.has(key)) loadedByBucket.set(key, []);
+    loadedByBucket.get(key).push(entry);
+    if (!bucketCounts.has(key)) bucketCounts.set(key, 0);
+    if (Number(bucketCounts.get(key) || 0) < loadedByBucket.get(key).length) {
+      bucketCounts.set(key, loadedByBucket.get(key).length);
+    }
+  });
+
+  const hourCounts = new Map(
+    (Array.isArray(dayData?.hours?.items) ? dayData.hours.items : [])
+      .map((item) => [Number(item.hour), Number(item.total_count || 0)]),
+  );
+  let previousHour = null;
+  [...bucketCounts.keys()].sort().forEach((key) => {
+    const hour = Number(String(key).slice(0, 2));
+    if (Number.isInteger(hour) && hour !== previousHour) {
+      const hourMarker = document.createElement("div");
+      hourMarker.className = "material-day-time-hour-marker";
+      const label = document.createElement("span");
+      label.textContent = `${String(hour).padStart(2, "0")}:00`;
+      const count = Number(hourCounts.get(hour) || 0);
+      if (count) label.title = `该小时共 ${count} 份资料`;
+      hourMarker.appendChild(label);
+      section.appendChild(hourMarker);
+      previousHour = hour;
+    }
+
+    const loadedEntries = loadedByBucket.get(key) || [];
+    const totalCount = Number(bucketCounts.get(key) || loadedEntries.length);
+    const shouldGroup = totalCount >= MATERIAL_TIMELINE_MINUTE_GROUP_THRESHOLD || loadedEntries.length < totalCount;
+    if (shouldGroup) {
+      section.appendChild(createMaterialDayTimelineGroup({
+        key,
+        mode: bucketMode,
+        totalCount,
+        loadedEntries,
+        allItems,
+      }));
+    } else {
+      loadedEntries.forEach(({ item, index }) => {
+        section.appendChild(createMaterialDayTimelineEntry(item, allItems, index));
+      });
+    }
+  });
+
+  if (!allItems.length && !bucketCounts.size) {
+    const empty = document.createElement("div");
+    empty.className = "material-day-time-empty";
+    empty.textContent = "这一天暂无已建立时间索引的资料";
+    section.appendChild(empty);
+  }
+
+  const endCap = document.createElement("div");
+  endCap.className = "material-day-time-cap is-end";
+  endCap.textContent = "24:00";
+  section.appendChild(endCap);
+
+  if (dayData?.page?.has_more) {
+    const more = document.createElement("div");
+    more.className = "material-day-time-more";
+    const status = document.createElement("span");
+    status.textContent = `已加载 ${allItems.length} / ${Number(dayData.page.total || allItems.length)} 项`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button material-day-time-load-more";
+    button.textContent = materialTimelineDayLoadingMore ? "加载中…" : "继续加载";
+    button.disabled = materialTimelineDayLoadingMore;
+    button.addEventListener("click", () => loadMoreMaterialTimelineDay());
+    more.append(status, button);
+    section.appendChild(more);
+  }
+  return section;
+}
+
+function selectMaterialTimelineIsoDate(isoDate) {
+  const match = String(isoDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (![year, month, day].every(Number.isInteger)) return;
+  materialTimelineAxisYear = year;
+  materialTimelineAxisMonth = month;
+  materialTimelineAxisDay = day;
+  materialTimelineAxisAutoResolve = null;
+  resetMaterialTimelineDayViewState();
+  materialTimelineYearWindowStart = null;
+  runMaterialTimelineAxis({ recenterYears: true });
+}
+
+function materialTimelineNeighborLabel(isoDate) {
+  const match = String(isoDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return year === materialTimelineAxisYear ? `${month}月${day}日` : `${year}年${month}月${day}日`;
+}
+
+async function loadMoreMaterialTimelineDay() {
+  if (materialTimelineDayLoadingMore || materialCenterViewMode !== "timeline") return;
+  const state = materialTimelineAxisLastData;
+  const page = state?.dayDetail?.page;
+  const nextOffset = Number(page?.next_offset);
+  if (!page?.has_more || !Number.isInteger(nextOffset)) return;
+
+  const isoDate = `${materialTimelineAxisYear}-${String(materialTimelineAxisMonth).padStart(2, "0")}-${String(materialTimelineAxisDay).padStart(2, "0")}`;
+  const selectionKey = isoDate;
+  materialTimelineDayLoadingMore = true;
+  renderMaterialTimelineAxes(state);
+  try {
+    const nextPage = await api(
+      `/api/v1/materials/timeline/day?date=${encodeURIComponent(isoDate)}&limit=${MATERIAL_TIMELINE_DAY_PAGE_SIZE}&offset=${nextOffset}`,
+      {},
+      true,
+    );
+    const currentKey = `${materialTimelineAxisYear}-${String(materialTimelineAxisMonth).padStart(2, "0")}-${String(materialTimelineAxisDay).padStart(2, "0")}`;
+    if (currentKey !== selectionKey || materialCenterViewMode !== "timeline") return;
+    const existing = Array.isArray(state.dayDetail.page.items) ? state.dayDetail.page.items : [];
+    const incoming = Array.isArray(nextPage?.items) ? nextPage.items : [];
+    const seen = new Set(existing.map((item) => String(item.id)));
+    incoming.forEach((item) => {
+      if (!seen.has(String(item.id))) {
+        existing.push(item);
+        seen.add(String(item.id));
+      }
+    });
+    state.dayDetail.page = {
+      ...state.dayDetail.page,
+      ...nextPage,
+      items: existing,
+    };
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    materialTimelineDayLoadingMore = false;
+    if (materialCenterViewMode === "timeline") renderMaterialTimelineAxes(state);
+  }
+}
+
+function renderMaterialTimelineAxes({ years, months, days, yearWindow, dayDetail = null }) {
+  materialTimelineAxisLastData = { years, months, days, yearWindow, dayDetail };
+  materialCenterResults.replaceChildren();
+  materialCenterResults.classList.add("is-timeline-view", "is-axis-view");
+  materialCenterLimitHint.classList.add("hidden");
+
+  const root = document.createElement("section");
+  root.className = "material-time-axis-view";
+
+  const note = document.createElement("p");
+  note.className = "material-time-axis-note";
+  note.textContent = "年、月、日三条时间轴同时显示；日内资料密集时会自动按分钟、10 分钟或小时聚合，可继续加载并跳转上一/下一有资料日期。";
+  root.appendChild(note);
+
+  const stack = document.createElement("div");
+  stack.className = "material-time-axis-stack";
+  const yearItems = Array.isArray(years?.items) ? years.items : [];
+  const monthItems = Array.isArray(months?.items) ? months.items : [];
+  const dayItems = Array.isArray(days?.items) ? days.items : [];
+  stack.appendChild(createMaterialTimelineAxisRow({ level: "year", items: yearItems, yearWindow }));
+  stack.appendChild(createMaterialTimelineAxisRow({ level: "month", items: monthItems }));
+  stack.appendChild(createMaterialTimelineAxisRow({ level: "day", items: dayItems }));
+  root.appendChild(stack);
+
+  if (Number.isInteger(materialTimelineAxisDay) && dayDetail) {
+    const detailRow = document.createElement("div");
+    detailRow.className = "material-time-axis-detail-row";
+    detailRow.appendChild(document.createElement("span"));
+    detailRow.appendChild(document.createElement("span"));
+    const detailHost = document.createElement("div");
+    detailHost.className = "material-time-axis-detail-host";
+    detailHost.appendChild(createMaterialDayTimeAxis(dayDetail, dayItems.length));
+    detailRow.appendChild(detailHost);
+    detailRow.appendChild(document.createElement("span"));
+    root.appendChild(detailRow);
+  }
+
+  const footer = document.createElement("div");
+  footer.className = "material-time-axis-footer";
+  if (Number.isInteger(materialTimelineAxisDay)) {
+    const selected = dayItems.find((item) => Number(item.day) === materialTimelineAxisDay);
+    const isoDate = `${materialTimelineAxisYear}-${String(materialTimelineAxisMonth).padStart(2, "0")}-${String(materialTimelineAxisDay).padStart(2, "0")}`;
+    const copy = document.createElement("div");
+    copy.className = "material-time-axis-selection";
+    const strong = document.createElement("strong");
+    strong.textContent = `${materialTimelineAxisYear}年${materialTimelineAxisMonth}月${materialTimelineAxisDay}日`;
+    const span = document.createElement("span");
+    const loadedCount = Number(dayDetail?.page?.items?.length || 0);
+    const totalCount = Number(dayDetail?.page?.total ?? selected?.total_count ?? 0);
+    span.textContent = totalCount ? `共 ${totalCount} 份资料 · 当前显示 ${loadedCount}` : "暂无资料";
+    copy.append(strong, span);
+    footer.appendChild(copy);
+
+    const dayNavigation = document.createElement("div");
+    dayNavigation.className = "material-time-axis-day-navigation";
+    const previousDate = dayDetail?.page?.previous_date || null;
+    const nextDate = dayDetail?.page?.next_date || null;
+
+    const previousButton = document.createElement("button");
+    previousButton.type = "button";
+    previousButton.className = "ghost-button material-time-axis-neighbor-button";
+    previousButton.disabled = !previousDate;
+    previousButton.textContent = previousDate ? `← ${materialTimelineNeighborLabel(previousDate)}` : "← 没有更早资料";
+    previousButton.title = previousDate ? "跳到上一有资料日期" : "已经是最早有资料日期";
+    if (previousDate) previousButton.addEventListener("click", () => selectMaterialTimelineIsoDate(previousDate));
+
+    const nextButton = document.createElement("button");
+    nextButton.type = "button";
+    nextButton.className = "ghost-button material-time-axis-neighbor-button";
+    nextButton.disabled = !nextDate;
+    nextButton.textContent = nextDate ? `${materialTimelineNeighborLabel(nextDate)} →` : "没有更晚资料 →";
+    nextButton.title = nextDate ? "跳到下一有资料日期" : "已经是最晚有资料日期";
+    if (nextDate) nextButton.addEventListener("click", () => selectMaterialTimelineIsoDate(nextDate));
+
+    dayNavigation.append(previousButton, nextButton);
+    footer.appendChild(dayNavigation);
+
+    const openList = document.createElement("button");
+    openList.type = "button";
+    openList.className = "ghost-button material-time-axis-open-day";
+    openList.textContent = "在列表中查看当日资料";
+    openList.addEventListener("click", () => {
+      setMaterialCenterViewMode("list", { rerender: false });
+      materialCenterDateFrom.value = isoDate;
+      materialCenterDateTo.value = isoDate;
+      materialCenterSort.value = "timeline_asc";
+      runMaterialCenterBrowse();
+    });
+    footer.appendChild(openList);
+  } else {
+    const hint = document.createElement("span");
+    hint.className = "material-time-axis-hint";
+    hint.textContent = `${materialTimelineAxisYear}年 ${materialTimelineAxisMonth}月 · 选择日期展开日内时间轴`;
+    footer.appendChild(hint);
+  }
+  root.appendChild(footer);
+  materialCenterResults.appendChild(root);
+
+  const selectedDayCount = Number(dayDetail?.page?.total || 0);
+  materialCenterSummary.textContent = Number.isInteger(materialTimelineAxisDay)
+    ? `${materialTimelineAxisYear} 年 ${materialTimelineAxisMonth} 月 ${materialTimelineAxisDay} 日 · ${selectedDayCount} 份资料`
+    : `${materialTimelineAxisYear} 年 ${materialTimelineAxisMonth} 月 · 点击日期查看日内时间`;
+}
+
+function materialTimelineLatestDataValue(items, field) {
+  let latest = null;
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (Number(item?.total_count || 0) <= 0) return;
+    const value = Number(item?.[field]);
+    if (!Number.isInteger(value)) return;
+    if (latest === null || value > latest) latest = value;
+  });
+  return latest;
+}
+
+async function runMaterialTimelineAxis({ recenterYears = false } = {}) {
+  if (!isMaterialCenterOpen() || materialCenterViewMode !== "timeline") return;
+  initializeMaterialTimelineAxis();
+  const requestSequence = ++materialTimelineAxisRequestSequence;
+  const autoResolve = materialTimelineAxisAutoResolve;
+  materialCenterSummary.textContent = "正在读取时间索引……";
+  materialCenterResults.replaceChildren();
+  materialCenterLimitHint.classList.add("hidden");
+  try {
+    const yearWindow = materialTimelineYearWindowForSelection({ recenter: recenterYears });
+    const [years, months] = await Promise.all([
+      api(`/api/v1/materials/timeline/years?start_year=${yearWindow.startYear}&end_year=${yearWindow.endYear}`, {}, true),
+      api(`/api/v1/materials/timeline/months?year=${materialTimelineAxisYear}`, {}, true),
+    ]);
+    if (requestSequence !== materialTimelineAxisRequestSequence || materialCenterViewMode !== "timeline") return;
+
+    const monthItems = Array.isArray(months?.items) ? months.items : [];
+    if (autoResolve === "year") {
+      const latestMonth = materialTimelineLatestDataValue(monthItems, "month");
+      if (latestMonth !== null) materialTimelineAxisMonth = latestMonth;
+    }
+
+    const days = await api(
+      `/api/v1/materials/timeline/days?year=${materialTimelineAxisYear}&month=${materialTimelineAxisMonth}`,
+      {},
+      true,
+    );
+    if (requestSequence !== materialTimelineAxisRequestSequence || materialCenterViewMode !== "timeline") return;
+
+    const dayItems = Array.isArray(days?.items) ? days.items : [];
+    const validDays = dayItems.length;
+    if (autoResolve === "year" || autoResolve === "month") {
+      materialTimelineAxisDay = materialTimelineLatestDataValue(dayItems, "day");
+      materialTimelineAxisAutoResolve = null;
+    } else if (
+      materialTimelineAxisDay !== null &&
+      (!Number.isInteger(materialTimelineAxisDay) || materialTimelineAxisDay < 1 || materialTimelineAxisDay > validDays)
+    ) {
+      materialTimelineAxisDay = null;
+    }
+
+    let dayDetail = null;
+    if (Number.isInteger(materialTimelineAxisDay)) {
+      const isoDate = `${materialTimelineAxisYear}-${String(materialTimelineAxisMonth).padStart(2, "0")}-${String(materialTimelineAxisDay).padStart(2, "0")}`;
+      const [hours, minutes, page] = await Promise.all([
+        api(`/api/v1/materials/timeline/hours?date=${encodeURIComponent(isoDate)}`, {}, true),
+        api(`/api/v1/materials/timeline/minutes?date=${encodeURIComponent(isoDate)}`, {}, true),
+        api(`/api/v1/materials/timeline/day?date=${encodeURIComponent(isoDate)}&limit=${MATERIAL_TIMELINE_DAY_PAGE_SIZE}&offset=0`, {}, true),
+      ]);
+      if (requestSequence !== materialTimelineAxisRequestSequence || materialCenterViewMode !== "timeline") return;
+      dayDetail = { hours, minutes, page };
+    }
+    renderMaterialTimelineAxes({ years, months, days, yearWindow, dayDetail });
+  } catch (error) {
+    if (requestSequence !== materialTimelineAxisRequestSequence) return;
+    showOperationError(error);
+    materialCenterSummary.textContent = "时间轴读取失败，请稍后重试";
+    const empty = document.createElement("div");
+    empty.className = "material-center-empty";
+    empty.textContent = "无法读取资料时间索引。";
+    materialCenterResults.appendChild(empty);
+  }
+}
+
 function renderMaterialCenterList(items, imageItems, imageIndexById) {
-  materialCenterResults.classList.remove("is-timeline-view");
+  materialCenterResults.classList.remove("is-timeline-view", "is-axis-view");
   items.forEach((attachment) => {
     materialCenterResults.appendChild(createMaterialCenterCard(attachment, imageItems, imageIndexById));
   });
@@ -3478,12 +4803,13 @@ function renderMaterialCenterResults(data) {
     `其他 ${counts.other || 0}`,
   ];
   if (counts.undated) summaryParts.push(`未识别日期 ${counts.undated}`);
+  if (counts.review) summaryParts.push(`时间待确认 ${counts.review}`);
   materialCenterSummary.textContent = summaryParts.join(" · ");
   materialCenterLimitHint.textContent = data?.has_more ? "滚动继续加载" : (total ? "已加载全部" : "");
   materialCenterLimitHint.classList.toggle("hidden", !total);
 
   if (!items.length) {
-    materialCenterResults.classList.remove("is-timeline-view");
+    materialCenterResults.classList.remove("is-timeline-view", "is-axis-view");
     const empty = document.createElement("div");
     empty.className = "material-center-empty";
     empty.textContent = "可以清空关键词、选择更多资料类型，或放宽资料日期范围。";
@@ -3543,6 +4869,8 @@ function materialCenterCurrentFiltersInclude(attachment) {
   const category = attachment.category || materialCenterImportedCategory(attachment);
   if (!selectedMaterialCenterCategories().includes(category)) return false;
   const timelineDate = String(attachment.timeline_date || "");
+  const timeConfidence = String(attachment.time_confidence || "").toLowerCase();
+  if (materialCenterTimeStatus === "review" && timelineDate && !["low", "unknown"].includes(timeConfidence)) return false;
   if (materialCenterDateFrom?.value && (!timelineDate || timelineDate < materialCenterDateFrom.value)) return false;
   if (materialCenterDateTo?.value && (!timelineDate || timelineDate > materialCenterDateTo.value)) return false;
   const needle = String(materialCenterQuery?.value || "").trim().toLocaleLowerCase();
@@ -3555,6 +4883,15 @@ function materialCenterCurrentFiltersInclude(attachment) {
 
 function focusMaterialCenterImportedAttachment(attachment) {
   if (!isMaterialCenterOpen() || !attachment?.id) return;
+  if (materialCenterViewMode === "timeline" && attachment.timeline_date) {
+    const [year, month, day] = String(attachment.timeline_date).split("-").map(Number);
+    materialTimelineAxisYear = year;
+    materialTimelineAxisMonth = month;
+    materialTimelineAxisDay = day;
+    materialTimelineYearWindowStart = null;
+    runMaterialTimelineAxis({ recenterYears: true });
+    return;
+  }
   const normalized = {
     ...attachment,
     category: attachment.category || materialCenterImportedCategory(attachment),
@@ -3582,6 +4919,10 @@ function focusMaterialCenterImportedAttachment(attachment) {
 
 async function runMaterialCenterBrowse() {
   if (!materialCenterForm || !isMaterialCenterOpen()) return;
+  if (materialCenterViewMode === "timeline") {
+    await runMaterialTimelineAxis();
+    return;
+  }
   const submit = materialCenterForm.querySelector('button[type="submit"]');
   const categories = selectedMaterialCenterCategories();
   if (!categories.length) {
@@ -3601,6 +4942,7 @@ async function runMaterialCenterBrowse() {
   if (materialCenterDateFrom.value) params.set("date_from", materialCenterDateFrom.value);
   if (materialCenterDateTo.value) params.set("date_to", materialCenterDateTo.value);
   params.set("sort", materialCenterSort.value || "timeline_desc");
+  params.set("time_status", materialCenterTimeStatus);
   params.set("limit", "48");
   params.set("offset", "0");
 
@@ -5550,14 +6892,14 @@ async function bootstrap() {
       showView("unlock");
       return;
     }
-    await loadHome({ enterFullPage: true });
+    await loadHome();
   } catch (error) {
     statusBadge.textContent = "连接失败";
     showToast(error.message);
   }
 }
 
-async function loadHome({ enterFullPage = false } = {}) {
+async function loadHome() {
   try {
     const [profile, progress] = await Promise.all([
       api("/api/v1/profile", {}, true),
@@ -5616,7 +6958,7 @@ async function loadHome({ enterFullPage = false } = {}) {
       if (fullPageLifeOpen) {
         fullPageGridSignature = "";
         drawFullPageLifeGrid(true);
-      } else if (enterFullPage) openFullPageLifeView();
+      }
     });
   } catch (error) {
     if (["SESSION_EXPIRED", "AUTH_REQUIRED", "VAULT_LOCKED"].includes(error.code)) {
@@ -5671,7 +7013,7 @@ if (initForm) {
       if (data.generated_recovery_secret) {
         showRecoverySecret(data.generated_recovery_secret, { context: "initialize" });
       } else {
-        await loadHome({ enterFullPage: true });
+        await loadHome();
       }
     } catch (error) {
       showToast(error.message);
@@ -5697,7 +7039,7 @@ if (unlockForm) {
       setToken(data.token);
       const secretInput = formNode.querySelector('[name="secret"]');
       if (secretInput) secretInput.value = "";
-      await loadHome({ enterFullPage: true });
+      await loadHome();
     } catch (error) {
       showToast(error.message);
     } finally {
@@ -5732,7 +7074,7 @@ document.getElementById("closeRecovery").addEventListener("click", async () => {
   recoveryModal.classList.add("hidden");
   recoveryValue.textContent = "";
   if (recoveryModalContext === "initialize") {
-    await loadHome({ enterFullPage: true });
+    await loadHome();
   } else {
     showToast("新的恢复密钥已生效", "success");
     recoveryCredentialForm?.elements.current_pin?.focus({ preventScroll: true });
@@ -7877,6 +9219,7 @@ function attachmentTimelineLabel(attachment) {
   if (source === "file:last_modified") return `文件修改于 ${time}`;
   if (source === "content:date") return `来源内容日期 ${String(attachment.timeline_date || time).slice(0, 10)}`;
   if (source === "attachment:added") return `附件添加于 ${time}`;
+  if (source === "manual") return `手工确认于 ${time}`;
   return `资料时间 ${time}`;
 }
 
@@ -7888,6 +9231,7 @@ function attachmentTimelineSourceLabel(attachment) {
   if (source === "file:last_modified") return "文件修改时间";
   if (source === "content:date") return "来源内容日期";
   if (source === "attachment:added") return "附件添加时间";
+  if (source === "manual") return "手工确认时间";
   return "资料元数据";
 }
 
@@ -9515,16 +10859,43 @@ function updateMaterialSectionCollapse() {
   toggle.classList.toggle("hidden", !hasOverflow);
   toggle.hidden = !hasOverflow;
   toggle.setAttribute("aria-expanded", String(hasOverflow && materialSectionExpanded));
-  toggle.textContent = materialSectionExpanded ? "收起" : `展开全部（${total}）`;
+  toggle.textContent = materialSectionExpanded
+    ? "收起"
+    : (cards.length < total ? `展开已加载（${cards.length}/${total}）` : `展开全部（${total}）`);
+
+  if (materialSectionLoadMore) {
+    const hasMore = materialSectionNextOffset !== null && materialSectionNextOffset !== undefined;
+    materialSectionLoadMore.classList.toggle("hidden", !hasMore || !materialSectionExpanded);
+    materialSectionLoadMore.hidden = !hasMore || !materialSectionExpanded;
+    materialSectionLoadMore.disabled = materialSectionLoadingMore;
+    materialSectionLoadMore.textContent = materialSectionLoadingMore
+      ? "加载中…"
+      : `继续加载（${cards.length}/${total}）`;
+  }
 }
 
-function renderMaterialList(materials = []) {
+function renderMaterialList(materials = [], options = {}) {
   if (!materialSection || !materialList) return;
-  const items = Array.isArray(materials) ? materials : [];
-  materialSectionExpanded = false;
-  materialSectionTotal = items.length;
-  materialSection.classList.toggle("hidden", items.length === 0);
-  if (materialSectionCount) materialSectionCount.textContent = String(items.length);
+  const incoming = Array.isArray(materials) ? materials : [];
+  const append = Boolean(options.append);
+  if (append) {
+    const known = new Set(materialSectionItems.map((item) => item.id));
+    incoming.forEach((item) => {
+      if (!known.has(item.id)) {
+        materialSectionItems.push(item);
+        known.add(item.id);
+      }
+    });
+  } else {
+    materialSectionItems = [...incoming];
+    materialSectionExpanded = false;
+  }
+  const items = materialSectionItems;
+  materialSectionTotal = Number(options.total ?? materialSectionTotal ?? items.length);
+  if (!append && options.total === undefined) materialSectionTotal = items.length;
+  materialSectionNextOffset = options.nextOffset ?? null;
+  materialSection.classList.toggle("hidden", materialSectionTotal === 0);
+  if (materialSectionCount) materialSectionCount.textContent = String(materialSectionTotal);
   materialList.replaceChildren();
   if (!items.length) {
     updateMaterialSectionCollapse();
@@ -9617,7 +10988,48 @@ function renderMaterialList(materials = []) {
   updateMaterialSectionCollapse();
 }
 
+async function loadMorePeriodMaterials({ silent = false } = {}) {
+  if (materialSectionLoadingMore) return false;
+  if (!selectedScope || !selectedPeriodKey) return false;
+  if (materialSectionNextOffset === null || materialSectionNextOffset === undefined) return false;
+
+  const scope = selectedScope;
+  const periodKey = selectedPeriodKey;
+  const offset = Number(materialSectionNextOffset || 0);
+  const requestSequence = drawerRequestSequence;
+  materialSectionLoadingMore = true;
+  updateMaterialSectionCollapse();
+  try {
+    const page = await api(
+      `/api/v1/periods/${encodeURIComponent(scope)}/${encodeURIComponent(periodKey)}/materials?limit=${PERIOD_MATERIAL_PAGE_SIZE}&offset=${offset}`,
+      {},
+      true,
+    );
+    if (requestSequence !== drawerRequestSequence || selectedScope !== scope || selectedPeriodKey !== periodKey) return false;
+    renderMaterialList(page.items || [], {
+      append: true,
+      total: page.total,
+      nextOffset: page.next_offset,
+    });
+    return true;
+  } catch (error) {
+    if (!silent) showOperationError(error);
+    return false;
+  } finally {
+    materialSectionLoadingMore = false;
+    updateMaterialSectionCollapse();
+  }
+}
+
 ensureMaterialSectionToggle();
+materialSectionLoadMore?.addEventListener("click", () => loadMorePeriodMaterials());
+
+dateDrawerContent?.addEventListener("scroll", () => {
+  if (!materialSectionExpanded || materialSectionLoadingMore) return;
+  if (materialSectionNextOffset === null || materialSectionNextOffset === undefined) return;
+  const remaining = dateDrawerContent.scrollHeight - dateDrawerContent.scrollTop - dateDrawerContent.clientHeight;
+  if (remaining <= 280) loadMorePeriodMaterials({ silent: true });
+}, { passive: true });
 
 function scopeCopy(scope) {
   if (scope === "year") return { noun: "这一年", eyebrow: "年度详情" };
@@ -9647,7 +11059,10 @@ function renderPeriodDetail(detail) {
   renderContentList("eventList", detail.events, `${copy.noun}还没有事件。`, "event");
   renderContentList("memoryList", detail.memories, `${copy.noun}还没有个人记忆。`, "memory", "memory-card");
   renderContentList("planList", detail.plans, `${copy.noun}还没有未来计划。`, "plan", "plan-card", detail.plan_allowed);
-  renderMaterialList(detail.materials || []);
+  renderMaterialList(detail.materials || [], {
+    total: Number(detail.materials_total ?? (detail.materials || []).length),
+    nextOffset: detail.materials_next_offset ?? null,
+  });
 
   const planUnavailable = !detail.plan_allowed;
   togglePlanFormButton.disabled = planUnavailable;
@@ -9719,6 +11134,21 @@ function togglePlanForm(forceOpen = null) {
 
 materialCenterHomeButton?.addEventListener("click", openMaterialCenterModal);
 materialCenterFullPageButton?.addEventListener("click", openMaterialCenterModal);
+reviewMaterialTimeButton?.addEventListener("click", openMaterialTimeReviewList);
+manageMaterialScanSourcesButton?.addEventListener("click", openMaterialAutoScanModal);
+closeMaterialTimeCorrectionButton?.addEventListener("click", () => closeMaterialTimeCorrectionModal());
+cancelMaterialTimeCorrectionButton?.addEventListener("click", () => closeMaterialTimeCorrectionModal());
+materialTimeCorrectionModal?.addEventListener("click", (event) => {
+  if (event.target === materialTimeCorrectionModal) closeMaterialTimeCorrectionModal();
+});
+materialTimeCorrectionForm?.addEventListener("submit", saveMaterialTimeCorrection);
+closeMaterialAutoScanButton?.addEventListener("click", () => closeMaterialAutoScanModal());
+materialAutoScanModal?.addEventListener("click", (event) => {
+  if (event.target === materialAutoScanModal) closeMaterialAutoScanModal();
+});
+materialScanSourceForm?.addEventListener("submit", addMaterialScanSource);
+startMaterialScannerButton?.addEventListener("click", () => startMaterialScanner());
+pauseMaterialScannerButton?.addEventListener("click", pauseMaterialScanner);
 scanMaterialDirectoryButton?.addEventListener("click", () => materialDirectoryInput?.click());
 materialDirectoryInput?.addEventListener("change", async () => {
   const files = Array.from(materialDirectoryInput.files || []);
@@ -9745,6 +11175,7 @@ materialDirectorySelectAll?.addEventListener("change", () => {
 importScannedMaterialsButton?.addEventListener("click", importSelectedScannedMaterials);
 materialCenterTimelineViewButton?.addEventListener("click", () => setMaterialCenterViewMode("timeline"));
 materialCenterListViewButton?.addEventListener("click", () => setMaterialCenterViewMode("list"));
+materialTimelineBackfillButton?.addEventListener("click", toggleMaterialTimelineBackfill);
 closeMaterialCenterButton?.addEventListener("click", () => closeMaterialCenterModalNow());
 resetMaterialCenterButton?.addEventListener("click", () => resetMaterialCenterFilters());
 materialCenterModal?.addEventListener("click", (event) => {

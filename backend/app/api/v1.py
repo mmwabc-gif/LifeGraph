@@ -14,6 +14,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from app.models import (
+    AttachmentTimelineUpdateRequest,
     AutoBackupHistoryClearRequest,
     AutoBackupPolicyUpdateRequest,
     ContentDeleteRequest,
@@ -25,6 +26,9 @@ from app.models import (
     InitializeRequest,
     MemoryCreateRequest,
     MaterialDuplicateCheckRequest,
+    MaterialScanJobRequest,
+    MaterialScanSourceCreateRequest,
+    MaterialScanSourceUpdateRequest,
     LargeMaterialUploadInitRequest,
     LargeMaterialVideoMetadataRequest,
     LargeUploadCleanupRequest,
@@ -203,13 +207,26 @@ def credential_error(exc: CredentialError, code: str = "INVALID_CREDENTIAL") -> 
     )
 
 
-def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
+def period_content(
+    vault: VaultManager,
+    scope: str,
+    period_key: str,
+    *,
+    material_limit: int = 12,
+    material_offset: int = 0,
+) -> dict:
     profile_value = vault.get_profile()
     description = resolve_period(profile_value, scope, period_key)
     events = vault.list_events_for_period(scope, period_key)
     memories = vault.list_memories_for_period(scope, period_key)
     plans = vault.list_plans_for_period(scope, period_key)
-    materials = vault.list_materials_for_period(scope=scope, period_key=period_key)
+    material_page = vault.list_materials_for_period_page(
+        scope=scope,
+        period_key=period_key,
+        limit=material_limit,
+        offset=material_offset,
+    )
+    materials = material_page["items"]
     for kind, items in (("event", events), ("memory", memories), ("plan", plans)):
         content_ids = [item["id"] for item in items]
         tags_by_content = vault.list_content_tags_for_items(
@@ -235,6 +252,9 @@ def period_content(vault: VaultManager, scope: str, period_key: str) -> dict:
             "memories": memories,
             "plans": plans,
             "materials": materials,
+            "materials_total": material_page["total"],
+            "materials_next_offset": material_page["next_offset"],
+            "materials_has_more": material_page["has_more"],
             "children": child_periods(profile_value, description),
         }
     )
@@ -799,9 +819,40 @@ def period_detail(
     scope: Literal["year", "month", "day"],
     period_key: str,
     vault: Annotated[VaultManager, Depends(get_vault)],
+    material_limit: Annotated[int, Query(ge=1, le=100)] = 12,
 ) -> dict:
     try:
-        return envelope(period_content(vault, scope, period_key))
+        return envelope(period_content(vault, scope, period_key, material_limit=material_limit))
+    except DateOutOfLifeRange as exc:
+        raise date_range_error(exc) from exc
+    except ValueError as exc:
+        raise invalid_period_error(exc) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get(
+    "/periods/{scope}/{period_key}/materials",
+    dependencies=[Depends(require_session)],
+)
+def period_materials_page(
+    scope: Literal["year", "month", "day"],
+    period_key: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 12,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict:
+    try:
+        profile_value = vault.get_profile()
+        resolve_period(profile_value, scope, period_key)
+        return envelope(
+            vault.list_materials_for_period_page(
+                scope=scope,
+                period_key=period_key,
+                limit=limit,
+                offset=offset,
+            )
+        )
     except DateOutOfLifeRange as exc:
         raise date_range_error(exc) from exc
     except ValueError as exc:
@@ -899,6 +950,107 @@ async def import_material(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "MATERIAL_IMPORT_FAILED", "message": str(exc)},
         ) from exc
+
+
+@router.get("/materials/scan-sources", dependencies=[Depends(require_session)])
+def list_material_scan_sources(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.list_material_scan_sources())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/materials/scan-sources", dependencies=[Depends(require_session)])
+def create_material_scan_source(
+    payload: MaterialScanSourceCreateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.create_material_scan_source(
+                path=payload.path,
+                include_subdirectories=payload.include_subdirectories,
+            )
+        )
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "SCAN_SOURCE_CREATE_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.put("/materials/scan-sources/{source_id}", dependencies=[Depends(require_session)])
+def update_material_scan_source(
+    source_id: str,
+    payload: MaterialScanSourceUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.set_material_scan_source_enabled(source_id=source_id, enabled=payload.enabled))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "SCAN_SOURCE_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.delete("/materials/scan-sources/{source_id}", dependencies=[Depends(require_session)])
+def delete_material_scan_source(
+    source_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.delete_material_scan_source(source_id=source_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "SCAN_SOURCE_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/scanner", dependencies=[Depends(require_session)])
+def material_scanner_status(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.material_scan_job_status())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/materials/scanner/start", dependencies=[Depends(require_session)])
+def start_material_scanner(
+    payload: MaterialScanJobRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_material_scan_job(source_id=payload.source_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "SCAN_SOURCE_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MATERIAL_SCAN_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/materials/scanner/pause", dependencies=[Depends(require_session)])
+def pause_material_scanner(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.pause_material_scan_job())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
 
 
 @router.get("/materials/large/uploads/maintenance", dependencies=[Depends(require_session)])
@@ -1128,6 +1280,7 @@ def browse_materials(
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
     sort: Annotated[Literal["timeline_desc", "timeline_asc", "added_desc"], Query()] = "timeline_desc",
+    time_status: Annotated[Literal["all", "review"], Query()] = "all",
     limit: Annotated[int, Query(ge=1, le=100)] = 48,
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
 ) -> dict:
@@ -1140,10 +1293,122 @@ def browse_materials(
         return envelope(
             vault.browse_materials(
                 query=q,
-                categories=category or ["image", "document", "other"],
+                categories=category or ["image", "video", "document", "other"],
                 date_from=date_from.isoformat() if date_from else None,
                 date_to=date_to.isoformat() if date_to else None,
                 sort=sort,
+                time_status=time_status,
+                limit=limit,
+                offset=offset,
+            )
+        )
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline-backfill", dependencies=[Depends(require_session)])
+def material_timeline_backfill_status(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.get_attachment_timeline_backfill_status())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/materials/timeline-backfill/start", dependencies=[Depends(require_session)])
+def start_material_timeline_backfill(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_attachment_timeline_backfill())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/materials/timeline-backfill/pause", dependencies=[Depends(require_session)])
+def pause_material_timeline_backfill(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.pause_attachment_timeline_backfill())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/years", dependencies=[Depends(require_session)])
+def material_timeline_years(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    start_year: Annotated[int, Query(ge=1800, le=2200)],
+    end_year: Annotated[int, Query(ge=1800, le=2200)],
+) -> dict:
+    if start_year > end_year:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_TIMELINE_RANGE", "message": "开始年份不能晚于结束年份"},
+        )
+    try:
+        return envelope(vault.material_timeline_years(start_year=start_year, end_year=end_year))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/months", dependencies=[Depends(require_session)])
+def material_timeline_months(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    year: Annotated[int, Query(ge=1800, le=2200)],
+) -> dict:
+    try:
+        return envelope(vault.material_timeline_months(year=year))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/days", dependencies=[Depends(require_session)])
+def material_timeline_days(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    year: Annotated[int, Query(ge=1800, le=2200)],
+    month: Annotated[int, Query(ge=1, le=12)],
+) -> dict:
+    try:
+        return envelope(vault.material_timeline_days(year=year, month=month))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/hours", dependencies=[Depends(require_session)])
+def material_timeline_hours(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    timeline_date: Annotated[date, Query(alias="date")],
+) -> dict:
+    try:
+        return envelope(vault.material_timeline_hours(timeline_date=timeline_date.isoformat()))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/minutes", dependencies=[Depends(require_session)])
+def material_timeline_minutes(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    timeline_date: Annotated[date, Query(alias="date")],
+) -> dict:
+    try:
+        return envelope(vault.material_timeline_minutes(timeline_date=timeline_date.isoformat()))
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.get("/materials/timeline/day", dependencies=[Depends(require_session)])
+def material_timeline_day(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    timeline_date: Annotated[date, Query(alias="date")],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+) -> dict:
+    try:
+        return envelope(
+            vault.material_timeline_day(
+                timeline_date=timeline_date.isoformat(),
                 limit=limit,
                 offset=offset,
             )
@@ -1887,6 +2152,32 @@ def preview_attachment(
         media_type=str(metadata.get("preview_media_type") or "image/jpeg"),
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+@router.put("/attachments/{attachment_id}/timeline", dependencies=[Depends(require_session)])
+def update_attachment_timeline(
+    attachment_id: str,
+    payload: AttachmentTimelineUpdateRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_attachment_timeline(
+                attachment_id=attachment_id,
+                timeline_date=payload.timeline_date.isoformat(),
+                timeline_time=payload.timeline_time,
+            )
+        )
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "ATTACHMENT_TIMELINE_UPDATE_FAILED", "message": str(exc)},
+        ) from exc
 
 
 @router.post("/attachments/{attachment_id}/timeline-fallback", dependencies=[Depends(require_session)])

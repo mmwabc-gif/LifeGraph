@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.9</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.9">
+  <title>人生图谱 · v0.0.10</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.10">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.9</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.10</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.9</span>
+          <span class="build-badge">v0.0.10</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -133,21 +133,21 @@
           <div class="life-percent">
             <strong id="lifePercent">0%</strong>
           </div>
-        </section>
 
-        <section class="metric-grid">
-          <article class="metric-card panel">
-            <strong id="lifeDay">—</strong>
-            <p class="metric-note">步履不停，慢慢走，沿途皆是风景。</p>
-          </article>
-          <article class="metric-card panel">
-            <strong id="yearPercent">—</strong>
-            <p id="yearMetricNote" class="metric-note">途径——，不赶时间，去吹吹风，年度结余——天。</p>
-          </article>
-          <article class="metric-card panel">
-            <strong id="monthPercent">—</strong>
-            <p id="monthMetricNote" class="metric-note">本月小憩，看一看，走走停停，本月还有——天。</p>
-          </article>
+          <section class="metric-grid hero-metrics" aria-label="人生进度">
+            <article class="metric-card hero-metric-item">
+              <strong id="lifeDay">—</strong>
+              <p class="metric-note">步履不停，慢慢走，沿途皆是风景。</p>
+            </article>
+            <article class="metric-card hero-metric-item">
+              <strong id="yearPercent">—</strong>
+              <p id="yearMetricNote" class="metric-note">途径——，不赶时间，去吹吹风，年度结余——天。</p>
+            </article>
+            <article class="metric-card hero-metric-item">
+              <strong id="monthPercent">—</strong>
+              <p id="monthMetricNote" class="metric-note">本月小憩，看一看，走走停停，本月还有——天。</p>
+            </article>
+          </section>
         </section>
       </div>
 
@@ -182,6 +182,7 @@
               <span><i class="memory-border"></i>有记忆</span>
               <span><i class="tag-filter-dot"></i>标签命中</span>
               <span><i class="plan-ring"></i>有计划</span>
+              <span><i class="material-dot"></i>有资料</span>
             </div>
           </div>
         </div>
@@ -214,7 +215,7 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.9</p>
+        <p class="eyebrow">v0.0.10</p>
         <h2>统一内容整理与浏览</h2>
         <p>内容中心支持关键词、标签、类型、日期与排序组合整理事件、记忆和计划。</p>
         <div class="button-row">
@@ -418,7 +419,7 @@
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.9">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.10">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -464,6 +465,9 @@
           </div>
           <p class="section-note compact-section-note material-section-note">按文件自身时间归属到人生时间轴；它仍然保留在原事件、记忆或计划的附件中。</p>
           <div id="materialList" class="material-list"></div>
+          <div class="material-section-load-more-row">
+            <button id="materialSectionLoadMore" class="material-section-toggle material-section-load-more hidden" type="button">继续加载</button>
+          </div>
         </section>
       </div>
 
@@ -837,13 +841,27 @@
             <h2 id="materialCenterTitle">浏览照片、视频、文档与其他资料</h2>
           </div>
           <div class="material-center-header-actions">
-            <button id="scanMaterialDirectoryButton" class="ghost-button material-directory-scan-button" type="button">扫描目录</button>
+            <button id="reviewMaterialTimeButton" class="ghost-button material-time-review-button" type="button">时间待确认</button>
+            <button id="manageMaterialScanSourcesButton" class="ghost-button material-auto-scan-button" type="button">自动扫描</button>
+            <button id="scanMaterialDirectoryButton" class="ghost-button material-directory-scan-button" type="button">手动扫描目录</button>
             <input id="materialDirectoryInput" class="hidden" type="file" multiple webkitdirectory directory>
             <button id="importMaterialButton" class="ghost-button material-import-button" type="button">＋ 导入资料</button>
             <input id="materialImportInput" class="hidden" type="file" multiple>
             <button id="closeMaterialCenter" class="icon-button" type="button" aria-label="关闭资料中心">×</button>
           </div>
         </header>
+        <nav class="material-center-mode-tabs" role="tablist" aria-label="资料中心显示模式">
+          <button id="materialCenterTimelineView" class="material-center-mode-tab is-active" type="button" role="tab" aria-selected="true">时间轴</button>
+          <button id="materialCenterListView" class="material-center-mode-tab" type="button" role="tab" aria-selected="false">列表</button>
+        </nav>
+        <section id="materialTimelineBackfillPanel" class="material-timeline-backfill-panel hidden" aria-live="polite">
+          <div class="material-timeline-backfill-copy">
+            <strong>资料时间索引</strong>
+            <span id="materialTimelineBackfillStatus">正在检查旧资料索引状态……</span>
+          </div>
+          <progress id="materialTimelineBackfillProgress" max="100" value="0">0%</progress>
+          <button id="materialTimelineBackfillButton" class="ghost-button" type="button">整理时间索引</button>
+        </section>
         <section id="largeMaterialUploadPanel" class="large-material-upload-panel hidden" aria-live="polite">
           <div class="large-material-upload-panel-heading">
             <strong>大文件分块上传</strong>
@@ -887,10 +905,6 @@
         <section class="material-center-results-section" aria-live="polite">
           <div class="material-center-results-heading">
             <strong id="materialCenterSummary">正在准备资料中心……</strong>
-            <div class="material-center-view-switch" role="group" aria-label="资料显示方式">
-              <button id="materialCenterTimelineView" class="material-center-view-button is-active" type="button" aria-pressed="true">时间轴</button>
-              <button id="materialCenterListView" class="material-center-view-button" type="button" aria-pressed="false">列表</button>
-            </div>
             <span id="materialCenterLimitHint" class="hidden">滚动继续加载</span>
           </div>
           <div id="materialCenterResults" class="material-center-results"></div>
@@ -924,6 +938,75 @@
           <button id="cancelMaterialDirectoryScan" class="ghost-button" type="button">取消</button>
           <button id="importScannedMaterials" class="primary-button" type="button" disabled>导入选中 0</button>
         </footer>
+      </div>
+    </div>
+
+
+    <div id="materialAutoScanModal" class="modal material-auto-scan-modal hidden" role="dialog" aria-modal="true" aria-labelledby="materialAutoScanTitle" aria-hidden="true">
+      <div class="modal-card material-auto-scan-card">
+        <header class="material-auto-scan-header">
+          <div>
+            <p class="eyebrow">自动资料收集</p>
+            <h2 id="materialAutoScanTitle">本机扫描源</h2>
+          </div>
+          <button id="closeMaterialAutoScan" class="icon-button" type="button" aria-label="关闭自动扫描设置">×</button>
+        </header>
+        <p class="material-auto-scan-note">
+          LifeGraph 后端直接读取你指定的本机目录；解锁后自动执行一次增量扫描。没有变化的文件会直接跳过，大文件按现有分块方式加密入库。移除扫描源或删除源文件都不会删除已经进入 LifeGraph 的资料副本。
+        </p>
+        <form id="materialScanSourceForm" class="material-scan-source-form">
+          <label class="material-scan-source-path">
+            <span>本机目录</span>
+            <input id="materialScanSourcePath" maxlength="2048" autocomplete="off" placeholder="例如 D:\Photos 或 D:\Documents" required>
+          </label>
+          <label class="material-scan-source-recursive"><input id="materialScanSourceRecursive" type="checkbox" checked> 包含子目录</label>
+          <button id="addMaterialScanSource" class="primary-button" type="submit">添加扫描源</button>
+        </form>
+        <section class="material-scanner-status-panel" aria-live="polite">
+          <div>
+            <strong>扫描任务</strong>
+            <span id="materialScannerStatus">正在读取状态……</span>
+          </div>
+          <div class="material-scanner-status-actions">
+            <button id="startMaterialScanner" class="ghost-button" type="button">立即扫描全部</button>
+            <button id="pauseMaterialScanner" class="ghost-button" type="button" disabled>暂停</button>
+          </div>
+        </section>
+        <div class="material-scan-source-heading">
+          <strong>已配置目录</strong>
+          <span id="materialScanSourceSummary"></span>
+        </div>
+        <div id="materialScanSourceList" class="material-scan-source-list"></div>
+      </div>
+    </div>
+
+
+    <div id="materialTimeCorrectionModal" class="modal material-time-correction-modal hidden" role="dialog" aria-modal="true" aria-labelledby="materialTimeCorrectionTitle" aria-hidden="true">
+      <div class="modal-card material-time-correction-card">
+        <header class="material-time-correction-header">
+          <div>
+            <p class="eyebrow">资料时间修正</p>
+            <h2 id="materialTimeCorrectionTitle">确认资料发生时间</h2>
+          </div>
+          <button id="closeMaterialTimeCorrection" class="icon-button" type="button" aria-label="关闭资料时间修正">×</button>
+        </header>
+        <p id="materialTimeCorrectionFilename" class="material-time-correction-filename"></p>
+        <p id="materialTimeCorrectionCurrent" class="material-time-correction-current"></p>
+        <form id="materialTimeCorrectionForm" class="material-time-correction-form">
+          <label>
+            <span>日期</span>
+            <input id="materialTimeCorrectionDate" type="date" required>
+          </label>
+          <label>
+            <span>具体时间（可留空）</span>
+            <input id="materialTimeCorrectionTime" type="time" step="1">
+          </label>
+          <p class="form-note full-width">只知道日期时请留空具体时间；LifeGraph 会按“日期精度”保存，不会把它展示成真实的 00:00。</p>
+          <div class="material-time-correction-actions full-width">
+            <button id="cancelMaterialTimeCorrection" class="ghost-button" type="button">取消</button>
+            <button class="primary-button" type="submit">保存时间</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -1200,7 +1283,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/static/tinymce/tinymce.min.js"></script>
-  <script src="/assets/calendar_meta.js?v=0.0.9"></script>
-  <script src="/assets/app.js?v=0.0.9"></script>
+  <script src="/assets/calendar_meta.js?v=0.0.10"></script>
+  <script src="/assets/app.js?v=0.0.10"></script>
 </body>
 </html>

@@ -9,10 +9,12 @@ import shutil
 import threading
 import uuid
 import zipfile
+from calendar import monthrange
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.security.crypto import (
     CryptoError,
@@ -35,6 +37,20 @@ from app.services.attachments import (
 from app.services.large_files import LargeFileConflict, LargeFileError, LargeUploadManager
 from app.services.media_previews import MediaPreviewError, MediaPreviewStore
 from app.services.media_inventory import build_media_inventory, inspect_chunked_asset, verify_original_media_library
+from app.services.material_scanner import (
+    MaterialScanError,
+    compute_large_quick_fingerprint,
+    filename_time_metadata,
+    guessed_media_type,
+    is_path_within,
+    iter_source_files,
+    material_category,
+    normalized_source_path,
+    preferred_scanned_timeline,
+    probe_video_path,
+    relative_path_hash,
+    stat_file_identity,
+)
 from app.services.media_backup import (
     MediaBackupError,
     inspect_media_backup_target,
@@ -120,7 +136,7 @@ class VaultManager:
         self,
         data_dir: Path,
         session_ttl_seconds: int = 1800,
-        app_version: str = "0.0.9",
+        app_version: str = "0.0.10",
     ) -> None:
         self.data_dir = data_dir
         self.metadata_path = data_dir / "vault.json"
@@ -135,6 +151,10 @@ class VaultManager:
         self.audio_compat = AudioCompatibilityManager(data_dir / "audio_compat")
         self._audio_jobs: dict[str, dict[str, Any]] = {}
         self._audio_jobs_mutex = threading.RLock()
+        self._timeline_backfill_job: dict[str, Any] | None = None
+        self._timeline_backfill_job_mutex = threading.RLock()
+        self._material_scan_job: dict[str, Any] | None = None
+        self._material_scan_job_mutex = threading.RLock()
         self.media_backup_config_path = data_dir / ".media-backup-target.lgcfg"
         self._media_backup_job: dict[str, Any] | None = None
         self._media_backup_job_mutex = threading.RLock()
@@ -287,7 +307,14 @@ class VaultManager:
                 raise VaultError(str(exc)) from exc
 
             self._master_key = master_key
-            return self.sessions.create()
+            session = self.sessions.create()
+        # Auto scan is intentionally delayed and background-only so unlock/login
+        # remains as fast as v0.0.9 even when scan sources contain many files.
+        try:
+            self.start_material_scan_job(automatic=True, delay_seconds=2.0)
+        except VaultError:
+            pass
+        return session
 
     def _clear_media_chunk_cache(self) -> None:
         with self._media_chunk_cache_mutex:
@@ -345,6 +372,16 @@ class VaultManager:
             yield plaintext[left:right]
 
     def lock(self) -> None:
+        with self._timeline_backfill_job_mutex:
+            if self._timeline_backfill_job:
+                cancel_event = self._timeline_backfill_job.get("cancel_event")
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
+        with self._material_scan_job_mutex:
+            if self._material_scan_job:
+                cancel_event = self._material_scan_job.get("cancel_event")
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
         with self._media_backup_job_mutex:
             if self._media_backup_job:
                 cancel_event = self._media_backup_job.get("cancel_event")
@@ -3091,6 +3128,450 @@ class VaultManager:
         compact = {key: values for key, values in matches.items() if values}
         return {"matches": compact, "matched_hashes": len(compact)}
 
+    @staticmethod
+    def _scan_source_public(value: dict[str, Any]) -> dict[str, Any]:
+        result = dict(value)
+        raw_path = str(result.get("path") or "")
+        if raw_path:
+            path = Path(raw_path)
+            result["label"] = str(result.get("label") or path.name or raw_path)
+            try:
+                result["available"] = path.is_dir()
+            except OSError:
+                result["available"] = False
+        else:
+            result["available"] = False
+        return result
+
+    def list_material_scan_sources(self) -> list[dict[str, Any]]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        values = self.database.list_material_scan_sources(master_key, profile_id=profile["id"])
+        return [self._scan_source_public(value) for value in values]
+
+    def create_material_scan_source(
+        self, *, path: str, include_subdirectories: bool = True
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        try:
+            resolved = normalized_source_path(path)
+        except MaterialScanError as exc:
+            raise VaultError(str(exc)) from exc
+        if is_path_within(resolved, self.data_dir):
+            raise VaultError("不能把 LifeGraph 自身的数据目录设置为扫描源")
+        existing = self.database.list_material_scan_sources(master_key, profile_id=profile["id"])
+        normalized = os.path.normcase(str(resolved))
+        for value in existing:
+            try:
+                existing_path = os.path.normcase(str(normalized_source_path(str(value.get("path") or ""))))
+            except MaterialScanError:
+                existing_path = os.path.normcase(str(value.get("path") or ""))
+            if existing_path == normalized:
+                raise VaultError("该扫描目录已经存在")
+        source_id = str(uuid.uuid4())
+        now = datetime.now(dt_timezone.utc).isoformat()
+        value = self.database.create_material_scan_source(
+            master_key,
+            source_id=source_id,
+            profile_id=profile["id"],
+            config={
+                "path": str(resolved),
+                "label": resolved.name or str(resolved),
+                "include_subdirectories": bool(include_subdirectories),
+            },
+            timestamp=now,
+        )
+        return self._scan_source_public(value)
+
+    def set_material_scan_source_enabled(self, *, source_id: str, enabled: bool) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        now = datetime.now(dt_timezone.utc).isoformat()
+        try:
+            self.database.set_material_scan_source_enabled(
+                profile_id=profile["id"], source_id=source_id, enabled=enabled, timestamp=now
+            )
+            value = self.database.get_material_scan_source(
+                master_key, profile_id=profile["id"], source_id=source_id
+            )
+        except DatabaseContentNotFound as exc:
+            raise ContentNotFound(str(exc)) from exc
+        return self._scan_source_public(value)
+
+    def delete_material_scan_source(self, *, source_id: str) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        try:
+            self.database.delete_material_scan_source(profile_id=profile["id"], source_id=source_id)
+        except DatabaseContentNotFound as exc:
+            raise ContentNotFound(str(exc)) from exc
+        return {"id": source_id, "deleted": True, "materials_preserved": True}
+
+    def _material_scan_public_job(self) -> dict[str, Any] | None:
+        with self._material_scan_job_mutex:
+            job = self._material_scan_job
+            if not job:
+                return None
+            return {
+                key: value
+                for key, value in job.items()
+                if key not in {"thread", "cancel_event"}
+            }
+
+    def material_scan_job_status(self) -> dict[str, Any]:
+        self.require_master_key()
+        return self._material_scan_public_job() or {"state": "idle"}
+
+    def pause_material_scan_job(self) -> dict[str, Any]:
+        self.require_master_key()
+        with self._material_scan_job_mutex:
+            job = self._material_scan_job
+            if not job or job.get("state") not in {"waiting", "running"}:
+                return self._material_scan_public_job() or {"state": "idle"}
+            cancel_event = job.get("cancel_event")
+            if isinstance(cancel_event, threading.Event):
+                cancel_event.set()
+            job["state"] = "pausing"
+        return self._material_scan_public_job() or {"state": "pausing"}
+
+    def _apply_scanned_timeline_override(
+        self,
+        *,
+        attachment_id: str,
+        media_timeline: dict[str, Any] | None,
+        filename_timeline: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        value = self.database.get_attachment(
+            master_key, profile_id=profile["id"], attachment_id=attachment_id
+        )
+        override = preferred_scanned_timeline(
+            value,
+            media_timeline=media_timeline,
+            filename_timeline=filename_timeline,
+        )
+        if not override:
+            return value
+        metadata = self._attachment_metadata_payload(value)
+        metadata.update(override)
+        now = datetime.now(dt_timezone.utc).isoformat()
+        return self.database.update_attachment_metadata(
+            master_key,
+            profile_id=profile["id"],
+            attachment_id=attachment_id,
+            metadata=metadata,
+            timestamp=now,
+        )
+
+    def _import_scanned_path(
+        self,
+        *,
+        path: Path,
+        relative_path: str,
+        source: dict[str, Any],
+        stat_result: os.stat_result,
+        cancel_event: threading.Event,
+    ) -> tuple[str, str | None]:
+        """Import one local source file using the same encrypted stores as manual import.
+
+        Returns ``(state, attachment_id)`` where state is imported or duplicate.
+        Large files are streamed chunk-by-chunk directly from disk and never pass
+        through the browser or materialize in memory.
+        """
+        size_bytes = int(stat_result.st_size)
+        modified_ms = max(0, int(stat_result.st_mtime_ns // 1_000_000))
+        media_type = guessed_media_type(path)
+        category = material_category(path, media_type)
+        profile = self.get_profile()
+        timezone_name = str(profile.get("timezone") or "UTC")
+        video_metadata: dict[str, Any] = {}
+        media_timeline: dict[str, Any] = {}
+        if category == "video":
+            video_metadata, media_timeline = probe_video_path(path)
+        name_timeline = filename_time_metadata(path.name, timezone_name)
+
+        if size_bytes <= MAX_ATTACHMENT_BYTES:
+            try:
+                content = path.read_bytes()
+            except OSError as exc:
+                raise VaultError(f"读取扫描资料失败：{exc}") from exc
+            if cancel_event.is_set():
+                raise InterruptedError
+            digest = hashlib.sha256(content).hexdigest()
+            duplicate_info = self.find_material_duplicates([digest])
+            matches = duplicate_info.get("matches", {}).get(digest, [])
+            if matches:
+                return "duplicate", str(matches[0].get("id") or "") or None
+            value = self.import_material(
+                filename=path.name,
+                media_type=media_type,
+                content=content,
+                file_last_modified_ms=modified_ms,
+                source_relative_path=relative_path,
+                source_directory_name=str(source.get("label") or path.parent.name),
+                reject_duplicate=False,
+                video_metadata=video_metadata,
+            )
+            attachment_id = str(value.get("id") or "")
+            if attachment_id:
+                self._apply_scanned_timeline_override(
+                    attachment_id=attachment_id,
+                    media_timeline=media_timeline,
+                    filename_timeline=name_timeline,
+                )
+            return "imported", attachment_id or None
+
+        quick = compute_large_quick_fingerprint(path, size_bytes)
+        candidates = self.find_large_material_duplicate_candidates(
+            filename=path.name,
+            size_bytes=size_bytes,
+            file_last_modified_ms=modified_ms,
+            quick_fingerprint=quick,
+        )
+        if candidates:
+            return "duplicate", str(candidates[0].get("id") or "") or None
+
+        master_key = self.require_master_key()
+        try:
+            session = self.large_uploads.create_session(
+                master_key,
+                filename=path.name,
+                media_type=media_type,
+                size_bytes=size_bytes,
+                file_last_modified_ms=modified_ms,
+                source_relative_path=relative_path,
+                source_directory_name=str(source.get("label") or path.parent.name),
+                quick_fingerprint=quick,
+                reject_duplicate=True,
+            )
+            session_id = str(session["session_id"])
+            if video_metadata:
+                self.large_uploads.update_video_metadata(master_key, session_id, self._normalize_video_metadata(media_type, video_metadata))
+            chunk_size = int(session["chunk_size"])
+            with path.open("rb") as stream:
+                index = 0
+                while True:
+                    if cancel_event.is_set():
+                        self.large_uploads.cancel(session_id)
+                        raise InterruptedError
+                    chunk = stream.read(chunk_size)
+                    if not chunk:
+                        break
+                    self.large_uploads.put_chunk(master_key, session_id, index, chunk)
+                    index += 1
+            value = self.finalize_large_material_upload(session_id=session_id)
+        except LargeFileConflict as exc:
+            raise MaterialDuplicate(str(exc)) from exc
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+        attachment_id = str(value.get("id") or "")
+        if attachment_id:
+            self._apply_scanned_timeline_override(
+                attachment_id=attachment_id,
+                media_timeline=media_timeline,
+                filename_timeline=name_timeline,
+            )
+        return "imported", attachment_id or None
+
+    def start_material_scan_job(
+        self,
+        *,
+        source_id: str | None = None,
+        automatic: bool = False,
+        delay_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        sources = self.database.list_material_scan_sources(master_key, profile_id=profile["id"])
+        if source_id:
+            sources = [source for source in sources if source.get("id") == source_id]
+            if not sources:
+                raise ContentNotFound("扫描源不存在")
+        else:
+            sources = [source for source in sources if bool(source.get("enabled"))]
+        if not sources:
+            return {"state": "idle", "reason": "no_enabled_sources"}
+
+        with self._material_scan_job_mutex:
+            if self._material_scan_job and self._material_scan_job.get("state") in {"waiting", "running", "pausing"}:
+                return self._material_scan_public_job() or {"state": "running"}
+            cancel_event = threading.Event()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            self._material_scan_job = {
+                "state": "waiting" if delay_seconds > 0 else "running",
+                "automatic": bool(automatic),
+                "started_at": now,
+                "finished_at": None,
+                "total_sources": len(sources),
+                "processed_sources": 0,
+                "discovered_files": 0,
+                "imported_files": 0,
+                "duplicate_files": 0,
+                "skipped_files": 0,
+                "failed_files": 0,
+                "missing_files": 0,
+                "unavailable_sources": 0,
+                "current_source": "",
+                "current_file": "",
+                "error": "",
+                "cancel_event": cancel_event,
+            }
+
+            def update_job(**values: Any) -> None:
+                with self._material_scan_job_mutex:
+                    if self._material_scan_job is not None:
+                        self._material_scan_job.update(values)
+
+            def bump(key: str, amount: int = 1) -> None:
+                with self._material_scan_job_mutex:
+                    if self._material_scan_job is not None:
+                        self._material_scan_job[key] = int(self._material_scan_job.get(key) or 0) + int(amount)
+
+            def worker() -> None:
+                if delay_seconds > 0 and cancel_event.wait(delay_seconds):
+                    update_job(state="paused", finished_at=datetime.now(dt_timezone.utc).isoformat())
+                    return
+                update_job(state="running")
+                try:
+                    for source in sources:
+                        if cancel_event.is_set():
+                            break
+                        # Re-check enabled state at execution time for automatic jobs.
+                        if automatic and not bool(source.get("enabled")):
+                            continue
+                        try:
+                            source_path = normalized_source_path(str(source.get("path") or ""))
+                        except MaterialScanError:
+                            bump("unavailable_sources")
+                            bump("processed_sources")
+                            update_job(
+                                current_source=str(source.get("label") or "扫描目录"),
+                                current_file="目录当前不可访问，已跳过",
+                            )
+                            continue
+                        scan_token = str(uuid.uuid4())
+                        started = datetime.now(dt_timezone.utc).isoformat()
+                        self.database.mark_material_scan_source_started(
+                            profile_id=profile["id"], source_id=str(source["id"]), timestamp=started
+                        )
+                        update_job(current_source=str(source.get("label") or source_path.name), current_file="")
+                        for path, relative, stat_result in iter_source_files(
+                            source_path,
+                            include_subdirectories=bool(source.get("include_subdirectories", True)),
+                            excluded_roots=(self.data_dir,),
+                        ):
+                            if cancel_event.is_set():
+                                break
+                            bump("discovered_files")
+                            update_job(current_file=relative)
+                            path_hash = relative_path_hash(relative)
+                            identity = stat_file_identity(stat_result)
+                            size_bytes = int(stat_result.st_size)
+                            mtime_ns = max(0, int(stat_result.st_mtime_ns))
+                            existing = self.database.get_material_scan_file(source_id=str(source["id"]), path_hash=path_hash)
+                            moved_from = None
+                            if existing is None and identity:
+                                moved = self.database.find_material_scan_file_by_identity(source_id=str(source["id"]), file_identity=identity)
+                                if moved is not None:
+                                    existing = moved
+                                    moved_from = str(moved.get("path_hash") or "") or None
+                            unchanged = bool(
+                                existing
+                                and int(existing.get("size_bytes") or -1) == size_bytes
+                                and int(existing.get("mtime_ns") or -1) == mtime_ns
+                                and existing.get("state") in {"imported", "duplicate"}
+                                and (existing.get("attachment_id") or existing.get("state") == "duplicate")
+                            )
+                            timestamp = datetime.now(dt_timezone.utc).isoformat()
+                            if unchanged:
+                                self.database.upsert_material_scan_file(
+                                    source_id=str(source["id"]), path_hash=path_hash,
+                                    file_identity=identity, size_bytes=size_bytes, mtime_ns=mtime_ns,
+                                    attachment_id=existing.get("attachment_id"), state=str(existing.get("state")),
+                                    scan_token=scan_token, timestamp=timestamp,
+                                    previous_path_hash=moved_from,
+                                )
+                                bump("skipped_files")
+                                continue
+                            old_attachment_id = str(existing.get("attachment_id") or "") if existing else ""
+                            old_state = str(existing.get("state") or "") if existing else ""
+                            try:
+                                state, attachment_id = self._import_scanned_path(
+                                    path=path,
+                                    relative_path=relative,
+                                    source=source,
+                                    stat_result=stat_result,
+                                    cancel_event=cancel_event,
+                                )
+                            except InterruptedError:
+                                break
+                            except MaterialDuplicate:
+                                state, attachment_id = "duplicate", old_attachment_id or None
+                            except Exception as exc:
+                                self.database.upsert_material_scan_file(
+                                    source_id=str(source["id"]), path_hash=path_hash,
+                                    file_identity=identity, size_bytes=size_bytes, mtime_ns=mtime_ns,
+                                    attachment_id=old_attachment_id or None, state="failed",
+                                    scan_token=scan_token, timestamp=timestamp,
+                                    error_code=exc.__class__.__name__[:80], previous_path_hash=moved_from,
+                                )
+                                bump("failed_files")
+                                continue
+                            imported_at = timestamp if state == "imported" else None
+                            same_content_as_existing = bool(
+                                state == "duplicate" and old_attachment_id and attachment_id == old_attachment_id
+                            )
+                            if same_content_as_existing:
+                                state = "imported"
+                                imported_at = existing.get("imported_at") if existing else timestamp
+                            self.database.upsert_material_scan_file(
+                                source_id=str(source["id"]), path_hash=path_hash,
+                                file_identity=identity, size_bytes=size_bytes, mtime_ns=mtime_ns,
+                                attachment_id=attachment_id, state=state,
+                                scan_token=scan_token, timestamp=timestamp,
+                                imported_at=imported_at, previous_path_hash=moved_from,
+                            )
+                            if old_state == "imported" and old_attachment_id and attachment_id and old_attachment_id != attachment_id:
+                                try:
+                                    self.delete_independent_material(attachment_id=old_attachment_id)
+                                except VaultError:
+                                    pass
+                            if same_content_as_existing:
+                                bump("skipped_files")
+                            elif state == "imported":
+                                bump("imported_files")
+                            else:
+                                bump("duplicate_files")
+                        if cancel_event.is_set():
+                            break
+                        completed = datetime.now(dt_timezone.utc).isoformat()
+                        missing = self.database.mark_unseen_material_scan_files_missing(
+                            source_id=str(source["id"]), scan_token=scan_token, timestamp=completed
+                        )
+                        bump("missing_files", missing)
+                        self.database.mark_material_scan_source_completed(
+                            profile_id=profile["id"], source_id=str(source["id"]), timestamp=completed
+                        )
+                        bump("processed_sources")
+                    finished = datetime.now(dt_timezone.utc).isoformat()
+                    if cancel_event.is_set():
+                        update_job(state="paused", finished_at=finished, current_file="")
+                    else:
+                        update_job(state="completed", finished_at=finished, current_file="")
+                except Exception as exc:
+                    update_job(
+                        state="paused" if cancel_event.is_set() else "failed",
+                        error=str(exc),
+                        finished_at=datetime.now(dt_timezone.utc).isoformat(),
+                    )
+
+            thread = threading.Thread(target=worker, name="lifegraph-material-scan", daemon=True)
+            self._material_scan_job["thread"] = thread
+            thread.start()
+        return self._material_scan_public_job() or {"state": "running"}
+
     def list_attachment_counts_for_items(
         self, *, kind: str, content_ids: list[str]
     ) -> dict[str, int]:
@@ -3269,6 +3750,328 @@ class VaultManager:
             )
             return self._public_attachment(updated)
 
+    def update_attachment_timeline(
+        self,
+        *,
+        attachment_id: str,
+        timeline_date: str,
+        timeline_time: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply an explicit user correction to one attachment's life-timeline time."""
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+
+            try:
+                selected_date = date.fromisoformat(str(timeline_date))
+            except ValueError as exc:
+                raise VaultError("资料日期格式无效") from exc
+
+            timezone_name = str(profile.get("timezone") or "UTC")
+            try:
+                timezone_value = ZoneInfo(timezone_name)
+            except ZoneInfoNotFoundError:
+                timezone_value = dt_timezone.utc
+
+            normalized_time = str(timeline_time or "").strip() or None
+            precision = "day"
+            if normalized_time:
+                try:
+                    parts = [int(part) for part in normalized_time.split(":")]
+                    hour, minute = parts[:2]
+                    second = parts[2] if len(parts) > 2 else 0
+                    selected_datetime = datetime(
+                        selected_date.year,
+                        selected_date.month,
+                        selected_date.day,
+                        hour,
+                        minute,
+                        second,
+                        tzinfo=timezone_value,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise VaultError("资料时间格式无效") from exc
+                precision = "second" if len(normalized_time.split(":")) > 2 else "minute"
+            else:
+                # Keep an indexable midnight anchor while preserving day-only
+                # precision so the UI never presents this as an actual 00:00 event.
+                selected_datetime = datetime(
+                    selected_date.year,
+                    selected_date.month,
+                    selected_date.day,
+                    tzinfo=timezone_value,
+                )
+
+            metadata = self._attachment_metadata_payload(value)
+            if "original_time" not in metadata:
+                metadata["original_time"] = {
+                    "timeline_at": value.get("timeline_at") or metadata.get("timeline_at"),
+                    "timeline_date": metadata.get("timeline_date"),
+                    "time_source": value.get("time_source") or metadata.get("timeline_time_source"),
+                    "time_precision": value.get("time_precision") or metadata.get("time_precision"),
+                }
+            metadata.pop("timeline_end_at", None)
+            metadata.update(
+                {
+                    "timeline_at": selected_datetime.isoformat(timespec="seconds"),
+                    "timeline_date": selected_date.isoformat(),
+                    "timeline_time_source": "manual",
+                    "time_source": "manual",
+                    "time_precision": precision,
+                    "time_confidence": "high",
+                    "time_metadata_checked": True,
+                    "timeline_manual": True,
+                }
+            )
+            updated = self.database.update_attachment_metadata(
+                master_key,
+                profile_id=profile["id"],
+                attachment_id=attachment_id,
+                metadata=metadata,
+                timestamp=datetime.now(dt_timezone.utc).isoformat(),
+            )
+            return self._public_attachment(updated)
+
+    def _timeline_backfill_snapshot(self) -> dict[str, Any] | None:
+        with self._timeline_backfill_job_mutex:
+            job = self._timeline_backfill_job
+            if not job:
+                return None
+            total = int(job.get("total") or 0)
+            indexed = int(job.get("indexed") or 0)
+            undated = int(job.get("undated") or 0)
+            pending = int(job.get("pending") or 0)
+            completed = indexed + undated
+            return {
+                "state": str(job.get("state") or "idle"),
+                "total": total,
+                "indexed": indexed,
+                "undated": undated,
+                "pending": pending,
+                "processed_this_run": int(job.get("processed_this_run") or 0),
+                "failed_count": int(job.get("failed_count") or 0),
+                "current_attachment_id": str(job.get("current_attachment_id") or "") or None,
+                "current_filename": str(job.get("current_filename") or "") or None,
+                "last_error": str(job.get("last_error") or "") or None,
+                "progress_percent": round((completed * 100.0 / total) if total else 100.0, 1),
+            }
+
+    def get_attachment_timeline_backfill_status(self) -> dict[str, Any]:
+        """Return progress for the explicit legacy timeline-index maintenance task."""
+        master_key = self.require_master_key()
+        del master_key  # authentication/lock guard only; status counts need no decryption
+        profile = self.get_profile()
+        snapshot = self._timeline_backfill_snapshot()
+        if snapshot and snapshot.get("state") == "running":
+            return snapshot
+
+        counts = self.database.attachment_timeline_backfill_status(profile_id=profile["id"])
+        state = "completed" if counts["pending"] == 0 else "idle"
+        if snapshot and snapshot.get("state") in {"paused", "error", "cancelled"}:
+            state = str(snapshot["state"])
+        completed = counts["indexed"] + counts["undated"]
+        return {
+            "state": state,
+            **counts,
+            "processed_this_run": int(snapshot.get("processed_this_run") or 0) if snapshot else 0,
+            "failed_count": int(snapshot.get("failed_count") or 0) if snapshot else 0,
+            "current_attachment_id": None,
+            "current_filename": None,
+            "last_error": snapshot.get("last_error") if snapshot else None,
+            "progress_percent": round((completed * 100.0 / counts["total"]) if counts["total"] else 100.0, 1),
+        }
+
+    def pause_attachment_timeline_backfill(self) -> dict[str, Any]:
+        self.require_master_key()
+        with self._timeline_backfill_job_mutex:
+            job = self._timeline_backfill_job
+            if job and job.get("state") == "running":
+                pause_event = job.get("pause_event")
+                if isinstance(pause_event, threading.Event):
+                    pause_event.set()
+                job["state"] = "paused"
+        return self.get_attachment_timeline_backfill_status()
+
+    def start_attachment_timeline_backfill(self) -> dict[str, Any]:
+        """Backfill v0.0.9 attachment metadata into schema-v9 timeline columns.
+
+        The task is deliberately opt-in and resumable.  It processes one file at a
+        time, never runs during schema migration, and stores completion in SQLite
+        itself so restarting LifeGraph naturally resumes only the remaining rows.
+        """
+        with self._mutex:
+            master_key = bytes(self.require_master_key())
+            profile = self.get_profile()
+            profile_id = str(profile["id"])
+            timezone_name = str(profile.get("timezone") or "UTC")
+            counts = self.database.attachment_timeline_backfill_status(profile_id=profile_id)
+
+        with self._timeline_backfill_job_mutex:
+            existing = self._timeline_backfill_job
+            if existing and existing.get("state") == "running":
+                return self.get_attachment_timeline_backfill_status()
+            if counts["pending"] <= 0:
+                self._timeline_backfill_job = {
+                    "state": "completed",
+                    **counts,
+                    "processed_this_run": 0,
+                    "failed_count": 0,
+                    "last_error": None,
+                }
+                return self.get_attachment_timeline_backfill_status()
+
+            pause_event = threading.Event()
+            cancel_event = threading.Event()
+            self._timeline_backfill_job = {
+                "state": "running",
+                **counts,
+                "processed_this_run": 0,
+                "failed_count": 0,
+                "last_error": None,
+                "current_attachment_id": None,
+                "current_filename": None,
+                "pause_event": pause_event,
+                "cancel_event": cancel_event,
+            }
+
+        def update_job(**changes: Any) -> None:
+            with self._timeline_backfill_job_mutex:
+                job = self._timeline_backfill_job
+                if job is None or job.get("cancel_event") is not cancel_event:
+                    return
+                job.update(changes)
+
+        def worker() -> None:
+            cursor_created_at: str | None = None
+            cursor_id: str | None = None
+            try:
+                while True:
+                    if cancel_event.is_set():
+                        update_job(state="cancelled", current_attachment_id=None, current_filename=None)
+                        return
+                    if pause_event.is_set():
+                        update_job(state="paused", current_attachment_id=None, current_filename=None)
+                        return
+
+                    candidates = self.database.list_attachment_timeline_backfill_candidates(
+                        profile_id=profile_id,
+                        limit=24,
+                        after_created_at=cursor_created_at,
+                        after_id=cursor_id,
+                    )
+                    if not candidates:
+                        final_counts = self.database.attachment_timeline_backfill_status(profile_id=profile_id)
+                        failed = int(self._timeline_backfill_job.get("failed_count") or 0) if self._timeline_backfill_job else 0
+                        update_job(
+                            state="error" if failed else "completed",
+                            **final_counts,
+                            current_attachment_id=None,
+                            current_filename=None,
+                        )
+                        return
+
+                    for candidate in candidates:
+                        cursor_created_at = candidate["created_at"]
+                        cursor_id = candidate["id"]
+                        if cancel_event.is_set() or pause_event.is_set():
+                            break
+                        try:
+                            value = self.database.get_attachment(
+                                master_key,
+                                profile_id=profile_id,
+                                attachment_id=candidate["id"],
+                            )
+                            update_job(
+                                current_attachment_id=candidate["id"],
+                                current_filename=str(value.get("filename") or "未命名资料"),
+                            )
+
+                            # Most v0.0.9 rows already contain encrypted timeline
+                            # metadata. Mirror it directly without rewriting the
+                            # encrypted blob. Only genuinely old/unchecked records
+                            # need to decrypt their attachment payload once.
+                            if str(value.get("timeline_at") or "").strip():
+                                timeline = self.database.sync_attachment_timeline_mirror(
+                                    profile_id=profile_id,
+                                    attachment_id=candidate["id"],
+                                    metadata=self._attachment_metadata_payload(value),
+                                )
+                                indexed = bool(timeline.get("timeline_at"))
+                            elif str(value.get("timeline_date") or "").strip():
+                                metadata = self._attachment_metadata_payload(value)
+                                metadata["timeline_at"] = str(value["timeline_date"]).strip()
+                                metadata.setdefault("timeline_time_source", "legacy:date")
+                                metadata["time_precision"] = "day"
+                                timeline = self.database.sync_attachment_timeline_mirror(
+                                    profile_id=profile_id,
+                                    attachment_id=candidate["id"],
+                                    metadata=metadata,
+                                )
+                                indexed = bool(timeline.get("timeline_at"))
+                            else:
+                                updated = self._ensure_attachment_time_metadata(
+                                    master_key=master_key,
+                                    profile_id=profile_id,
+                                    timezone_name=timezone_name,
+                                    value=value,
+                                )
+                                indexed = bool(str(updated.get("timeline_at") or "").strip())
+                                if not indexed:
+                                    self.database.mark_attachment_timeline_unknown(
+                                        profile_id=profile_id,
+                                        attachment_id=candidate["id"],
+                                    )
+
+                            with self._timeline_backfill_job_mutex:
+                                job = self._timeline_backfill_job
+                                if job is None or job.get("cancel_event") is not cancel_event:
+                                    return
+                                job["processed_this_run"] = int(job.get("processed_this_run") or 0) + 1
+                                job["pending"] = max(0, int(job.get("pending") or 0) - 1)
+                                if indexed:
+                                    job["indexed"] = int(job.get("indexed") or 0) + 1
+                                else:
+                                    job["undated"] = int(job.get("undated") or 0) + 1
+                                job["current_attachment_id"] = None
+                                job["current_filename"] = None
+                        except (DatabaseContentNotFound, AttachmentFileError, VaultError, OSError, ValueError) as exc:
+                            with self._timeline_backfill_job_mutex:
+                                job = self._timeline_backfill_job
+                                if job is None or job.get("cancel_event") is not cancel_event:
+                                    return
+                                job["failed_count"] = int(job.get("failed_count") or 0) + 1
+                                job["last_error"] = f"{candidate['id']}: {exc}"
+                                job["current_attachment_id"] = None
+                                job["current_filename"] = None
+                        except Exception as exc:  # one damaged legacy row must not stop the whole library
+                            with self._timeline_backfill_job_mutex:
+                                job = self._timeline_backfill_job
+                                if job is None or job.get("cancel_event") is not cancel_event:
+                                    return
+                                job["failed_count"] = int(job.get("failed_count") or 0) + 1
+                                job["last_error"] = f"{candidate['id']}: {exc.__class__.__name__}: {exc}"
+                                job["current_attachment_id"] = None
+                                job["current_filename"] = None
+            finally:
+                # Drop the captured key reference as soon as the maintenance
+                # worker stops. The vault lock path also signals cancel_event.
+                pass
+
+        threading.Thread(
+            target=worker,
+            name="lifegraph-timeline-backfill",
+            daemon=True,
+        ).start()
+        return self.get_attachment_timeline_backfill_status()
+
 
     def list_attachments(self, *, kind: str, content_id: str) -> list[dict[str, Any]]:
         master_key = self.require_master_key()
@@ -3351,6 +4154,56 @@ class VaultManager:
         )
         return materials
 
+    def list_materials_for_period_page(
+        self,
+        *,
+        scope: str,
+        period_key: str,
+        limit: int = 12,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        page = self.database.list_attachment_period_page(
+            master_key,
+            profile_id=profile["id"],
+            scope=scope,
+            period_key=period_key,
+            limit=limit,
+            offset=offset,
+        )
+        materials: list[dict[str, Any]] = []
+        for value in page["items"]:
+            source = None
+            if value.get("kind") and value.get("content_id"):
+                try:
+                    source = self.database.get_content_reference(
+                        master_key,
+                        profile_id=profile["id"],
+                        kind=str(value["kind"]),
+                        content_id=str(value["content_id"]),
+                        include_deleted=False,
+                    )
+                except DatabaseContentNotFound:
+                    continue
+            public = self._public_attachment(value)
+            public["source_content"] = (
+                {
+                    "kind": source["kind"],
+                    "id": source["id"],
+                    "title": source["title"],
+                    "time_scope": source["time_scope"],
+                    "period_key": source["period_key"],
+                }
+                if source
+                else None
+            )
+            materials.append(public)
+        return {
+            **page,
+            "items": materials,
+        }
+
     @staticmethod
     def _material_category(value: dict[str, Any]) -> str:
         media_type = str(value.get("media_type") or "").lower()
@@ -3388,6 +4241,7 @@ class VaultManager:
         date_from: str | None = None,
         date_to: str | None = None,
         sort: str = "timeline_desc",
+        time_status: str = "all",
         limit: int = 48,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -3405,7 +4259,7 @@ class VaultManager:
         if not category_set:
             category_set = set(allowed_categories)
         needle = query.strip().casefold()
-        counts = {"image": 0, "video": 0, "document": 0, "other": 0, "undated": 0}
+        counts = {"image": 0, "video": 0, "document": 0, "other": 0, "undated": 0, "review": 0}
         total = 0
         page_cap = max(0, int(offset)) + max(1, int(limit))
 
@@ -3433,7 +4287,11 @@ class VaultManager:
 
                 category = self._material_category(value)
                 timeline_date = str(value.get("timeline_date") or "")
+                time_confidence = str(value.get("time_confidence") or "").strip().lower()
+                needs_time_review = (not timeline_date) or time_confidence in {"low", "unknown"}
                 if category not in category_set:
+                    continue
+                if time_status == "review" and not needs_time_review:
                     continue
                 if date_from and (not timeline_date or timeline_date < date_from):
                     continue
@@ -3466,6 +4324,8 @@ class VaultManager:
                 counts[category] += 1
                 if not timeline_date:
                     counts["undated"] += 1
+                if needs_time_review:
+                    counts["review"] += 1
                 total += 1
                 yield public
 
@@ -3499,6 +4359,187 @@ class VaultManager:
             "next_offset": next_offset if next_offset < total else None,
             "has_more": next_offset < total,
             "counts": counts,
+        }
+
+    def material_timeline_years(self, *, start_year: int, end_year: int) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        start_year = int(start_year)
+        end_year = int(end_year)
+        if start_year < 1800 or end_year > 2200 or start_year > end_year:
+            raise VaultError("年份范围无效")
+        if end_year - start_year > 120:
+            raise VaultError("单次年份时间轴最多查询 121 年")
+        rows = self.database.list_attachment_timeline_stats(
+            profile_id=profile["id"],
+            level="year",
+            start_key=f"{start_year:04d}",
+            end_key=f"{end_year:04d}",
+        )
+        counts = {str(row["period_key"]): int(row["total_count"]) for row in rows}
+        items = [
+            {"period_key": f"{year:04d}", "year": year, "total_count": counts.get(f"{year:04d}", 0)}
+            for year in range(start_year, end_year + 1)
+        ]
+        return {
+            "level": "year",
+            "start_year": start_year,
+            "end_year": end_year,
+            "items": items,
+        }
+
+    def material_timeline_months(self, *, year: int) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        year = int(year)
+        if year < 1800 or year > 2200:
+            raise VaultError("年份无效")
+        rows = self.database.list_attachment_timeline_stats(
+            profile_id=profile["id"],
+            level="month",
+            start_key=f"{year:04d}-01",
+            end_key=f"{year:04d}-12",
+        )
+        counts = {str(row["period_key"]): int(row["total_count"]) for row in rows}
+        items = []
+        for month in range(1, 13):
+            key = f"{year:04d}-{month:02d}"
+            items.append({"period_key": key, "month": month, "total_count": counts.get(key, 0)})
+        return {"level": "month", "year": year, "items": items}
+
+    def material_timeline_days(self, *, year: int, month: int) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        year = int(year)
+        month = int(month)
+        try:
+            day_count = monthrange(year, month)[1]
+        except (ValueError, OverflowError):
+            raise VaultError("年月范围无效")
+        if year < 1800 or year > 2200:
+            raise VaultError("年份无效")
+        rows = self.database.list_attachment_timeline_stats(
+            profile_id=profile["id"],
+            level="day",
+            start_key=f"{year:04d}-{month:02d}-01",
+            end_key=f"{year:04d}-{month:02d}-{day_count:02d}",
+        )
+        counts = {str(row["period_key"]): int(row["total_count"]) for row in rows}
+        items = []
+        for day in range(1, day_count + 1):
+            key = f"{year:04d}-{month:02d}-{day:02d}"
+            items.append({"period_key": key, "day": day, "total_count": counts.get(key, 0)})
+        return {"level": "day", "year": year, "month": month, "items": items}
+
+    def material_timeline_hours(self, *, timeline_date: str) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        try:
+            selected = date.fromisoformat(str(timeline_date))
+        except ValueError as exc:
+            raise VaultError("日期无效") from exc
+        prefix = selected.isoformat()
+        rows = self.database.list_attachment_timeline_stats(
+            profile_id=profile["id"],
+            level="hour",
+            start_key=f"{prefix}T00",
+            end_key=f"{prefix}T23",
+        )
+        counts = {str(row["period_key"]): int(row["total_count"]) for row in rows}
+        items = []
+        for hour in range(24):
+            key = f"{prefix}T{hour:02d}"
+            items.append({"period_key": key, "hour": hour, "total_count": counts.get(key, 0)})
+        return {"level": "hour", "date": prefix, "items": items}
+
+    def material_timeline_minutes(self, *, timeline_date: str) -> dict[str, Any]:
+        self.require_master_key()
+        profile = self.get_profile()
+        try:
+            selected = date.fromisoformat(str(timeline_date))
+        except ValueError as exc:
+            raise VaultError("日期无效") from exc
+        next_day = selected + timedelta(days=1)
+        rows = self.database.list_attachment_timeline_minute_counts(
+            profile_id=profile["id"],
+            start_at=selected.isoformat(),
+            end_at=next_day.isoformat(),
+        )
+        items = []
+        for row in rows:
+            key = str(row["period_key"])
+            items.append(
+                {
+                    "period_key": key,
+                    "time": key[11:16] if len(key) >= 16 else key,
+                    "total_count": int(row["total_count"]),
+                }
+            )
+        return {"level": "minute", "date": selected.isoformat(), "items": items}
+
+    def material_timeline_day(
+        self,
+        *,
+        timeline_date: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Return only lightweight metadata for one selected day.
+
+        The indexed date range selects a bounded set before any encrypted metadata
+        is decrypted. No thumbnail, video frame, original media or preview is read.
+        """
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        try:
+            selected = date.fromisoformat(str(timeline_date))
+        except ValueError as exc:
+            raise VaultError("日期无效") from exc
+        next_day = selected + timedelta(days=1)
+        result = self.database.list_attachment_timeline_page(
+            master_key,
+            profile_id=profile["id"],
+            start_at=selected.isoformat(),
+            end_at=next_day.isoformat(),
+            limit=limit,
+            offset=offset,
+        )
+        items: list[dict[str, Any]] = []
+        for value in result["items"]:
+            items.append(
+                {
+                    "id": value.get("id"),
+                    "timeline_at": value.get("timeline_at"),
+                    "timeline_end_at": value.get("timeline_end_at"),
+                    "time_precision": value.get("time_precision"),
+                    "time_source": value.get("time_source"),
+                    "time_confidence": value.get("time_confidence"),
+                    "timezone_offset": value.get("timezone_offset"),
+                    "filename": value.get("filename") or "未命名资料",
+                    "media_type": value.get("media_type") or "application/octet-stream",
+                    "size_bytes": int(value.get("size_bytes") or 0),
+                    "duration_seconds": value.get("duration_seconds"),
+                    "storage_kind": value.get("storage_kind") or "blob-v1",
+                    "is_large": str(value.get("storage_kind") or "blob-v1") == "chunked-v1",
+                    "category": self._material_category(value),
+                    "kind": value.get("kind"),
+                    "content_id": value.get("content_id"),
+                }
+            )
+        neighbors = self.database.attachment_timeline_neighbor_days(
+            profile_id=profile["id"],
+            day_key=selected.isoformat(),
+        )
+        return {
+            "date": selected.isoformat(),
+            "items": items,
+            "total": int(result["total"]),
+            "offset": int(result["offset"]),
+            "limit": int(result["limit"]),
+            "next_offset": result["next_offset"],
+            "has_more": bool(result["has_more"]),
+            "previous_date": neighbors["previous_date"],
+            "next_date": neighbors["next_date"],
         }
 
     def delete_independent_material(self, *, attachment_id: str) -> dict[str, Any]:
@@ -4287,34 +5328,10 @@ class VaultManager:
             return result
 
     def get_content_status(self, *, start_date: str, end_date: str) -> dict[str, dict[str, dict[str, bool]]]:
-        master_key = self.require_master_key()
+        self.require_master_key()
         profile = self.get_profile()
-        result = self.database.get_content_status(
+        return self.database.get_content_status(
             profile_id=profile["id"],
             start_date=start_date,
             end_date=end_date,
         )
-        for raw_value in self.database.list_all_attachments(master_key, profile_id=profile["id"]):
-            value = self._ensure_attachment_time_metadata(
-                master_key=master_key,
-                profile_id=profile["id"],
-                timezone_name=str(profile.get("timezone") or "UTC"),
-                value=raw_value,
-            )
-            timeline_date = str(value.get("timeline_date") or "")
-            if not timeline_date or timeline_date < start_date or timeline_date > end_date:
-                continue
-            if not self.database.content_exists(
-                profile_id=profile["id"],
-                kind=str(value.get("kind") or ""),
-                content_id=str(value.get("content_id") or ""),
-                include_deleted=False,
-            ):
-                continue
-            for map_name, map_key in (("dates", timeline_date), ("months", timeline_date[:7]), ("years", timeline_date[:4])):
-                state = result[map_name].setdefault(
-                    map_key,
-                    {"has_event": False, "has_memory": False, "has_plan": False},
-                )
-                state["has_material"] = True
-        return result

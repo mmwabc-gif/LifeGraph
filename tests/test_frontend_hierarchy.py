@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.9"' in javascript
+    assert 'const frontendBuildVersion = "0.0.10"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -288,7 +288,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.9"' in javascript
+    assert 'const frontendBuildVersion = "0.0.10"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -324,9 +324,10 @@ def test_full_page_continuous_day_grid_is_available() -> None:
     assert '>全页视图</button>' in html
     assert '<h2>太阳每一天都是新的</h2>' in html
     assert '>进入首页</button>' in html
-    assert 'async function loadHome({ enterFullPage = false } = {})' in javascript
-    assert 'if (enterFullPage) openFullPageLifeView();' in javascript
-    assert 'await loadHome({ enterFullPage: true });' in javascript
+    assert 'async function loadHome()' in javascript
+    assert 'if (enterFullPage) openFullPageLifeView();' not in javascript
+    assert 'await loadHome({ enterFullPage: true });' not in javascript
+    assert 'await loadHome();' in javascript
     assert 'document.getElementById("refreshButton").addEventListener("click", () => loadHome());' in javascript
     assert 'id="fullPageLifeView"' in html
     assert 'id="fullPageLifeCanvas"' in html
@@ -662,8 +663,8 @@ def test_tag_management_settings_ui_and_handlers_are_present() -> None:
     assert 'method: "DELETE"' in javascript
     assert '.tag-management-list {' in css
     assert '.tag-management-row {' in css
-    assert 'const frontendBuildVersion = "0.0.9";' in javascript
-    assert '/assets/app.js?v=0.0.9' in html
+    assert 'const frontendBuildVersion = "0.0.10";' in javascript
+    assert '/assets/app.js?v=0.0.10' in html
 
 
 def test_unified_content_center_ui_and_handlers_are_present() -> None:
@@ -1104,8 +1105,8 @@ def test_period_drawer_has_material_section_for_file_own_timeline_date() -> None
     assert 'id="materialSection"' in html
     assert 'id="materialList"' in html
     assert '按文件自身时间归属到人生时间轴' in html
-    assert 'function renderMaterialList(materials = [])' in javascript
-    assert 'renderMaterialList(detail.materials || []);' in javascript
+    assert 'function renderMaterialList(materials = [], options = {})' in javascript
+    assert 'renderMaterialList(detail.materials || [], {' in javascript
     assert 'sourceButton.textContent = `来自 ${source.period_key} · ${materialSourceKindLabel(source.kind)}：${source.title || "未命名内容"}`;' in javascript
     assert 'state.has_material' in javascript
     assert 'labels.push("有资料")' in javascript
@@ -1134,6 +1135,8 @@ def test_material_center_entry_filters_and_relation_actions_are_present() -> Non
     assert 'id="materialCenterListView"' in html
     assert '>时间轴</button>' in html
     assert '>列表</button>' in html
+    assert 'class="material-center-mode-tabs" role="tablist"' in html
+    assert 'class="material-center-mode-tab is-active"' in html
 
     assert 'async function openMaterialCenterModal()' in javascript
     assert 'async function runMaterialCenterBrowse()' in javascript
@@ -1142,6 +1145,8 @@ def test_material_center_entry_filters_and_relation_actions_are_present() -> Non
     assert 'function renderMaterialCenterTimeline(items, imageItems, imageIndexById)' in javascript
     assert 'function renderMaterialCenterList(items, imageItems, imageIndexById)' in javascript
     assert 'let materialCenterViewMode = "timeline";' in javascript
+    assert 'materialCenterForm?.classList.toggle("hidden", timelineActive);' in javascript
+    assert 'materialCenterTimelineViewButton?.setAttribute("aria-selected"' in javascript
     assert 'materialTimelineNodeSummary(dateItems)' in javascript
     assert 'openMaterialCenterPeriod("day", attachment.timeline_date, dateButton)' in javascript
     assert 'downloadAttachmentFile(attachment)' in javascript
@@ -1158,6 +1163,34 @@ def test_material_center_entry_filters_and_relation_actions_are_present() -> Non
     assert '.material-timeline-date-row {' in css
     assert '.material-timeline-grid {' in css
     assert '.material-timeline-dot {' in css
+    assert 'async function runMaterialTimelineAxis({ recenterYears = false } = {})' in javascript
+    assert 'function materialTimelineYearWindowCapacity()' in javascript
+    assert 'MATERIAL_TIMELINE_YEAR_MIN_WIDTH = 72' in javascript
+    assert '/api/v1/materials/timeline/years?start_year=' in javascript
+    assert '/api/v1/materials/timeline/months?year=' in javascript
+    assert '/api/v1/materials/timeline/days?year=' in javascript
+    assert 'function createMaterialTimelineAxisRow({ level, items, yearWindow = null })' in javascript
+    assert 'stack.appendChild(createMaterialTimelineAxisRow({ level: "year"' in javascript
+    assert 'stack.appendChild(createMaterialTimelineAxisRow({ level: "month"' in javascript
+    assert 'stack.appendChild(createMaterialTimelineAxisRow({ level: "day"' in javascript
+    assert 'openList.textContent = "在列表中查看当日资料";' in javascript
+    assert '.material-time-axis-row.is-year {' in css
+    assert '.material-time-axis-track {' in css
+    assert '.material-time-axis-page-button {' in css
+    assert 'button.disabled = !hasData;' in javascript
+    assert 'inlineCount.textContent = `[${totalCount}]`;' in javascript
+    assert '.material-time-axis-density,\n.material-time-axis-count {' in css
+    assert '/* LifeGraph v0.0.10.5.1：资料中心模式标签页 + 年/月/日三层常驻时间轴 */' in css
+    assert '/* LifeGraph v0.0.10.5.2：年月日三层时间轴紧凑化 */' in css
+    assert '/* LifeGraph v0.0.10.5.3：三层分段色带时间轴 + 紧凑日内资料条 */' in css
+    assert 'background: color-mix(in srgb, var(--axis-color) 31%, #fbfaf6);' in css
+    assert '.material-time-axis-track::before {\n  display: none;' in css
+    assert 'grid-template-columns: auto minmax(0, 1fr) auto auto;' in css
+    assert 'badge.textContent = materialDayTimelineCategoryLabel(attachment);' in javascript
+    assert '.material-center-mode-tabs {' in css
+    assert '.material-time-axis-stack {' in css
+    assert '.material-time-axis-row.is-month {' in css
+    assert '.material-time-axis-row.is-day {' in css
     assert 'overflow: hidden;' in css
     assert '.material-center-source-button {' in css
     assert 'text-overflow: ellipsis;' in css
@@ -1272,12 +1305,17 @@ def test_period_materials_default_to_six_item_collapsed_view() -> None:
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
     assert 'id="materialSectionToggle"' in html
+    assert 'id="materialSectionLoadMore"' in html
     assert 'const MATERIAL_SECTION_COLLAPSED_LIMIT = 6;' in javascript
+    assert 'const PERIOD_MATERIAL_PAGE_SIZE = 12;' in javascript
     assert 'materialSectionExpanded = false;' in javascript
     assert 'index >= MATERIAL_SECTION_COLLAPSED_LIMIT' in javascript
-    assert 'materialSectionTotal = items.length;' in javascript
+    assert 'materialSectionTotal = Number(options.total ?? materialSectionTotal ?? items.length);' in javascript
     assert 'const total = Math.max(materialSectionTotal, cards.length);' in javascript
-    assert 'toggle.textContent = materialSectionExpanded ? "收起" : `展开全部（${total}）`;' in javascript
+    assert '`展开已加载（${cards.length}/${total}）`' in javascript
+    assert '`继续加载（${cards.length}/${total}）`' in javascript
+    assert '/materials?limit=${PERIOD_MATERIAL_PAGE_SIZE}&offset=${offset}' in javascript
+    assert 'remaining <= 280' in javascript
     assert 'function ensureMaterialSectionToggle()' in javascript
     assert 'materialSectionToggle.dataset.collapseBound' in javascript
     assert '.material-section-toggle {' in css
@@ -1384,8 +1422,8 @@ def test_day_calendars_use_horizontal_lunar_watermark_without_growing_home_cells
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert '/assets/calendar_meta.js?v=0.0.9' in html
-    assert '/assets/app.js?v=0.0.9' in html
+    assert '/assets/calendar_meta.js?v=0.0.10' in html
+    assert '/assets/app.js?v=0.0.10' in html
     assert 'function decorateDayCalendarButton(button, child, options = {})' in javascript
     assert 'window.LifeGraphCalendarMeta?.getDateMeta?.(child.period_key)' in javascript
     assert 'watermark.className = "calendar-day-watermark";' in javascript
@@ -1564,3 +1602,135 @@ def test_media_backup_panel_supports_incremental_sync_and_verify() -> None:
     assert '/api/v1/backup/media/cancel' in javascript
     assert '媒体分块 ${chunks} 个' in javascript
     assert '.media-backup-controls {' in css
+
+
+def test_material_center_year_and_month_click_auto_select_latest_material_day() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'let materialTimelineAxisAutoResolve = null;' in javascript
+    assert 'function resetMaterialTimelineAxisToToday()' in javascript
+    assert 'if (materialCenterViewMode === "timeline") resetMaterialTimelineAxisToToday();' in javascript
+    assert 'materialTimelineAxisAutoResolve = "year";' in javascript
+    assert 'materialTimelineAxisAutoResolve = "month";' in javascript
+    assert 'function materialTimelineLatestDataValue(items, field)' in javascript
+    assert 'const latestMonth = materialTimelineLatestDataValue(monthItems, "month");' in javascript
+    assert 'materialTimelineAxisDay = materialTimelineLatestDataValue(dayItems, "day");' in javascript
+    assert 'const [years, months] = await Promise.all([' in javascript
+    assert 'const days = await api(' in javascript
+
+
+def test_material_center_day_selection_expands_vertical_intraday_axis() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'function createMaterialDayTimeAxis(dayData, dayCount)' in javascript
+    assert 'function createMaterialDayTimelineEntry(attachment, allItems, itemIndex)' in javascript
+    assert '/api/v1/materials/timeline/hours?date=${encodeURIComponent(isoDate)}' in javascript
+    assert '/api/v1/materials/timeline/minutes?date=${encodeURIComponent(isoDate)}' in javascript
+    assert 'MATERIAL_TIMELINE_DAY_PAGE_SIZE' in javascript
+    assert 'detailHost.appendChild(createMaterialDayTimeAxis(dayDetail, dayItems.length));' in javascript
+    assert 'section.style.setProperty("--day-axis-x"' in javascript
+    assert 'section.classList.toggle("is-left-facing", selectedDay > safeDayCount / 2);' in javascript
+    assert 'startCap.textContent = "00:00";' in javascript
+    assert 'endCap.textContent = "24:00";' in javascript
+    assert 'time.textContent = materialDayTimelineTimeText(attachment.timeline_at, attachment.time_precision)' in javascript
+    assert 'openAttachmentPreview(allItems, itemIndex, action)' in javascript
+    assert 'openVideoPlayer(attachment, action)' in javascript
+    assert 'function materialDayTimelineBucketMode(minuteItems)' in javascript
+    assert 'MATERIAL_TIMELINE_MINUTE_GROUP_THRESHOLD' in javascript
+    assert 'function loadMoreMaterialTimelineDay()' in javascript
+    assert 'previous_date' in javascript
+    assert 'next_date' in javascript
+    assert '上一有资料日期' in javascript
+    assert '下一有资料日期' in javascript
+
+    assert '/* LifeGraph v0.0.10.5：选中日期向下展开纵向日内时间轴 */' in css
+    assert '.material-day-time-axis {' in css
+    assert 'left: var(--day-axis-x);' in css
+    assert '.material-day-time-entry {' in css
+    assert '.material-day-time-card {' in css
+    assert '.material-day-time-axis.is-left-facing .material-day-time-card {' in css
+
+
+def test_home_metrics_are_compact_and_embedded_in_hero() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    hero_start = html.index('<section class="hero panel">')
+    hero_end = html.index('</section>', html.index('</section>', hero_start) + len('</section>'))
+    hero_slice = html[hero_start:hero_end]
+
+    assert 'class="metric-grid hero-metrics"' in hero_slice
+    assert 'class="metric-card hero-metric-item"' in hero_slice
+    assert 'class="metric-card panel"' not in html
+    assert '.hero > .hero-metrics {' in css
+    assert 'min-height: 34px;' in css
+    assert 'font-size: clamp(1.08rem, 2vw, 1.42rem);' in css
+
+
+def test_material_center_dense_day_supports_aggregation_continue_load_and_neighbor_navigation() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'const MATERIAL_TIMELINE_DAY_PAGE_SIZE = 100;' in javascript
+    assert 'const MATERIAL_TIMELINE_MINUTE_GROUP_THRESHOLD = 4;' in javascript
+    assert 'if (occupiedMinutes > 720) return "hour";' in javascript
+    assert 'if (occupiedMinutes > 240) return "ten-minute";' in javascript
+    assert 'className = "material-day-time-group"' in javascript
+    assert 'button.textContent = materialTimelineDayLoadingMore ? "加载中…" : "继续加载";' in javascript
+    assert 'selectMaterialTimelineIsoDate(previousDate)' in javascript
+    assert 'selectMaterialTimelineIsoDate(nextDate)' in javascript
+    assert 'content-visibility: auto;' in css
+    assert '.material-day-time-group-card {' in css
+    assert '.material-time-axis-day-navigation {' in css
+
+
+def test_material_center_has_persistent_auto_scan_source_manager() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="manageMaterialScanSourcesButton"' in html
+    assert '>自动扫描</button>' in html
+    assert '>手动扫描目录</button>' in html
+    assert 'id="materialAutoScanModal"' in html
+    assert 'id="materialScanSourcePath"' in html
+    assert 'id="startMaterialScanner"' in html
+    assert 'id="pauseMaterialScanner"' in html
+    assert 'function openMaterialAutoScanModal()' in javascript
+    assert '/api/v1/materials/scan-sources' in javascript
+    assert '/api/v1/materials/scanner/start' in javascript
+    assert '/api/v1/materials/scanner/pause' in javascript
+    assert '解锁后自动执行一次增量扫描' in html
+    assert '/* LifeGraph v0.0.10.7：本机自动扫描源与增量扫描 */' in css
+    assert '.material-auto-scan-modal {' in css
+    assert 'z-index: 420;' in css
+
+
+def test_material_time_review_and_manual_correction_ui_are_present() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="reviewMaterialTimeButton"' in html
+    assert 'id="materialTimeCorrectionModal"' in html
+    assert 'id="materialTimeCorrectionDate"' in html
+    assert 'id="materialTimeCorrectionTime"' in html
+    assert '<i class="material-dot"></i>有资料' in html
+    assert 'params.set("time_status", materialCenterTimeStatus);' in javascript
+    assert 'correctTimeButton.textContent = "修正时间";' in javascript
+    assert '/timeline`' in javascript
+    assert 'timeline_time: materialTimeCorrectionTime.value || null' in javascript
+    assert 'if (source === "manual") return "手工确认时间";' in javascript
+    assert '.material-time-correction-modal {' in css
+    assert '.material-time-review-button.is-active {' in css
+    assert '.material-dot {' in css
+
+
+def test_drawer_material_load_more_is_below_material_list():
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    list_pos = html.index('id="materialList"')
+    load_more_pos = html.index('id="materialSectionLoadMore"')
+    heading_pos = html.index('id="materialSectionHeading"')
+    assert heading_pos < list_pos < load_more_pos
+    assert 'class="material-section-toggle material-section-load-more hidden"' in html

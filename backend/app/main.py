@@ -10,7 +10,7 @@ from app.security.vault import VaultManager
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-BUILD_VERSION = "0.0.9"
+BUILD_VERSION = "0.0.10"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

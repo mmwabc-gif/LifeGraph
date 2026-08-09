@@ -1,0 +1,30 @@
+{
+  "name": "LifeGraph",
+  "version": "0.0.10",
+  "released_at": "2026-08-10T01:49:00+08:00",
+  "schema_version": 11,
+  "lifevault_format_version": 3,
+  "frontend_version": "0.0.10",
+  "backend_version": "0.0.10",
+  "large_media_format": "chunked-v1",
+  "normal_attachment_format": "blob-v1",
+  "features": [
+    "structured_material_timeline_index",
+    "timeline_backfill",
+    "timeline_stats_index",
+    "three_level_cross_timeline",
+    "dense_intraday_aggregation",
+    "automatic_local_scan",
+    "incremental_scan_index",
+    "life_map_material_highlight",
+    "time_review_and_manual_correction",
+    "drawer_indexed_lazy_loading"
+  ],
+  "compatibility": [
+    "schema_v8_to_v11_migration",
+    "lifevault_v1_import",
+    "lifevault_v2_import",
+    "lifevault_v3_restore"
+  ],
+  "tests": "264 passed (37 test files, split verification)"
+}

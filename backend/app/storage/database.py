@@ -4,18 +4,20 @@ import html
 import re
 import sqlite3
 from calendar import monthrange
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from app.security.crypto import decrypt_json, encrypt_json
 
 
-LATEST_SCHEMA_VERSION = 8
+LATEST_SCHEMA_VERSION = 11
 PROFILE_AAD = b"lifegraph:v1:profile"
 EVENT_AAD_PREFIX = b"lifegraph:v2:event:"
 MEMORY_AAD_PREFIX = b"lifegraph:v2:memory:"
 PLAN_AAD_PREFIX = b"lifegraph:v2:plan:"
 ATTACHMENT_META_AAD_PREFIX = b"lifegraph:v1:attachment-meta:"
+MATERIAL_SCAN_SOURCE_AAD_PREFIX = b"lifegraph:v1:material-scan-source:"
 
 _CONTENT_TABLES = {
     "event": ("events", "event_date", EVENT_AAD_PREFIX),
@@ -258,6 +260,871 @@ class Database:
             """
         )
 
+    @staticmethod
+    def _timeline_offset(value: str | None) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            return "+00:00"
+        match = re.search(r"([+-]\d{2}:\d{2})$", raw)
+        return match.group(1) if match else None
+
+    @classmethod
+    def _attachment_timeline_columns(cls, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Return the non-sensitive, indexable timeline mirror for one attachment.
+
+        Human-readable metadata remains encrypted.  These columns intentionally
+        contain only normalized temporal facts needed for range queries and later
+        timeline aggregation.  v8 rows are not decrypted during schema migration;
+        they remain NULL until the dedicated v0.0.10.2 backfill runs.
+        """
+        timeline_at = str(metadata.get("timeline_at") or "").strip() or None
+        source = str(
+            metadata.get("time_source")
+            or metadata.get("timeline_time_source")
+            or ""
+        ).strip() or None
+
+        allowed_precision = {"year", "month", "day", "minute", "second", "unknown"}
+        precision = str(metadata.get("time_precision") or "").strip().lower() or None
+        if precision not in allowed_precision:
+            if not timeline_at:
+                precision = None
+            elif source == "content:date" or re.fullmatch(r"\d{4}-\d{2}-\d{2}", timeline_at):
+                precision = "day"
+            elif re.fullmatch(r"\d{4}-\d{2}", timeline_at):
+                precision = "month"
+            elif re.fullmatch(r"\d{4}", timeline_at):
+                precision = "year"
+            elif re.search(r"T\d{2}:\d{2}(?:$|[+-])", timeline_at):
+                precision = "minute"
+            else:
+                precision = "second"
+
+        allowed_confidence = {"high", "medium", "low", "unknown"}
+        confidence = str(metadata.get("time_confidence") or "").strip().lower() or None
+        if confidence not in allowed_confidence:
+            if not timeline_at:
+                confidence = None
+            elif source and source.startswith("exif:"):
+                confidence = "high"
+            elif source == "document:created":
+                confidence = "high"
+            elif source in {"document:modified", "file:last_modified", "content:date"}:
+                confidence = "medium"
+            elif source == "attachment:added":
+                confidence = "low"
+            elif source == "manual":
+                confidence = "high"
+            else:
+                confidence = "unknown"
+
+        timezone_offset = str(metadata.get("timezone_offset") or "").strip() or None
+        if timezone_offset is None:
+            timezone_offset = cls._timeline_offset(timeline_at)
+
+        timeline_end_at = str(metadata.get("timeline_end_at") or "").strip() or None
+        if timeline_end_at is None and timeline_at and precision in {"minute", "second"}:
+            try:
+                duration = float(metadata.get("duration_seconds"))
+                if 0 < duration <= 366 * 24 * 3600:
+                    parsed = datetime.fromisoformat(timeline_at.replace("Z", "+00:00"))
+                    timeline_end_at = (parsed + timedelta(seconds=duration)).isoformat(timespec="seconds")
+            except (TypeError, ValueError, OverflowError):
+                timeline_end_at = None
+
+        return {
+            "timeline_at": timeline_at,
+            "timeline_end_at": timeline_end_at,
+            "time_precision": precision,
+            "time_source": source,
+            "time_confidence": confidence,
+            "timezone_offset": timezone_offset,
+        }
+
+    def _ensure_attachment_timeline_schema(self, connection: sqlite3.Connection) -> None:
+        """v9: add queryable timeline facts without decrypting existing metadata."""
+        row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='attachments'"
+        ).fetchone()
+        if row is None:
+            return
+        columns = self._columns(connection, "attachments")
+        additions = {
+            "timeline_at": "TEXT",
+            "timeline_end_at": "TEXT",
+            "time_precision": "TEXT CHECK(time_precision IS NULL OR time_precision IN ('year','month','day','minute','second','unknown'))",
+            "time_source": "TEXT",
+            "time_confidence": "TEXT CHECK(time_confidence IS NULL OR time_confidence IN ('high','medium','low','unknown'))",
+            "timezone_offset": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(f"ALTER TABLE attachments ADD COLUMN {name} {definition}")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_profile_timeline
+            ON attachments(profile_id, timeline_at, id)
+            WHERE timeline_at IS NOT NULL
+            """
+        )
+
+    def _ensure_attachment_timeline_stats_schema(self, connection: sqlite3.Connection) -> None:
+        """v10: keep compact year/month/day/hour counts for the timeline UI.
+
+        Creating the tables and triggers is cheap and happens during normal schema
+        initialization. Existing v9 rows are deliberately *not* aggregated here;
+        the first timeline-summary request rebuilds the statistics from the already
+        queryable timeline mirror using SQL only (no metadata decryption).
+        """
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS attachment_timeline_stats (
+                profile_id TEXT NOT NULL,
+                level TEXT NOT NULL CHECK(level IN ('year', 'month', 'day', 'hour')),
+                period_key TEXT NOT NULL,
+                total_count INTEGER NOT NULL DEFAULT 0 CHECK(total_count >= 0),
+                PRIMARY KEY(profile_id, level, period_key),
+                FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS attachment_timeline_stats_meta (
+                profile_id TEXT PRIMARY KEY,
+                built_at TEXT NOT NULL,
+                FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_attachment_timeline_stats_lookup
+            ON attachment_timeline_stats(profile_id, level, period_key);
+
+            DROP TRIGGER IF EXISTS trg_attachments_timeline_stats_insert;
+            CREATE TRIGGER trg_attachments_timeline_stats_insert
+            AFTER INSERT ON attachments
+            WHEN NEW.timeline_at IS NOT NULL
+                 AND NEW.time_precision IS NOT NULL
+                 AND NEW.time_precision != 'unknown'
+            BEGIN
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                VALUES(NEW.profile_id, 'year', substr(NEW.timeline_at, 1, 4), 0);
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE profile_id=NEW.profile_id AND level='year'
+                  AND period_key=substr(NEW.timeline_at, 1, 4);
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'month', substr(NEW.timeline_at, 1, 7), 0
+                WHERE NEW.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 7;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE profile_id=NEW.profile_id AND level='month'
+                  AND period_key=substr(NEW.timeline_at, 1, 7)
+                  AND NEW.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 7;
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'day', substr(NEW.timeline_at, 1, 10), 0
+                WHERE NEW.time_precision IN ('day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 10;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE profile_id=NEW.profile_id AND level='day'
+                  AND period_key=substr(NEW.timeline_at, 1, 10)
+                  AND NEW.time_precision IN ('day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 10;
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'hour', substr(NEW.timeline_at, 1, 13), 0
+                WHERE NEW.time_precision IN ('minute', 'second')
+                  AND length(NEW.timeline_at) >= 13;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE profile_id=NEW.profile_id AND level='hour'
+                  AND period_key=substr(NEW.timeline_at, 1, 13)
+                  AND NEW.time_precision IN ('minute', 'second')
+                  AND length(NEW.timeline_at) >= 13;
+            END;
+
+            DROP TRIGGER IF EXISTS trg_attachments_timeline_stats_delete;
+            CREATE TRIGGER trg_attachments_timeline_stats_delete
+            AFTER DELETE ON attachments
+            WHEN OLD.timeline_at IS NOT NULL
+                 AND OLD.time_precision IS NOT NULL
+                 AND OLD.time_precision != 'unknown'
+            BEGIN
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE profile_id=OLD.profile_id AND level='year'
+                  AND period_key=substr(OLD.timeline_at, 1, 4);
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='year'
+                  AND period_key=substr(OLD.timeline_at, 1, 4) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE profile_id=OLD.profile_id AND level='month'
+                  AND period_key=substr(OLD.timeline_at, 1, 7)
+                  AND OLD.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(OLD.timeline_at) >= 7;
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='month'
+                  AND period_key=substr(OLD.timeline_at, 1, 7) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE profile_id=OLD.profile_id AND level='day'
+                  AND period_key=substr(OLD.timeline_at, 1, 10)
+                  AND OLD.time_precision IN ('day', 'minute', 'second')
+                  AND length(OLD.timeline_at) >= 10;
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='day'
+                  AND period_key=substr(OLD.timeline_at, 1, 10) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE profile_id=OLD.profile_id AND level='hour'
+                  AND period_key=substr(OLD.timeline_at, 1, 13)
+                  AND OLD.time_precision IN ('minute', 'second')
+                  AND length(OLD.timeline_at) >= 13;
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='hour'
+                  AND period_key=substr(OLD.timeline_at, 1, 13) AND total_count <= 0;
+            END;
+
+            DROP TRIGGER IF EXISTS trg_attachments_timeline_stats_update;
+            CREATE TRIGGER trg_attachments_timeline_stats_update
+            AFTER UPDATE OF timeline_at, time_precision ON attachments
+            BEGIN
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE OLD.timeline_at IS NOT NULL
+                  AND OLD.time_precision IS NOT NULL AND OLD.time_precision != 'unknown'
+                  AND profile_id=OLD.profile_id AND level='year'
+                  AND period_key=substr(OLD.timeline_at, 1, 4);
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='year'
+                  AND period_key=substr(OLD.timeline_at, 1, 4) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE OLD.timeline_at IS NOT NULL
+                  AND OLD.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(OLD.timeline_at) >= 7
+                  AND profile_id=OLD.profile_id AND level='month'
+                  AND period_key=substr(OLD.timeline_at, 1, 7);
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='month'
+                  AND period_key=substr(OLD.timeline_at, 1, 7) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE OLD.timeline_at IS NOT NULL
+                  AND OLD.time_precision IN ('day', 'minute', 'second')
+                  AND length(OLD.timeline_at) >= 10
+                  AND profile_id=OLD.profile_id AND level='day'
+                  AND period_key=substr(OLD.timeline_at, 1, 10);
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='day'
+                  AND period_key=substr(OLD.timeline_at, 1, 10) AND total_count <= 0;
+
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count-1
+                WHERE OLD.timeline_at IS NOT NULL
+                  AND OLD.time_precision IN ('minute', 'second')
+                  AND length(OLD.timeline_at) >= 13
+                  AND profile_id=OLD.profile_id AND level='hour'
+                  AND period_key=substr(OLD.timeline_at, 1, 13);
+                DELETE FROM attachment_timeline_stats
+                WHERE profile_id=OLD.profile_id AND level='hour'
+                  AND period_key=substr(OLD.timeline_at, 1, 13) AND total_count <= 0;
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'year', substr(NEW.timeline_at, 1, 4), 0
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IS NOT NULL AND NEW.time_precision != 'unknown';
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IS NOT NULL AND NEW.time_precision != 'unknown'
+                  AND profile_id=NEW.profile_id AND level='year'
+                  AND period_key=substr(NEW.timeline_at, 1, 4);
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'month', substr(NEW.timeline_at, 1, 7), 0
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 7;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('month', 'day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 7
+                  AND profile_id=NEW.profile_id AND level='month'
+                  AND period_key=substr(NEW.timeline_at, 1, 7);
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'day', substr(NEW.timeline_at, 1, 10), 0
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 10;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('day', 'minute', 'second')
+                  AND length(NEW.timeline_at) >= 10
+                  AND profile_id=NEW.profile_id AND level='day'
+                  AND period_key=substr(NEW.timeline_at, 1, 10);
+
+                INSERT OR IGNORE INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                SELECT NEW.profile_id, 'hour', substr(NEW.timeline_at, 1, 13), 0
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('minute', 'second')
+                  AND length(NEW.timeline_at) >= 13;
+                UPDATE attachment_timeline_stats
+                SET total_count=total_count+1
+                WHERE NEW.timeline_at IS NOT NULL
+                  AND NEW.time_precision IN ('minute', 'second')
+                  AND length(NEW.timeline_at) >= 13
+                  AND profile_id=NEW.profile_id AND level='hour'
+                  AND period_key=substr(NEW.timeline_at, 1, 13);
+            END;
+            """
+        )
+
+    def attachment_timeline_stats_ready(self, *, profile_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM attachment_timeline_stats_meta WHERE profile_id=?",
+                (profile_id,),
+            ).fetchone()
+        return row is not None
+
+    def rebuild_attachment_timeline_stats(self, *, profile_id: str) -> dict[str, Any]:
+        """Build compact statistics from v9 mirror columns without decrypting metadata."""
+        built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM attachment_timeline_stats WHERE profile_id=?",
+                (profile_id,),
+            )
+            specs = (
+                ("year", 4, ("year", "month", "day", "minute", "second")),
+                ("month", 7, ("month", "day", "minute", "second")),
+                ("day", 10, ("day", "minute", "second")),
+                ("hour", 13, ("minute", "second")),
+            )
+            for level, width, precisions in specs:
+                placeholders = ",".join("?" for _ in precisions)
+                connection.execute(
+                    f"""
+                    INSERT INTO attachment_timeline_stats(profile_id, level, period_key, total_count)
+                    SELECT profile_id, ?, substr(timeline_at, 1, ?), COUNT(*)
+                    FROM attachments
+                    WHERE profile_id=?
+                      AND timeline_at IS NOT NULL
+                      AND time_precision IN ({placeholders})
+                      AND length(timeline_at) >= ?
+                    GROUP BY profile_id, substr(timeline_at, 1, ?)
+                    """,
+                    (level, width, profile_id, *precisions, width, width),
+                )
+            connection.execute(
+                """
+                INSERT INTO attachment_timeline_stats_meta(profile_id, built_at)
+                VALUES(?, ?)
+                ON CONFLICT(profile_id) DO UPDATE SET built_at=excluded.built_at
+                """,
+                (profile_id, built_at),
+            )
+            period_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM attachment_timeline_stats WHERE profile_id=?",
+                    (profile_id,),
+                ).fetchone()[0]
+            )
+            dated_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM attachments
+                    WHERE profile_id=? AND timeline_at IS NOT NULL
+                      AND time_precision IS NOT NULL AND time_precision != 'unknown'
+                    """,
+                    (profile_id,),
+                ).fetchone()[0]
+            )
+        return {
+            "ready": True,
+            "built_at": built_at,
+            "period_count": period_count,
+            "dated_count": dated_count,
+        }
+
+    def ensure_attachment_timeline_stats(self, *, profile_id: str) -> dict[str, Any]:
+        if self.attachment_timeline_stats_ready(profile_id=profile_id):
+            with self.connect() as connection:
+                row = connection.execute(
+                    "SELECT built_at FROM attachment_timeline_stats_meta WHERE profile_id=?",
+                    (profile_id,),
+                ).fetchone()
+                period_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM attachment_timeline_stats WHERE profile_id=?",
+                        (profile_id,),
+                    ).fetchone()[0]
+                )
+            return {
+                "ready": True,
+                "built_at": str(row["built_at"]) if row else None,
+                "period_count": period_count,
+                "rebuilt": False,
+            }
+        result = self.rebuild_attachment_timeline_stats(profile_id=profile_id)
+        result["rebuilt"] = True
+        return result
+
+    def list_attachment_timeline_stats(
+        self,
+        *,
+        profile_id: str,
+        level: str,
+        start_key: str,
+        end_key: str,
+    ) -> list[dict[str, Any]]:
+        if level not in {"year", "month", "day", "hour"}:
+            raise ValueError("不支持的时间统计粒度")
+        self.ensure_attachment_timeline_stats(profile_id=profile_id)
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT period_key, total_count
+                FROM attachment_timeline_stats
+                WHERE profile_id=? AND level=? AND period_key>=? AND period_key<=?
+                ORDER BY period_key ASC
+                """,
+                (profile_id, level, start_key, end_key),
+            ).fetchall()
+        return [
+            {"period_key": str(row["period_key"]), "total_count": int(row["total_count"] or 0)}
+            for row in rows
+        ]
+
+    def list_attachment_timeline_page(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        start_at: str,
+        end_at: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Decrypt only one bounded date-range page for the future day timeline."""
+        limit = max(1, min(200, int(limit)))
+        offset = max(0, int(offset))
+        where = """
+            profile_id=?
+            AND timeline_at>=? AND timeline_at<?
+            AND time_precision IN ('day', 'minute', 'second')
+        """
+        with self.connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM attachments WHERE {where}",
+                    (profile_id, start_at, end_at),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""
+                SELECT id, profile_id, kind, content_id, storage_kind, media_id,
+                       metadata_nonce, metadata_ciphertext,
+                       timeline_at, timeline_end_at, time_precision, time_source,
+                       time_confidence, timezone_offset, created_at, updated_at
+                FROM attachments
+                WHERE {where}
+                ORDER BY timeline_at ASC, id ASC
+                LIMIT ? OFFSET ?
+                """,
+                (profile_id, start_at, end_at, limit, offset),
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = decrypt_json(
+                master_key,
+                row["metadata_nonce"],
+                row["metadata_ciphertext"],
+                aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+            )
+            items.append(
+                {
+                    "id": row["id"],
+                    "profile_id": row["profile_id"],
+                    "kind": row["kind"],
+                    "content_id": row["content_id"],
+                    "storage_kind": row["storage_kind"],
+                    "media_id": row["media_id"],
+                    "timeline_at": row["timeline_at"],
+                    "timeline_end_at": row["timeline_end_at"],
+                    "time_precision": row["time_precision"],
+                    "time_source": row["time_source"],
+                    "time_confidence": row["time_confidence"],
+                    "timezone_offset": row["timezone_offset"],
+                    **metadata,
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        next_offset = offset + len(items)
+        return {
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "next_offset": next_offset if next_offset < total else None,
+            "has_more": next_offset < total,
+        }
+
+    @staticmethod
+    def _attachment_period_bounds(scope: str, period_key: str) -> tuple[str, str]:
+        """Return lexicographic ISO bounds for one indexed attachment period."""
+        if scope == "year":
+            year = int(period_key[:4])
+            return f"{year:04d}", f"{year + 1:04d}"
+        if scope == "month":
+            year, month = (int(part) for part in period_key[:7].split("-"))
+            if month == 12:
+                return f"{year:04d}-12", f"{year + 1:04d}-01"
+            return f"{year:04d}-{month:02d}", f"{year:04d}-{month + 1:02d}"
+        if scope == "day":
+            selected = datetime.strptime(period_key[:10], "%Y-%m-%d")
+            next_day = selected + timedelta(days=1)
+            return selected.strftime("%Y-%m-%d"), next_day.strftime("%Y-%m-%d")
+        raise ValueError("不支持的资料时间范围")
+
+    def list_attachment_period_page(
+        self,
+        master_key: bytes,
+        *,
+        profile_id: str,
+        scope: str,
+        period_key: str,
+        limit: int = 12,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Decrypt only one indexed period page for the right-side life drawer."""
+        limit = max(1, min(100, int(limit)))
+        offset = max(0, int(offset))
+        start_at, end_at = self._attachment_period_bounds(scope, period_key)
+        visible_source = """
+            (
+                kind IS NULL
+                OR (kind='event' AND EXISTS(
+                    SELECT 1 FROM events source
+                    WHERE source.id=attachments.content_id
+                      AND source.profile_id=attachments.profile_id
+                      AND source.deleted_at IS NULL
+                ))
+                OR (kind='memory' AND EXISTS(
+                    SELECT 1 FROM memories source
+                    WHERE source.id=attachments.content_id
+                      AND source.profile_id=attachments.profile_id
+                      AND source.deleted_at IS NULL
+                ))
+                OR (kind='plan' AND EXISTS(
+                    SELECT 1 FROM plans source
+                    WHERE source.id=attachments.content_id
+                      AND source.profile_id=attachments.profile_id
+                      AND source.deleted_at IS NULL
+                ))
+            )
+        """
+        where = f"""
+            profile_id=?
+            AND timeline_at IS NOT NULL
+            AND timeline_at>=? AND timeline_at<?
+            AND {visible_source}
+        """
+        with self.connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM attachments WHERE {where}",
+                    (profile_id, start_at, end_at),
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"""
+                SELECT id, profile_id, kind, content_id, storage_kind, media_id,
+                       metadata_nonce, metadata_ciphertext,
+                       timeline_at, timeline_end_at, time_precision, time_source,
+                       time_confidence, timezone_offset, created_at, updated_at
+                FROM attachments
+                WHERE {where}
+                ORDER BY timeline_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (profile_id, start_at, end_at, limit, offset),
+            ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = decrypt_json(
+                master_key,
+                row["metadata_nonce"],
+                row["metadata_ciphertext"],
+                aad=self._aad(ATTACHMENT_META_AAD_PREFIX, row["id"]),
+            )
+            items.append(
+                {
+                    "id": row["id"],
+                    "profile_id": row["profile_id"],
+                    "kind": row["kind"],
+                    "content_id": row["content_id"],
+                    "storage_kind": row["storage_kind"],
+                    "media_id": row["media_id"],
+                    "timeline_at": row["timeline_at"],
+                    "timeline_end_at": row["timeline_end_at"],
+                    "time_precision": row["time_precision"],
+                    "time_source": row["time_source"],
+                    "time_confidence": row["time_confidence"],
+                    "timezone_offset": row["timezone_offset"],
+                    **metadata,
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+
+        next_offset = offset + len(items)
+        return {
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "next_offset": next_offset if next_offset < total else None,
+            "has_more": next_offset < total,
+        }
+
+    def list_attachment_timeline_minute_counts(
+        self,
+        *,
+        profile_id: str,
+        start_at: str,
+        end_at: str,
+    ) -> list[dict[str, Any]]:
+        """Return occupied minute buckets without decrypting attachment metadata."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT substr(timeline_at, 1, 16) AS minute_key, COUNT(*) AS total_count
+                FROM attachments
+                WHERE profile_id=?
+                  AND timeline_at>=? AND timeline_at<?
+                  AND time_precision IN ('minute', 'second')
+                GROUP BY minute_key
+                ORDER BY minute_key ASC
+                """,
+                (profile_id, start_at, end_at),
+            ).fetchall()
+        return [
+            {"period_key": str(row["minute_key"]), "total_count": int(row["total_count"] or 0)}
+            for row in rows
+            if row["minute_key"]
+        ]
+
+    def attachment_timeline_neighbor_days(
+        self,
+        *,
+        profile_id: str,
+        day_key: str,
+    ) -> dict[str, str | None]:
+        """Return nearest previous/next occupied day from the lightweight stats table."""
+        self.ensure_attachment_timeline_stats(profile_id=profile_id)
+        with self.connect() as connection:
+            previous = connection.execute(
+                """
+                SELECT period_key
+                FROM attachment_timeline_stats
+                WHERE profile_id=? AND level='day' AND total_count>0 AND period_key<?
+                ORDER BY period_key DESC
+                LIMIT 1
+                """,
+                (profile_id, day_key),
+            ).fetchone()
+            following = connection.execute(
+                """
+                SELECT period_key
+                FROM attachment_timeline_stats
+                WHERE profile_id=? AND level='day' AND total_count>0 AND period_key>?
+                ORDER BY period_key ASC
+                LIMIT 1
+                """,
+                (profile_id, day_key),
+            ).fetchone()
+        return {
+            "previous_date": str(previous["period_key"]) if previous else None,
+            "next_date": str(following["period_key"]) if following else None,
+        }
+
+    def attachment_timeline_backfill_status(self, *, profile_id: str) -> dict[str, int]:
+        """Return lightweight counts for the v0.0.10.2 timeline mirror backfill.
+
+        ``time_precision='unknown'`` marks a record that has already been examined
+        but still has no reliable date.  Those rows belong to the future
+        "时间待确认" bucket and must not be retried on every backfill pass.
+        """
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN timeline_at IS NOT NULL THEN 1 ELSE 0 END) AS indexed,
+                    SUM(CASE WHEN timeline_at IS NULL AND time_precision='unknown' THEN 1 ELSE 0 END) AS undated,
+                    SUM(CASE WHEN timeline_at IS NULL AND time_precision IS NULL THEN 1 ELSE 0 END) AS pending
+                FROM attachments
+                WHERE profile_id=?
+                """,
+                (profile_id,),
+            ).fetchone()
+        return {
+            "total": int(row["total"] or 0),
+            "indexed": int(row["indexed"] or 0),
+            "undated": int(row["undated"] or 0),
+            "pending": int(row["pending"] or 0),
+        }
+
+    def list_attachment_timeline_backfill_candidates(
+        self,
+        *,
+        profile_id: str,
+        limit: int = 32,
+        after_created_at: str | None = None,
+        after_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        """Return a bounded page of legacy attachment ids that still need indexing."""
+        limit = max(1, min(256, int(limit)))
+        params: list[Any] = [profile_id]
+        query = """
+            SELECT id, created_at
+            FROM attachments
+            WHERE profile_id=?
+              AND timeline_at IS NULL
+              AND time_precision IS NULL
+        """
+        if after_created_at is not None and after_id is not None:
+            query += " AND (created_at > ? OR (created_at = ? AND id > ?))"
+            params.extend([after_created_at, after_created_at, after_id])
+        query += " ORDER BY created_at ASC, id ASC LIMIT ?"
+        params.append(limit)
+        with self.connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [{"id": str(row["id"]), "created_at": str(row["created_at"])} for row in rows]
+
+    def sync_attachment_timeline_mirror(
+        self,
+        *,
+        profile_id: str,
+        attachment_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Mirror already-decrypted legacy metadata into queryable timeline columns.
+
+        This intentionally does not rewrite the encrypted metadata blob or modify
+        the attachment's user-visible ``updated_at`` timestamp.
+        """
+        timeline = self._attachment_timeline_columns(metadata)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE attachments
+                SET timeline_at=?, timeline_end_at=?, time_precision=?, time_source=?,
+                    time_confidence=?, timezone_offset=?
+                WHERE id=? AND profile_id=?
+                """,
+                (
+                    timeline["timeline_at"],
+                    timeline["timeline_end_at"],
+                    timeline["time_precision"],
+                    timeline["time_source"],
+                    timeline["time_confidence"],
+                    timeline["timezone_offset"],
+                    attachment_id,
+                    profile_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise DatabaseContentNotFound("附件不存在")
+        return timeline
+
+    def mark_attachment_timeline_unknown(
+        self,
+        *,
+        profile_id: str,
+        attachment_id: str,
+    ) -> None:
+        """Mark a successfully inspected record as having no reliable time."""
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE attachments
+                SET timeline_at=NULL,
+                    timeline_end_at=NULL,
+                    time_precision='unknown',
+                    time_source=COALESCE(time_source, 'undetermined'),
+                    time_confidence='unknown'
+                WHERE id=? AND profile_id=?
+                """,
+                (attachment_id, profile_id),
+            )
+            if cursor.rowcount != 1:
+                raise DatabaseContentNotFound("附件不存在")
+
+    def _ensure_material_scan_schema(self, connection: sqlite3.Connection) -> None:
+        """v11: encrypted local scan sources plus a lightweight incremental file index."""
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS material_scan_sources (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                config_nonce BLOB NOT NULL,
+                config_ciphertext BLOB NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_scan_started_at TEXT,
+                last_scan_completed_at TEXT,
+                FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS material_scan_files (
+                source_id TEXT NOT NULL,
+                path_hash TEXT NOT NULL,
+                file_identity TEXT,
+                size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+                mtime_ns INTEGER NOT NULL CHECK(mtime_ns >= 0),
+                attachment_id TEXT,
+                state TEXT NOT NULL CHECK(state IN ('imported','duplicate','missing','failed','ignored')),
+                last_seen_scan TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                imported_at TEXT,
+                updated_at TEXT NOT NULL,
+                error_code TEXT,
+                PRIMARY KEY(source_id, path_hash),
+                FOREIGN KEY(source_id) REFERENCES material_scan_sources(id) ON DELETE CASCADE,
+                FOREIGN KEY(attachment_id) REFERENCES attachments(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_material_scan_sources_profile
+            ON material_scan_sources(profile_id, enabled, created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_material_scan_files_identity
+            ON material_scan_files(source_id, file_identity)
+            WHERE file_identity IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_material_scan_files_attachment
+            ON material_scan_files(attachment_id)
+            WHERE attachment_id IS NOT NULL;
+            """
+        )
+
     def initialize_schema(self) -> None:
         """Create or migrate the encrypted repository to the latest additive schema."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,6 +1241,12 @@ class Database:
                     media_id TEXT,
                     metadata_nonce BLOB NOT NULL,
                     metadata_ciphertext BLOB NOT NULL,
+                    timeline_at TEXT,
+                    timeline_end_at TEXT,
+                    time_precision TEXT CHECK(time_precision IS NULL OR time_precision IN ('year','month','day','minute','second','unknown')),
+                    time_source TEXT,
+                    time_confidence TEXT CHECK(time_confidence IS NULL OR time_confidence IN ('high','medium','low','unknown')),
+                    timezone_offset TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
@@ -394,6 +1267,9 @@ class Database:
             )
             self._ensure_material_attachment_schema(connection)
             self._ensure_attachment_storage_schema(connection)
+            self._ensure_attachment_timeline_schema(connection)
+            self._ensure_attachment_timeline_stats_schema(connection)
+            self._ensure_material_scan_schema(connection)
             for table, date_column, _ in _CONTENT_TABLES.values():
                 connection.execute(
                     f"""
@@ -511,6 +1387,19 @@ class Database:
                 )
             counts["attachment"] = len(attachment_rows)
             verified_records += len(attachment_rows)
+
+            scan_source_rows = connection.execute(
+                "SELECT id, config_nonce, config_ciphertext FROM material_scan_sources"
+            ).fetchall() if schema_version >= 11 else []
+            for row in scan_source_rows:
+                decrypt_json(
+                    master_key,
+                    row["config_nonce"],
+                    row["config_ciphertext"],
+                    aad=self._aad(MATERIAL_SCAN_SOURCE_AAD_PREFIX, row["id"]),
+                )
+            counts["material_scan_source"] = len(scan_source_rows)
+            verified_records += len(scan_source_rows)
 
         return {
             "sqlite_quick_check": "ok",
@@ -1195,13 +2084,16 @@ class Database:
             metadata,
             aad=self._aad(ATTACHMENT_META_AAD_PREFIX, attachment_id),
         )
+        timeline = self._attachment_timeline_columns(metadata)
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO attachments(
                     id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
-                    metadata_nonce, metadata_ciphertext, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata_nonce, metadata_ciphertext, timeline_at, timeline_end_at,
+                    time_precision, time_source, time_confidence, timezone_offset,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attachment_id,
@@ -1213,6 +2105,12 @@ class Database:
                     media_id,
                     metadata_nonce,
                     metadata_ciphertext,
+                    timeline["timeline_at"],
+                    timeline["timeline_end_at"],
+                    timeline["time_precision"],
+                    timeline["time_source"],
+                    timeline["time_confidence"],
+                    timeline["timezone_offset"],
                     timestamp,
                     timestamp,
                 ),
@@ -1225,6 +2123,7 @@ class Database:
             "storage_kind": storage_kind,
             "file_nonce": file_nonce,
             "media_id": media_id,
+            **timeline,
             **metadata,
             "created_at": timestamp,
             "updated_at": timestamp,
@@ -1244,21 +2143,31 @@ class Database:
             metadata,
             aad=self._aad(ATTACHMENT_META_AAD_PREFIX, attachment_id),
         )
+        timeline = self._attachment_timeline_columns(metadata)
         with self.connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE attachments
-                SET metadata_nonce=?, metadata_ciphertext=?, updated_at=?
+                SET metadata_nonce=?, metadata_ciphertext=?,
+                    timeline_at=?, timeline_end_at=?, time_precision=?, time_source=?,
+                    time_confidence=?, timezone_offset=?, updated_at=?
                 WHERE id=? AND profile_id=?
                 """,
-                (metadata_nonce, metadata_ciphertext, timestamp, attachment_id, profile_id),
+                (
+                    metadata_nonce, metadata_ciphertext,
+                    timeline["timeline_at"], timeline["timeline_end_at"],
+                    timeline["time_precision"], timeline["time_source"],
+                    timeline["time_confidence"], timeline["timezone_offset"],
+                    timestamp, attachment_id, profile_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise DatabaseContentNotFound("附件不存在")
             row = connection.execute(
                 """
                 SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
-                       created_at, updated_at
+                       timeline_at, timeline_end_at, time_precision, time_source,
+                       time_confidence, timezone_offset, created_at, updated_at
                 FROM attachments
                 WHERE id=? AND profile_id=?
                 """,
@@ -1274,6 +2183,12 @@ class Database:
             "storage_kind": row["storage_kind"],
             "file_nonce": row["file_nonce"],
             "media_id": row["media_id"],
+            "timeline_at": row["timeline_at"],
+            "timeline_end_at": row["timeline_end_at"],
+            "time_precision": row["time_precision"],
+            "time_source": row["time_source"],
+            "time_confidence": row["time_confidence"],
+            "timezone_offset": row["timezone_offset"],
             **metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1320,7 +2235,9 @@ class Database:
             rows = connection.execute(
                 """
                 SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
-                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                       metadata_nonce, metadata_ciphertext, timeline_at, timeline_end_at,
+                       time_precision, time_source, time_confidence, timezone_offset,
+                       created_at, updated_at
                 FROM attachments
                 WHERE profile_id=? AND kind=? AND content_id=?
                 ORDER BY created_at ASC, id ASC
@@ -1344,6 +2261,12 @@ class Database:
                     "storage_kind": row["storage_kind"],
                     "file_nonce": row["file_nonce"],
                     "media_id": row["media_id"],
+                    "timeline_at": row["timeline_at"],
+                    "timeline_end_at": row["timeline_end_at"],
+                    "time_precision": row["time_precision"],
+                    "time_source": row["time_source"],
+                    "time_confidence": row["time_confidence"],
+                    "timezone_offset": row["timezone_offset"],
                     **metadata,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -1362,7 +2285,9 @@ class Database:
             row = connection.execute(
                 """
                 SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
-                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                       metadata_nonce, metadata_ciphertext, timeline_at, timeline_end_at,
+                       time_precision, time_source, time_confidence, timezone_offset,
+                       created_at, updated_at
                 FROM attachments
                 WHERE id=? AND profile_id=?
                 """,
@@ -1384,6 +2309,12 @@ class Database:
             "storage_kind": row["storage_kind"],
             "file_nonce": row["file_nonce"],
             "media_id": row["media_id"],
+            "timeline_at": row["timeline_at"],
+            "timeline_end_at": row["timeline_end_at"],
+            "time_precision": row["time_precision"],
+            "time_source": row["time_source"],
+            "time_confidence": row["time_confidence"],
+            "timezone_offset": row["timezone_offset"],
             **metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1462,7 +2393,9 @@ class Database:
         """
         query = """
             SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
-                   metadata_nonce, metadata_ciphertext, created_at, updated_at
+                   metadata_nonce, metadata_ciphertext, timeline_at, timeline_end_at,
+                   time_precision, time_source, time_confidence, timezone_offset,
+                   created_at, updated_at
             FROM attachments
         """
         params: tuple[Any, ...] = ()
@@ -1491,6 +2424,12 @@ class Database:
                         "storage_kind": row["storage_kind"],
                         "file_nonce": row["file_nonce"],
                         "media_id": row["media_id"],
+                        "timeline_at": row["timeline_at"],
+                        "timeline_end_at": row["timeline_end_at"],
+                        "time_precision": row["time_precision"],
+                        "time_source": row["time_source"],
+                        "time_confidence": row["time_confidence"],
+                        "timezone_offset": row["timezone_offset"],
                         **metadata,
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
@@ -1503,6 +2442,245 @@ class Database:
         profile_id: str | None = None,
     ) -> list[dict[str, Any]]:
         return list(self.iter_all_attachments(master_key, profile_id=profile_id))
+
+    def create_material_scan_source(
+        self,
+        master_key: bytes,
+        *,
+        source_id: str,
+        profile_id: str,
+        config: dict[str, Any],
+        timestamp: str,
+    ) -> dict[str, Any]:
+        nonce, ciphertext = encrypt_json(
+            master_key,
+            config,
+            aad=self._aad(MATERIAL_SCAN_SOURCE_AAD_PREFIX, source_id),
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO material_scan_sources(
+                    id, profile_id, config_nonce, config_ciphertext, enabled,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                (source_id, profile_id, nonce, ciphertext, timestamp, timestamp),
+            )
+        return {
+            "id": source_id, "profile_id": profile_id, **config,
+            "enabled": True, "created_at": timestamp, "updated_at": timestamp,
+            "last_scan_started_at": None, "last_scan_completed_at": None,
+            "file_counts": {},
+        }
+
+    def list_material_scan_sources(
+        self, master_key: bytes, *, profile_id: str
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, profile_id, config_nonce, config_ciphertext, enabled,
+                       created_at, updated_at, last_scan_started_at, last_scan_completed_at
+                FROM material_scan_sources
+                WHERE profile_id=?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (profile_id,),
+            ).fetchall()
+            count_rows = connection.execute(
+                """
+                SELECT f.source_id, f.state, COUNT(*) AS count
+                FROM material_scan_files f
+                JOIN material_scan_sources s ON s.id=f.source_id
+                WHERE s.profile_id=?
+                GROUP BY f.source_id, f.state
+                """,
+                (profile_id,),
+            ).fetchall()
+        counts: dict[str, dict[str, int]] = {}
+        for row in count_rows:
+            counts.setdefault(row["source_id"], {})[row["state"]] = int(row["count"])
+        values: list[dict[str, Any]] = []
+        for row in rows:
+            config = decrypt_json(
+                master_key,
+                row["config_nonce"],
+                row["config_ciphertext"],
+                aad=self._aad(MATERIAL_SCAN_SOURCE_AAD_PREFIX, row["id"]),
+            )
+            values.append(
+                {
+                    "id": row["id"],
+                    "profile_id": row["profile_id"],
+                    **config,
+                    "enabled": bool(row["enabled"]),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "last_scan_started_at": row["last_scan_started_at"],
+                    "last_scan_completed_at": row["last_scan_completed_at"],
+                    "file_counts": counts.get(row["id"], {}),
+                }
+            )
+        return values
+
+    def get_material_scan_source(
+        self, master_key: bytes, *, profile_id: str, source_id: str
+    ) -> dict[str, Any]:
+        values = self.list_material_scan_sources(master_key, profile_id=profile_id)
+        for value in values:
+            if value["id"] == source_id:
+                return value
+        raise DatabaseContentNotFound("扫描源不存在")
+
+    def set_material_scan_source_enabled(
+        self, *, profile_id: str, source_id: str, enabled: bool, timestamp: str
+    ) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE material_scan_sources SET enabled=?, updated_at=?
+                WHERE id=? AND profile_id=?
+                """,
+                (1 if enabled else 0, timestamp, source_id, profile_id),
+            )
+            if cursor.rowcount != 1:
+                raise DatabaseContentNotFound("扫描源不存在")
+
+    def delete_material_scan_source(self, *, profile_id: str, source_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM material_scan_sources WHERE id=? AND profile_id=?",
+                (source_id, profile_id),
+            )
+            if cursor.rowcount != 1:
+                raise DatabaseContentNotFound("扫描源不存在")
+
+    def mark_material_scan_source_started(
+        self, *, profile_id: str, source_id: str, timestamp: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE material_scan_sources
+                SET last_scan_started_at=?, updated_at=?
+                WHERE id=? AND profile_id=?
+                """,
+                (timestamp, timestamp, source_id, profile_id),
+            )
+
+    def mark_material_scan_source_completed(
+        self, *, profile_id: str, source_id: str, timestamp: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE material_scan_sources
+                SET last_scan_completed_at=?, updated_at=?
+                WHERE id=? AND profile_id=?
+                """,
+                (timestamp, timestamp, source_id, profile_id),
+            )
+
+    def get_material_scan_file(
+        self, *, source_id: str, path_hash: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT source_id, path_hash, file_identity, size_bytes, mtime_ns,
+                       attachment_id, state, last_seen_scan, last_seen_at, imported_at,
+                       updated_at, error_code
+                FROM material_scan_files
+                WHERE source_id=? AND path_hash=?
+                """,
+                (source_id, path_hash),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def find_material_scan_file_by_identity(
+        self, *, source_id: str, file_identity: str
+    ) -> dict[str, Any] | None:
+        if not file_identity:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT source_id, path_hash, file_identity, size_bytes, mtime_ns,
+                       attachment_id, state, last_seen_scan, last_seen_at, imported_at,
+                       updated_at, error_code
+                FROM material_scan_files
+                WHERE source_id=? AND file_identity=?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (source_id, file_identity),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def upsert_material_scan_file(
+        self,
+        *,
+        source_id: str,
+        path_hash: str,
+        file_identity: str | None,
+        size_bytes: int,
+        mtime_ns: int,
+        attachment_id: str | None,
+        state: str,
+        scan_token: str,
+        timestamp: str,
+        imported_at: str | None = None,
+        error_code: str | None = None,
+        previous_path_hash: str | None = None,
+    ) -> None:
+        allowed = {"imported", "duplicate", "missing", "failed", "ignored"}
+        if state not in allowed:
+            raise ValueError("扫描文件状态无效")
+        with self.connect() as connection:
+            if previous_path_hash and previous_path_hash != path_hash:
+                connection.execute(
+                    "DELETE FROM material_scan_files WHERE source_id=? AND path_hash=?",
+                    (source_id, previous_path_hash),
+                )
+            connection.execute(
+                """
+                INSERT INTO material_scan_files(
+                    source_id, path_hash, file_identity, size_bytes, mtime_ns,
+                    attachment_id, state, last_seen_scan, last_seen_at, imported_at,
+                    updated_at, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, path_hash) DO UPDATE SET
+                    file_identity=excluded.file_identity,
+                    size_bytes=excluded.size_bytes,
+                    mtime_ns=excluded.mtime_ns,
+                    attachment_id=excluded.attachment_id,
+                    state=excluded.state,
+                    last_seen_scan=excluded.last_seen_scan,
+                    last_seen_at=excluded.last_seen_at,
+                    imported_at=COALESCE(excluded.imported_at, material_scan_files.imported_at),
+                    updated_at=excluded.updated_at,
+                    error_code=excluded.error_code
+                """,
+                (
+                    source_id, path_hash, file_identity, int(size_bytes), int(mtime_ns),
+                    attachment_id, state, scan_token, timestamp, imported_at, timestamp, error_code,
+                ),
+            )
+
+    def mark_unseen_material_scan_files_missing(
+        self, *, source_id: str, scan_token: str, timestamp: str
+    ) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE material_scan_files
+                SET state='missing', updated_at=?, error_code=NULL
+                WHERE source_id=? AND last_seen_scan<>? AND state<>'missing'
+                """,
+                (timestamp, source_id, scan_token),
+            )
+            return max(0, int(cursor.rowcount or 0))
 
     def create_event(
         self,
@@ -2158,6 +3336,26 @@ class Database:
                     for map_name, map_key in target_maps:
                         state = result[map_name].setdefault(map_key, self._empty_state())
                         state[flag] = True
+
+        # Material presence is already mirrored into the lightweight timeline
+        # statistics table.  Use it directly here instead of decrypting every
+        # attachment metadata row on each home-page load.
+        material_ranges = (
+            ("dates", "day", start_date, end_date),
+            ("months", "month", start_date[:7], end_date[:7]),
+            ("years", "year", start_date[:4], end_date[:4]),
+        )
+        for map_name, level, start_key, end_key in material_ranges:
+            for item in self.list_attachment_timeline_stats(
+                profile_id=profile_id,
+                level=level,
+                start_key=start_key,
+                end_key=end_key,
+            ):
+                if int(item.get("total_count") or 0) <= 0:
+                    continue
+                state = result[map_name].setdefault(item["period_key"], self._empty_state())
+                state["has_material"] = True
         return result
 
 

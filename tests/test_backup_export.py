@@ -103,8 +103,8 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
         assert manifest["repository"]["backup_scope"] == "core"
         assert manifest["repository"]["preview_policy"] == "embedded-core"
         assert manifest["repository"]["derived_media_policy"] == "regenerable-excluded"
-        assert manifest["producer"]["version"] == "0.0.9"
-        assert manifest["repository"]["schema_version"] == 8
+        assert manifest["producer"]["version"] == "0.0.10"
+        assert manifest["repository"]["schema_version"] == 11
         assert manifest["integrity"]["encrypted_records_verified"] == 3
         for entry in manifest["files"]:
             value = archive.read(entry["path"])

@@ -7213,6 +7213,17 @@ body.attachment-preview-open {
   gap: 9px;
 }
 
+.material-section-load-more-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 10px;
+}
+
+.material-section-load-more {
+  min-width: 150px;
+  padding: 7px 14px;
+}
+
 .material-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -9266,4 +9277,1985 @@ body.video-player-open {
   min-height: 30px;
   padding: 0.3rem 0.58rem;
   font-size: 0.78rem;
+}
+
+/* LifeGraph v0.0.10.2：旧资料时间索引后台回填 */
+.material-timeline-backfill-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 260px) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 11px 13px;
+  background: rgba(247, 250, 248, .86);
+}
+.material-timeline-backfill-panel.hidden { display: none; }
+.material-timeline-backfill-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.material-timeline-backfill-copy span {
+  color: var(--muted);
+  font-size: .86rem;
+  overflow-wrap: anywhere;
+}
+.material-timeline-backfill-panel progress {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent);
+}
+.material-timeline-backfill-panel .ghost-button {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .material-timeline-backfill-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* LifeGraph v0.0.10.4：资料中心横向年月日时间轴 */
+.material-center-form.is-timeline-axis-mode {
+  opacity: 0.58;
+}
+
+.material-center-form.is-timeline-axis-mode::after {
+  content: "时间轴当前按全部已建立时间索引的资料统计；筛选请切换到列表视图";
+  flex: 1 1 100%;
+  margin-top: -0.1rem;
+  color: var(--text-muted, #786f64);
+  font-size: 0.75rem;
+}
+
+.material-center-results.is-axis-view {
+  overflow-x: hidden;
+}
+
+.material-time-axis-view {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.65rem 0.35rem 1rem;
+}
+
+.material-time-axis-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 32px;
+  color: var(--text-muted, #786f64);
+  font-size: 0.84rem;
+}
+
+.material-time-axis-breadcrumb-button {
+  border: 0;
+  padding: 0.18rem 0.28rem;
+  border-radius: 6px;
+  background: transparent;
+  color: #3f6654;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.material-time-axis-breadcrumb-button:hover:not(:disabled),
+.material-time-axis-breadcrumb-button:focus-visible:not(:disabled) {
+  background: rgba(63, 102, 84, 0.08);
+}
+
+.material-time-axis-breadcrumb-button:disabled {
+  color: #3e4f46;
+  cursor: default;
+  opacity: 1;
+}
+
+.material-time-axis-note {
+  margin: -0.35rem 0 0;
+  color: var(--text-muted, #786f64);
+  font-size: 0.76rem;
+}
+
+.material-time-axis-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.8rem 0 0.4rem;
+}
+
+.material-time-axis-stage.is-year {
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+}
+
+.material-time-axis-track {
+  --axis-items: 12;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--axis-items), minmax(0, 1fr));
+  min-width: 0;
+  min-height: 112px;
+  padding: 0 0.2rem;
+}
+
+.material-time-axis-track::before {
+  content: "";
+  position: absolute;
+  left: 1.2rem;
+  right: 1.2rem;
+  top: 39px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(61, 94, 79, 0.28);
+}
+
+.material-time-axis-tick {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 108px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #5d5a52;
+  font: inherit;
+  cursor: pointer;
+}
+
+.material-time-axis-mark {
+  position: absolute;
+  top: 31px;
+  left: 50%;
+  width: 2px;
+  height: 18px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(61, 94, 79, 0.42);
+}
+
+.material-time-axis-density {
+  position: absolute;
+  top: 33px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fbfaf6;
+  border-radius: 50%;
+  background: rgba(61, 94, 79, 0.28);
+  box-shadow: 0 0 0 1px rgba(61, 94, 79, 0.18);
+}
+
+.material-time-axis-tick.is-medium .material-time-axis-density {
+  width: 13px;
+  height: 13px;
+  background: rgba(61, 94, 79, 0.58);
+}
+
+.material-time-axis-tick.is-high .material-time-axis-density {
+  width: 17px;
+  height: 17px;
+  background: rgba(61, 94, 79, 0.82);
+}
+
+.material-time-axis-tick.is-empty .material-time-axis-density {
+  width: 6px;
+  height: 6px;
+  border-width: 1px;
+  background: #fbfaf6;
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-density {
+  width: 20px;
+  height: 20px;
+  border-width: 3px;
+  background: #3f6654;
+  box-shadow: 0 0 0 4px rgba(63, 102, 84, 0.12);
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-mark {
+  top: 28px;
+  height: 24px;
+  background: #3f6654;
+}
+
+.material-time-axis-label {
+  position: absolute;
+  top: 57px;
+  left: 50%;
+  max-width: 100%;
+  transform: translateX(-50%);
+  color: #4f5d55;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-label {
+  color: #315c4d;
+  font-weight: 900;
+}
+
+.material-time-axis-count {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  max-width: calc(100% - 0.2rem);
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: var(--text-muted, #786f64);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-time-axis-page-button {
+  align-self: start;
+  width: 36px;
+  height: 44px;
+  margin-top: 18px;
+  border: 1px solid rgba(63, 102, 84, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #3f6654;
+  font: inherit;
+  font-size: 1.45rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.material-time-axis-page-button:hover:not(:disabled),
+.material-time-axis-page-button:focus-visible:not(:disabled) {
+  border-color: rgba(63, 102, 84, 0.42);
+  background: rgba(239, 245, 241, 0.96);
+}
+
+.material-time-axis-page-button:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.material-time-axis-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 52px;
+  margin-top: 0.15rem;
+  padding: 0.75rem 0.85rem;
+  border-top: 1px solid rgba(116, 96, 62, 0.12);
+}
+
+.material-time-axis-hint {
+  color: var(--text-muted, #786f64);
+  font-size: 0.82rem;
+}
+
+.material-time-axis-selection {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.material-time-axis-selection strong {
+  color: #365b4b;
+  font-size: 0.94rem;
+}
+
+.material-time-axis-selection span {
+  color: var(--text-muted, #786f64);
+  font-size: 0.8rem;
+}
+
+.material-time-axis-open-day {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 820px) {
+  .material-time-axis-view {
+    padding-inline: 0.1rem;
+  }
+
+  .material-time-axis-stage.is-year {
+    grid-template-columns: 34px minmax(0, 1fr) 34px;
+  }
+
+  .material-time-axis-page-button {
+    width: 32px;
+  }
+
+  .material-time-axis-track::before {
+    left: 0.8rem;
+    right: 0.8rem;
+  }
+
+  .material-time-axis-label {
+    font-size: 0.72rem;
+  }
+
+  .material-time-axis-count {
+    font-size: 0.64rem;
+  }
+
+  .material-time-axis-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .material-time-axis-open-day {
+    width: 100%;
+  }
+}
+
+/* LifeGraph v0.0.10.5：选中日期向下展开纵向日内时间轴 */
+.material-time-axis-stage.is-day.has-day-detail {
+  position: relative;
+  padding-bottom: 0;
+}
+
+.material-day-time-axis {
+  --day-axis-x: 50%;
+  position: relative;
+  z-index: 0;
+  min-width: 0;
+  margin-top: -72px;
+  padding: 78px 0.2rem 0;
+}
+
+.material-day-time-axis::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 24px;
+  left: var(--day-axis-x);
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(63, 102, 84, 0.38);
+}
+
+.material-day-time-cap {
+  position: relative;
+  z-index: 1;
+  width: max-content;
+  margin-left: var(--day-axis-x);
+  transform: translateX(-50%);
+  padding: 0.15rem 0.38rem;
+  border-radius: 999px;
+  background: #fbfaf6;
+  color: #456154;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.material-day-time-cap.is-start {
+  margin-bottom: 0.45rem;
+}
+
+.material-day-time-cap.is-end {
+  margin-top: 0.5rem;
+}
+
+.material-day-time-hour-marker {
+  position: relative;
+  z-index: 1;
+  min-height: 32px;
+}
+
+.material-day-time-hour-marker::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--day-axis-x);
+  width: 9px;
+  height: 9px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fbfaf6;
+  border-radius: 50%;
+  background: #6f8b7e;
+  box-shadow: 0 0 0 1px rgba(63, 102, 84, 0.18);
+}
+
+.material-day-time-hour-marker span {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--day-axis-x) + 14px);
+  transform: translateY(-50%);
+  color: #6b756f;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-hour-marker span {
+  right: calc(100% - var(--day-axis-x) + 14px);
+  left: auto;
+  text-align: right;
+}
+
+.material-day-time-entry {
+  position: relative;
+  z-index: 1;
+  min-height: 72px;
+  padding: 0.3rem 0;
+}
+
+.material-day-time-entry::after {
+  content: "";
+  position: absolute;
+  top: 26px;
+  left: var(--day-axis-x);
+  width: 22px;
+  height: 1px;
+  background: rgba(63, 102, 84, 0.28);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-entry::after {
+  width: 22px;
+  transform: translateX(-22px);
+}
+
+.material-day-time-point {
+  position: absolute;
+  z-index: 2;
+  top: 21px;
+  left: var(--day-axis-x);
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%);
+  border: 2px solid #fbfaf6;
+  border-radius: 50%;
+  background: #3f6654;
+  box-shadow: 0 0 0 1px rgba(63, 102, 84, 0.2);
+}
+
+.material-day-time-point.is-video {
+  border-radius: 3px;
+}
+
+.material-day-time-point.is-document {
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 2px;
+}
+
+.material-day-time-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.16rem 0.65rem;
+  width: calc(100% - var(--day-axis-x) - 34px);
+  margin-left: calc(var(--day-axis-x) + 28px);
+  padding: 0.48rem 0.6rem;
+  border: 1px solid rgba(116, 96, 62, 0.13);
+  border-radius: 10px;
+  background: rgba(251, 250, 246, 0.88);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-card {
+  width: calc(var(--day-axis-x) - 34px);
+  margin-right: calc(100% - var(--day-axis-x) + 28px);
+  margin-left: 0;
+}
+
+.material-day-time-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.material-day-time-value {
+  color: #315c4d;
+  font-size: 0.76rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.material-day-time-kind {
+  overflow: hidden;
+  color: var(--text-muted, #786f64);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-day-time-filename {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #3e4f46;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-day-time-meta {
+  grid-column: 1;
+  overflow: hidden;
+  color: var(--text-muted, #786f64);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-day-time-action {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+  white-space: nowrap;
+}
+
+.material-day-time-unknown {
+  position: relative;
+  z-index: 2;
+  width: calc(100% - var(--day-axis-x) - 34px);
+  margin: 0.25rem 0 0.65rem calc(var(--day-axis-x) + 28px);
+  padding: 0.55rem 0.65rem;
+  border: 1px dashed rgba(116, 96, 62, 0.2);
+  border-radius: 10px;
+  background: rgba(247, 245, 239, 0.78);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-unknown {
+  width: calc(var(--day-axis-x) - 34px);
+  margin-right: calc(100% - var(--day-axis-x) + 28px);
+  margin-left: 0;
+}
+
+.material-day-time-unknown > strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #71695f;
+  font-size: 0.74rem;
+}
+
+.material-day-time-unknown-list .material-day-time-entry {
+  min-height: 64px;
+}
+
+.material-day-time-empty {
+  position: relative;
+  z-index: 2;
+  width: calc(100% - var(--day-axis-x) - 34px);
+  margin: 0.8rem 0 0.8rem calc(var(--day-axis-x) + 28px);
+  padding: 0.75rem;
+  border: 1px dashed rgba(116, 96, 62, 0.2);
+  border-radius: 10px;
+  background: rgba(251, 250, 246, 0.82);
+  color: var(--text-muted, #786f64);
+  font-size: 0.78rem;
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-empty {
+  width: calc(var(--day-axis-x) - 34px);
+  margin-right: calc(100% - var(--day-axis-x) + 28px);
+  margin-left: 0;
+}
+
+.material-day-time-more {
+  position: relative;
+  z-index: 2;
+  margin: 0.65rem 0 0;
+  color: var(--text-muted, #786f64);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+@media (max-width: 820px) {
+  .material-day-time-axis {
+    margin-top: -66px;
+    padding-top: 72px;
+  }
+
+  .material-day-time-card,
+  .material-day-time-unknown,
+  .material-day-time-empty,
+  .material-day-time-axis.is-left-facing .material-day-time-card,
+  .material-day-time-axis.is-left-facing .material-day-time-unknown,
+  .material-day-time-axis.is-left-facing .material-day-time-empty {
+    width: auto;
+    margin-right: 0.3rem;
+    margin-left: 0.3rem;
+  }
+
+  .material-day-time-entry {
+    padding-top: 1.5rem;
+  }
+
+  .material-day-time-entry::after {
+    display: none;
+  }
+
+  .material-day-time-point {
+    top: 8px;
+  }
+
+  .material-day-time-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+.material-day-time-entry.is-imprecise::after,
+.material-day-time-entry.is-imprecise .material-day-time-point {
+  display: none;
+}
+
+.material-day-time-entry.is-imprecise .material-day-time-card,
+.material-day-time-axis.is-left-facing .material-day-time-entry.is-imprecise .material-day-time-card {
+  width: 100%;
+  margin: 0;
+}
+
+/* LifeGraph v0.0.10.5.1：资料中心模式标签页 + 年/月/日三层常驻时间轴 */
+.material-center-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 0 0 auto;
+  margin: 0.65rem 0 0;
+  border: 1px solid rgba(116, 96, 62, 0.14);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(247, 245, 239, 0.72);
+}
+
+.material-center-mode-tab {
+  min-height: 42px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--text-muted, #786f64);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.material-center-mode-tab + .material-center-mode-tab {
+  border-left: 1px solid rgba(116, 96, 62, 0.12);
+}
+
+.material-center-mode-tab:hover,
+.material-center-mode-tab:focus-visible {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.material-center-mode-tab.is-active {
+  border-bottom-color: #3f6654;
+  background: rgba(63, 102, 84, 0.08);
+  color: #315c4d;
+}
+
+.material-center-results-heading {
+  min-height: 38px;
+}
+
+.material-center-results-heading > strong {
+  margin-right: auto;
+}
+
+.material-time-axis-view {
+  gap: 0.65rem;
+  padding-top: 0.4rem;
+}
+
+.material-time-axis-note {
+  margin: 0;
+  padding: 0 0.15rem;
+}
+
+.material-time-axis-stack {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.25rem 0 0.55rem;
+  border-bottom: 1px solid rgba(116, 96, 62, 0.11);
+}
+
+.material-time-axis-row,
+.material-time-axis-detail-row {
+  display: grid;
+  grid-template-columns: 34px 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  min-width: 0;
+  column-gap: 0.25rem;
+}
+
+.material-time-axis-row {
+  --axis-color: #806746;
+  --axis-color-soft: rgba(128, 103, 70, 0.14);
+}
+
+.material-time-axis-row.is-month {
+  --axis-color: #557963;
+  --axis-color-soft: rgba(85, 121, 99, 0.14);
+}
+
+.material-time-axis-row.is-day {
+  --axis-color: #637c98;
+  --axis-color-soft: rgba(99, 124, 152, 0.14);
+}
+
+.material-time-axis-row-name {
+  align-self: center;
+  justify-self: center;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--axis-color-soft);
+  color: var(--axis-color);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.material-time-axis-page-slot {
+  min-width: 0;
+  min-height: 36px;
+  display: grid;
+  place-items: center;
+}
+
+.material-time-axis-row .material-time-axis-page-button {
+  align-self: center;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  border-color: color-mix(in srgb, var(--axis-color) 30%, transparent);
+  color: var(--axis-color);
+  font-size: 1.25rem;
+}
+
+.material-time-axis-track {
+  --axis-items: 12;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--axis-items), minmax(0, 1fr));
+  min-width: 0;
+  min-height: 58px;
+  isolation: isolate;
+}
+
+.material-time-axis-track::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 25px;
+  right: 0;
+  left: 0;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--axis-color);
+  opacity: 0.62;
+}
+
+.material-time-axis-tick {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 58px;
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--axis-color) 24%, transparent);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.material-time-axis-tick:last-child {
+  border-right: 1px solid color-mix(in srgb, var(--axis-color) 24%, transparent);
+}
+
+.material-time-axis-tick:hover,
+.material-time-axis-tick:focus-visible {
+  background: var(--axis-color-soft);
+}
+
+.material-time-axis-tick.is-selected {
+  background: var(--axis-color-soft);
+}
+
+.material-time-axis-label {
+  position: absolute;
+  z-index: 3;
+  top: 18px;
+  left: 50%;
+  max-width: calc(100% - 2px);
+  transform: translateX(-50%);
+  padding: 0 0.18rem;
+  border-radius: 4px;
+  background: rgba(251, 250, 246, 0.94);
+  color: var(--axis-color);
+  font-size: 0.72rem;
+  font-weight: 850;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.material-time-axis-row.is-year .material-time-axis-label {
+  font-size: 0.74rem;
+}
+
+.material-time-axis-row.is-day .material-time-axis-label {
+  padding-inline: 0.1rem;
+  font-size: 0.66rem;
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-label {
+  background: var(--axis-color);
+  color: #fffdf8;
+  font-weight: 900;
+}
+
+.material-time-axis-density {
+  position: absolute;
+  z-index: 4;
+  top: 38px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #fbfaf6;
+  border-radius: 50%;
+  background: var(--axis-color);
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+.material-time-axis-tick.is-medium .material-time-axis-density {
+  width: 9px;
+  height: 9px;
+  background: var(--axis-color);
+  opacity: 0.72;
+}
+
+.material-time-axis-tick.is-high .material-time-axis-density {
+  width: 12px;
+  height: 12px;
+  background: var(--axis-color);
+  opacity: 0.95;
+}
+
+.material-time-axis-tick.is-empty .material-time-axis-density {
+  width: 4px;
+  height: 4px;
+  border: 0;
+  background: var(--axis-color);
+  opacity: 0.18;
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-density {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+  background: var(--axis-color);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--axis-color-soft);
+}
+
+.material-time-axis-count {
+  position: absolute;
+  top: 45px;
+  left: 50%;
+  max-width: calc(100% - 2px);
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: color-mix(in srgb, var(--axis-color) 82%, #4e473f);
+  font-size: 0.62rem;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-time-axis-row.is-day .material-time-axis-count {
+  display: none;
+}
+
+.material-time-axis-detail-row {
+  align-items: start;
+  margin-top: -0.5rem;
+}
+
+.material-time-axis-detail-host {
+  min-width: 0;
+}
+
+.material-time-axis-detail-host .material-day-time-axis {
+  margin-top: 0;
+  padding-top: 34px;
+}
+
+.material-time-axis-detail-host .material-day-time-axis::before {
+  top: -16px;
+  background: rgba(99, 124, 152, 0.46);
+}
+
+.material-time-axis-detail-host .material-day-time-cap,
+.material-time-axis-detail-host .material-day-time-value {
+  color: #536d88;
+}
+
+.material-time-axis-detail-host .material-day-time-hour-marker::before,
+.material-time-axis-detail-host .material-day-time-point {
+  background: #637c98;
+  box-shadow: 0 0 0 1px rgba(99, 124, 152, 0.2);
+}
+
+.material-time-axis-detail-host .material-day-time-entry::after {
+  background: rgba(99, 124, 152, 0.3);
+}
+
+@media (max-width: 820px) {
+  .material-center-mode-tab {
+    min-height: 40px;
+    font-size: 0.84rem;
+  }
+
+  .material-time-axis-row,
+  .material-time-axis-detail-row {
+    grid-template-columns: 26px 30px minmax(0, 1fr) 30px;
+    column-gap: 0.12rem;
+  }
+
+  .material-time-axis-row-name {
+    width: 23px;
+    height: 23px;
+    font-size: 0.66rem;
+  }
+
+  .material-time-axis-row .material-time-axis-page-button {
+    width: 28px;
+    height: 28px;
+  }
+
+  .material-time-axis-label,
+  .material-time-axis-row.is-year .material-time-axis-label {
+    font-size: 0.62rem;
+  }
+
+  .material-time-axis-row.is-day .material-time-axis-label {
+    font-size: 0.54rem;
+  }
+
+  .material-time-axis-row.is-month .material-time-axis-count,
+  .material-time-axis-row.is-day .material-time-axis-count {
+    display: none;
+  }
+
+  .material-time-axis-detail-host .material-day-time-axis {
+    padding-top: 30px;
+  }
+}
+
+/* 标签页加入后，资料中心采用纵向弹性布局，确保结果区始终占用剩余空间。 */
+.material-center-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.material-center-results-section {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.material-time-axis-row.is-year {
+  --axis-color: #806746;
+  --axis-color-soft: rgba(128, 103, 70, 0.14);
+}
+
+/* LifeGraph v0.0.10.5.2：年月日三层时间轴紧凑化 */
+.material-time-axis-stack {
+  gap: 0.12rem;
+  padding: 0.08rem 0 0.22rem;
+}
+
+.material-time-axis-row,
+.material-time-axis-detail-row {
+  grid-template-columns: 30px 34px minmax(0, 1fr) 34px;
+  column-gap: 0.16rem;
+}
+
+.material-time-axis-row-name {
+  width: 23px;
+  height: 23px;
+  font-size: 0.68rem;
+}
+
+.material-time-axis-page-slot {
+  min-height: 30px;
+}
+
+.material-time-axis-row .material-time-axis-page-button {
+  width: 28px;
+  height: 28px;
+  font-size: 1.08rem;
+}
+
+.material-time-axis-track,
+.material-time-axis-tick {
+  min-height: 36px;
+}
+
+.material-time-axis-track::before {
+  top: 15px;
+  height: 5px;
+  opacity: 0.68;
+}
+
+.material-time-axis-row.is-year .material-time-axis-track::before {
+  height: 6px;
+}
+
+.material-time-axis-tick {
+  border-left-color: color-mix(in srgb, var(--axis-color) 18%, transparent);
+}
+
+.material-time-axis-tick:last-child {
+  border-right-color: color-mix(in srgb, var(--axis-color) 18%, transparent);
+}
+
+.material-time-axis-tick:hover:not(:disabled),
+.material-time-axis-tick:focus-visible:not(:disabled),
+.material-time-axis-tick.is-selected {
+  background: var(--axis-color-soft);
+}
+
+.material-time-axis-tick:disabled,
+.material-time-axis-tick.is-empty {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.material-time-axis-tick:disabled:hover,
+.material-time-axis-tick:disabled:focus-visible {
+  background: transparent;
+}
+
+.material-time-axis-label,
+.material-time-axis-row.is-year .material-time-axis-label,
+.material-time-axis-row.is-day .material-time-axis-label {
+  top: 8px;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.08rem;
+  max-width: none;
+  padding: 0 0.12rem;
+  background: rgba(251, 250, 246, 0.92);
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.material-time-axis-row.is-year .material-time-axis-label {
+  font-size: 0.7rem;
+}
+
+.material-time-axis-row.is-day .material-time-axis-label {
+  font-size: 0.61rem;
+}
+
+.material-time-axis-inline-count {
+  font-size: 0.82em;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.84;
+}
+
+.material-time-axis-tick:disabled .material-time-axis-label,
+.material-time-axis-tick.is-empty .material-time-axis-label {
+  color: color-mix(in srgb, var(--axis-color) 58%, #a8a096);
+  background: rgba(251, 250, 246, 0.7);
+  font-weight: 700;
+}
+
+.material-time-axis-density,
+.material-time-axis-count {
+  display: none !important;
+}
+
+.material-time-axis-detail-row {
+  margin-top: -0.12rem;
+}
+
+.material-time-axis-detail-host .material-day-time-axis {
+  padding-top: 24px;
+}
+
+.material-time-axis-detail-host .material-day-time-axis::before {
+  top: -10px;
+}
+
+@media (max-width: 820px) {
+  .material-time-axis-stack {
+    gap: 0.08rem;
+  }
+
+  .material-time-axis-row,
+  .material-time-axis-detail-row {
+    grid-template-columns: 24px 28px minmax(0, 1fr) 28px;
+    column-gap: 0.08rem;
+  }
+
+  .material-time-axis-row-name {
+    width: 20px;
+    height: 20px;
+    font-size: 0.61rem;
+  }
+
+  .material-time-axis-page-slot {
+    min-height: 28px;
+  }
+
+  .material-time-axis-row .material-time-axis-page-button {
+    width: 25px;
+    height: 25px;
+  }
+
+  .material-time-axis-track,
+  .material-time-axis-tick {
+    min-height: 32px;
+  }
+
+  .material-time-axis-track::before {
+    top: 13px;
+    height: 4px;
+  }
+
+  .material-time-axis-row.is-year .material-time-axis-track::before {
+    height: 5px;
+  }
+
+  .material-time-axis-label,
+  .material-time-axis-row.is-year .material-time-axis-label {
+    top: 7px;
+    font-size: 0.58rem;
+  }
+
+  .material-time-axis-row.is-day .material-time-axis-label {
+    font-size: 0.5rem;
+  }
+
+  .material-time-axis-inline-count {
+    font-size: 0.75em;
+  }
+
+  .material-time-axis-detail-host .material-day-time-axis {
+    padding-top: 20px;
+  }
+}
+
+/* LifeGraph v0.0.10.5.3：三层分段色带时间轴 + 紧凑日内资料条 */
+/* 横轴不再是一根细线穿过文字：每个时间单位自身就是一段连续的时间色带。 */
+.material-time-axis-track,
+.material-time-axis-tick {
+  min-height: 30px;
+}
+
+.material-time-axis-track {
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--axis-color) 8%, transparent);
+}
+
+.material-time-axis-track::before {
+  display: none;
+}
+
+.material-time-axis-tick {
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--axis-color) 31%, #fbfaf6);
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.material-time-axis-tick.is-medium {
+  background: color-mix(in srgb, var(--axis-color) 45%, #fbfaf6);
+}
+
+.material-time-axis-tick.is-high {
+  background: color-mix(in srgb, var(--axis-color) 61%, #fbfaf6);
+}
+
+.material-time-axis-tick:hover:not(:disabled),
+.material-time-axis-tick:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--axis-color) 72%, #fbfaf6);
+}
+
+.material-time-axis-tick.is-selected,
+.material-time-axis-tick.is-selected:hover,
+.material-time-axis-tick.is-selected:focus-visible {
+  background: var(--axis-color);
+  box-shadow: inset 0 0 0 2px rgba(255, 253, 248, 0.42);
+}
+
+.material-time-axis-tick:disabled,
+.material-time-axis-tick.is-empty {
+  opacity: 1;
+  background: color-mix(in srgb, var(--axis-color) 7%, #fbfaf6);
+}
+
+.material-time-axis-tick:disabled:hover,
+.material-time-axis-tick:disabled:focus-visible {
+  background: color-mix(in srgb, var(--axis-color) 7%, #fbfaf6);
+}
+
+.material-time-axis-label,
+.material-time-axis-row.is-year .material-time-axis-label,
+.material-time-axis-row.is-day .material-time-axis-label {
+  position: static;
+  max-width: calc(100% - 2px);
+  transform: none;
+  padding: 0 0.08rem;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--axis-color) 82%, #342f29);
+  font-size: 0.68rem;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.material-time-axis-row.is-year .material-time-axis-label {
+  font-size: 0.7rem;
+}
+
+.material-time-axis-row.is-day .material-time-axis-label {
+  font-size: 0.61rem;
+}
+
+.material-time-axis-inline-count {
+  font-size: 0.72em;
+  font-weight: 800;
+  opacity: 0.9;
+}
+
+.material-time-axis-tick.is-selected .material-time-axis-label,
+.material-time-axis-tick.is-selected .material-time-axis-inline-count {
+  color: #fffdf8;
+  opacity: 1;
+}
+
+.material-time-axis-tick:disabled .material-time-axis-label,
+.material-time-axis-tick.is-empty .material-time-axis-label {
+  background: transparent;
+  color: color-mix(in srgb, var(--axis-color) 30%, #b7afa5);
+  font-weight: 650;
+}
+
+/* 日内纵轴保持轻量：资料从大卡片收成单行记录条。 */
+.material-day-time-hour-marker {
+  min-height: 25px;
+}
+
+.material-day-time-entry {
+  min-height: 48px;
+  padding: 0.12rem 0;
+}
+
+.material-day-time-entry::after {
+  top: 22px;
+  width: 14px;
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-entry::after {
+  width: 14px;
+  transform: translateX(-14px);
+}
+
+.material-day-time-point {
+  top: 17px;
+  width: 10px;
+  height: 10px;
+}
+
+.material-day-time-card {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.25rem 0.55rem;
+  width: calc(100% - var(--day-axis-x) - 23px);
+  margin-left: calc(var(--day-axis-x) + 18px);
+  min-height: 40px;
+  padding: 0.3rem 0.42rem;
+  border-radius: 8px;
+  background: rgba(251, 250, 246, 0.8);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-card {
+  width: calc(var(--day-axis-x) - 23px);
+  margin-right: calc(100% - var(--day-axis-x) + 18px);
+  margin-left: 0;
+}
+
+.material-day-time-card-top {
+  grid-column: 1;
+  grid-row: 1;
+  gap: 0.28rem;
+  white-space: nowrap;
+}
+
+.material-day-time-value {
+  font-size: 0.73rem;
+}
+
+.material-day-time-kind {
+  font-size: 0.64rem;
+}
+
+.material-day-time-filename {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 0.78rem;
+}
+
+.material-day-time-meta {
+  grid-column: 3;
+  grid-row: 1;
+  max-width: 170px;
+  font-size: 0.65rem;
+  text-align: right;
+}
+
+.material-day-time-action {
+  grid-column: 4;
+  grid-row: 1;
+  min-height: 30px;
+  padding: 0.24rem 0.62rem;
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+.material-day-time-unknown-list .material-day-time-entry {
+  min-height: 44px;
+}
+
+.material-day-time-unknown {
+  padding: 0.42rem 0.5rem;
+}
+
+@media (max-width: 820px) {
+  .material-time-axis-track,
+  .material-time-axis-tick {
+    min-height: 28px;
+  }
+
+  .material-time-axis-label,
+  .material-time-axis-row.is-year .material-time-axis-label {
+    font-size: 0.57rem;
+  }
+
+  .material-time-axis-row.is-day .material-time-axis-label {
+    font-size: 0.49rem;
+  }
+
+  .material-time-axis-inline-count {
+    font-size: 0.68em;
+  }
+
+  .material-day-time-entry {
+    min-height: 54px;
+    padding: 0.16rem 0;
+  }
+
+  .material-day-time-card,
+  .material-day-time-axis.is-left-facing .material-day-time-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.15rem 0.4rem;
+    min-height: 46px;
+    padding: 0.3rem 0.4rem;
+  }
+
+  .material-day-time-card-top {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .material-day-time-filename {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .material-day-time-meta {
+    grid-column: 1 / span 2;
+    grid-row: 2;
+    max-width: none;
+    text-align: left;
+  }
+
+  .material-day-time-action {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    min-height: 30px;
+  }
+}
+
+
+/* LifeGraph v0.0.10.5.6：首页三项进度收进标题主模块底部并压缩为扁平信息带 */
+.hero > .hero-metrics {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 2px 0 -10px;
+  gap: 12px;
+  align-self: end;
+}
+
+.hero-metric-item {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.hero-metric-item strong {
+  min-height: 34px;
+  margin: 0;
+  padding: 3px 12px 4px;
+  border-radius: 999px;
+  font-size: clamp(1.08rem, 2vw, 1.42rem);
+  line-height: 1;
+}
+
+.hero-metric-item > .metric-note {
+  min-height: 0;
+  margin: 5px 4px 0;
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .hero > .hero-metrics {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .hero-month-calendar {
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 560px) {
+  .hero > .hero-metrics {
+    grid-column: 1;
+    grid-row: 4;
+    margin-bottom: -4px;
+  }
+}
+
+
+/* LifeGraph v0.0.10.6：密集日内资料聚合、继续加载与相邻有资料日期导航 */
+.material-day-time-entry,
+.material-day-time-group {
+  content-visibility: auto;
+  contain-intrinsic-size: 48px;
+}
+
+.material-day-time-group {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  padding: 0.12rem 0;
+}
+
+.material-day-time-group::after {
+  content: "";
+  position: absolute;
+  top: 21px;
+  left: var(--day-axis-x);
+  width: 14px;
+  height: 1px;
+  background: rgba(63, 102, 84, 0.28);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-group::after {
+  width: 14px;
+  transform: translateX(-14px);
+}
+
+.material-day-time-group .material-day-time-point {
+  top: 16px;
+}
+
+.material-day-time-point.is-group {
+  width: 12px;
+  height: 12px;
+  background: #fbfaf6;
+  box-shadow:
+    inset 0 0 0 3px rgba(63, 102, 84, 0.86),
+    0 0 0 1px rgba(63, 102, 84, 0.2);
+}
+
+.material-day-time-group-card {
+  width: calc(100% - var(--day-axis-x) - 23px);
+  margin-left: calc(var(--day-axis-x) + 18px);
+  overflow: hidden;
+  border: 1px solid rgba(63, 102, 84, 0.16);
+  border-radius: 8px;
+  background: rgba(239, 245, 241, 0.66);
+}
+
+.material-day-time-axis.is-left-facing .material-day-time-group-card {
+  width: calc(var(--day-axis-x) - 23px);
+  margin-right: calc(100% - var(--day-axis-x) + 18px);
+  margin-left: 0;
+}
+
+.material-day-time-group-toggle {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 38px;
+  padding: 0.34rem 0.52rem;
+  border: 0;
+  background: transparent;
+  color: #3e4f46;
+  text-align: left;
+  cursor: pointer;
+}
+
+.material-day-time-group-toggle:hover,
+.material-day-time-group-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.material-day-time-group-toggle strong {
+  color: #315c4d;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.material-day-time-group-toggle > span:not(.material-day-time-group-loaded) {
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(63, 102, 84, 0.11);
+  color: #456154;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.material-day-time-group-loaded {
+  justify-self: end;
+  color: var(--text-muted, #786f64);
+  font-size: 0.65rem;
+}
+
+.material-day-time-group-body {
+  display: grid;
+  border-top: 1px solid rgba(63, 102, 84, 0.1);
+}
+
+.material-day-time-group-body[hidden] {
+  display: none;
+}
+
+.material-day-time-group-item {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 38px;
+  padding: 0.28rem 0.48rem;
+  border-top: 1px solid rgba(116, 96, 62, 0.08);
+  content-visibility: auto;
+  contain-intrinsic-size: 38px;
+}
+
+.material-day-time-group-item:first-child {
+  border-top: 0;
+}
+
+.material-day-time-group-item .material-day-time-filename {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.material-day-time-group-item .material-day-time-meta {
+  grid-column: auto;
+  grid-row: auto;
+  max-width: 150px;
+  text-align: right;
+}
+
+.material-day-time-group-item .material-day-time-action {
+  grid-column: auto;
+  grid-row: auto;
+  min-height: 28px;
+  padding: 0.2rem 0.55rem;
+}
+
+.material-day-time-group-pending {
+  margin: 0;
+  padding: 0.55rem;
+  color: var(--text-muted, #786f64);
+  font-size: 0.68rem;
+}
+
+.material-day-time-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.material-day-time-load-more {
+  min-height: 30px;
+  padding: 0.24rem 0.7rem;
+  font-size: 0.72rem;
+}
+
+.material-time-axis-footer {
+  flex-wrap: wrap;
+}
+
+.material-time-axis-day-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.material-time-axis-neighbor-button {
+  min-height: 32px;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.material-time-axis-neighbor-button:disabled {
+  opacity: 0.42;
+}
+
+@media (max-width: 820px) {
+  .material-day-time-group::after {
+    display: none;
+  }
+
+  .material-day-time-group {
+    padding-top: 1.1rem;
+  }
+
+  .material-day-time-group .material-day-time-point {
+    top: 7px;
+  }
+
+  .material-day-time-group-card,
+  .material-day-time-axis.is-left-facing .material-day-time-group-card {
+    width: auto;
+    margin-right: 0.3rem;
+    margin-left: 0.3rem;
+  }
+
+  .material-day-time-group-toggle {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .material-day-time-group-item {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+  }
+
+  .material-day-time-group-item .material-day-time-meta {
+    display: none;
+  }
+
+  .material-time-axis-day-navigation {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .material-time-axis-neighbor-button {
+    flex: 1 1 0;
+  }
+}
+
+/* LifeGraph v0.0.10.7：本机自动扫描源与增量扫描 */
+.material-auto-scan-modal {
+  z-index: 420;
+  align-items: center;
+  justify-content: center;
+  padding: min(2.4vh, 22px);
+}
+
+.material-auto-scan-card {
+  width: min(980px, calc(100vw - 40px));
+  max-height: min(820px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.material-auto-scan-header,
+.material-scan-source-heading,
+.material-scanner-status-panel,
+.material-scan-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.material-auto-scan-header h2 {
+  margin: 2px 0 0;
+}
+
+.material-auto-scan-note {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft, #e6e2d9);
+  border-radius: 14px;
+  background: rgba(246, 244, 238, 0.72);
+  color: var(--muted, #77736b);
+  line-height: 1.65;
+}
+
+.material-scan-source-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.material-scan-source-path {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.material-scan-source-path > span {
+  font-size: 0.82rem;
+  color: var(--muted, #77736b);
+}
+
+.material-scan-source-path input {
+  width: 100%;
+}
+
+.material-scan-source-recursive {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--muted, #77736b);
+}
+
+.material-scanner-status-panel {
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft, #e6e2d9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.material-scanner-status-panel > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+#materialScannerStatus {
+  color: var(--muted, #77736b);
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-scanner-status-actions,
+.material-scan-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.material-scan-source-heading {
+  padding-top: 2px;
+  color: var(--muted, #77736b);
+}
+
+.material-scan-source-list {
+  display: grid;
+  gap: 9px;
+}
+
+.material-scan-source-row {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft, #e6e2d9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.material-scan-source-row.is-disabled {
+  opacity: 0.62;
+}
+
+.material-scan-source-row.is-offline {
+  border-style: dashed;
+}
+
+.material-scan-source-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.material-scan-source-main strong,
+.material-scan-source-path-text,
+.material-scan-source-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-scan-source-path-text {
+  color: #4f5d55;
+  font-size: 0.9rem;
+}
+
+.material-scan-source-meta {
+  color: var(--muted, #77736b);
+  font-size: 0.78rem;
+}
+
+.material-scan-source-empty {
+  padding: 28px 18px;
+  border: 1px dashed var(--line-soft, #e6e2d9);
+  border-radius: 14px;
+  text-align: center;
+  color: var(--muted, #77736b);
+}
+
+.danger-text-button {
+  color: #8b554c;
+}
+
+@media (max-width: 760px) {
+  .material-auto-scan-card {
+    width: calc(100vw - 18px);
+    padding: 18px;
+  }
+
+  .material-scan-source-form {
+    grid-template-columns: 1fr;
+  }
+
+  .material-scan-source-recursive {
+    min-height: auto;
+  }
+
+  .material-scanner-status-panel,
+  .material-scan-source-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .material-scanner-status-actions,
+  .material-scan-source-actions {
+    width: 100%;
+  }
+
+  .material-scanner-status-actions > button,
+  .material-scan-source-actions > button {
+    flex: 1 1 auto;
+  }
+}
+
+/* LifeGraph v0.0.10.8：人生资料日期点亮与时间待确认/修正 */
+.material-dot {
+  border-radius: 2px !important;
+  background: #927ab9;
+  box-shadow: 0 0 0 1px rgba(83,61,113,.18);
+}
+
+.material-time-review-button.is-active {
+  border-color: rgba(127,106,168,.48);
+  background: rgba(127,106,168,.14);
+  color: #5f4a86;
+}
+
+.material-center-time-correct-button {
+  white-space: nowrap;
+}
+
+.material-time-correction-modal {
+  z-index: 430;
+  align-items: center;
+  justify-content: center;
+  padding: min(2.4vh, 22px);
+}
+
+.material-time-correction-card {
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.material-time-correction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.material-time-correction-header h2 {
+  margin: 2px 0 0;
+}
+
+.material-time-correction-filename,
+.material-time-correction-current {
+  margin: 0;
+}
+
+.material-time-correction-filename {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.material-time-correction-current {
+  color: var(--muted);
+  font-size: .92rem;
+}
+
+.material-time-correction-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.material-time-correction-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.material-time-correction-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 620px) {
+  .material-time-correction-form {
+    grid-template-columns: 1fr;
+  }
 }

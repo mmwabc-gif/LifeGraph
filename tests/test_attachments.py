@@ -405,9 +405,28 @@ def test_image_attachment_extracts_exif_capture_date(tmp_path: Path) -> None:
     assert listed.status_code == 200
     assert listed.json()["data"][0]["captured_date"] == "2020-05-06"
 
+    # v0.0.10.1 deliberately mirrors only normalized timeline facts into
+    # queryable SQLite columns. Raw EXIF strings and human-readable attachment
+    # metadata remain encrypted, while timeline_at can now drive indexed range
+    # queries without decrypting every attachment.
     database_bytes = (data_dir / "lifegraph.db").read_bytes()
     assert b"2020:05:06 07:08:09" not in database_bytes
-    assert b"2020-05-06T07:08:09" not in database_bytes
+    assert b"camera.jpg" not in database_bytes
+    with client.app.state.vault.database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT timeline_at, time_precision, time_source, time_confidence, timezone_offset
+            FROM attachments WHERE id=?
+            """,
+            (attachment["id"],),
+        ).fetchone()
+    assert tuple(row) == (
+        "2020-05-06T07:08:09+08:00",
+        "second",
+        "exif:DateTimeOriginal",
+        "high",
+        "+08:00",
+    )
 
 
 def test_existing_attachment_lazily_backfills_exif_metadata(tmp_path: Path) -> None:
@@ -948,3 +967,164 @@ def test_independent_material_is_preserved_in_lifevault_backup_restore(tmp_path:
     restored_material = next(item for item in browsed.json()["data"]["items"] if item["id"] == material["id"])
     assert restored_material["is_independent"] is True
     assert restored_material["source_content"] is None
+
+
+def test_content_status_material_presence_uses_structured_timeline_without_decrypting_all_metadata(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path / "vault")
+    headers = initialize(client)
+    memory = create_memory(client, headers)
+    attachment = upload_attachment(
+        client,
+        headers,
+        memory["id"],
+        filename="indexed-photo.jpg",
+        content=jpeg_with_exif_datetime("2020:05:06 07:08:09", "+08:00"),
+        media_type="image/jpeg",
+    )
+    assert attachment["timeline_date"] == "2020-05-06"
+
+    def fail_full_metadata_decrypt(*args, **kwargs):
+        raise AssertionError("content-status must not decrypt every attachment metadata row")
+
+    monkeypatch.setattr(client.app.state.vault.database, "list_all_attachments", fail_full_metadata_decrypt)
+    response = client.get(
+        "/api/v1/dates/content-status?start=2020-05-01&end=2020-05-31",
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["dates"]["2020-05-06"]["has_material"] is True
+    assert data["months"]["2020-05"]["has_material"] is True
+    assert data["years"]["2020"]["has_material"] is True
+
+
+def test_attachment_timeline_can_be_manually_corrected_and_moves_material_presence(tmp_path: Path) -> None:
+    client = make_client(tmp_path / "vault")
+    headers = initialize(client)
+    memory = create_memory(client, headers)
+    attachment = upload_attachment(
+        client,
+        headers,
+        memory["id"],
+        filename="wrong-clock.jpg",
+        content=jpeg_with_exif_datetime("2020:05:06 07:08:09", "+08:00"),
+        media_type="image/jpeg",
+    )
+
+    before = client.get(
+        "/api/v1/dates/content-status?start=2020-01-01&end=2024-12-31",
+        headers=headers,
+    )
+    assert before.status_code == 200
+    assert before.json()["data"]["dates"]["2020-05-06"]["has_material"] is True
+
+    corrected = client.put(
+        f"/api/v1/attachments/{attachment['id']}/timeline",
+        headers=headers,
+        json={"timeline_date": "2024-07-08", "timeline_time": "09:10:11"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    data = corrected.json()["data"]
+    assert data["timeline_date"] == "2024-07-08"
+    assert data["timeline_at"].startswith("2024-07-08T09:10:11+08:00")
+    assert data["timeline_time_source"] == "manual"
+    assert data["time_source"] == "manual"
+    assert data["time_precision"] == "second"
+    assert data["time_confidence"] == "high"
+    assert data["timeline_manual"] is True
+    assert data["original_time"]["timeline_at"].startswith("2020-05-06T07:08:09+08:00")
+
+    after = client.get(
+        "/api/v1/dates/content-status?start=2020-01-01&end=2024-12-31",
+        headers=headers,
+    )
+    assert after.status_code == 200
+    statuses = after.json()["data"]["dates"]
+    assert "2020-05-06" not in statuses or statuses["2020-05-06"].get("has_material") is not True
+    assert statuses["2024-07-08"]["has_material"] is True
+
+
+def test_material_time_review_filter_surfaces_low_confidence_fallback_and_clears_after_manual_fix(tmp_path: Path) -> None:
+    client = make_client(tmp_path / "vault")
+    headers = initialize(client)
+    imported = client.post(
+        "/api/v1/materials/import",
+        headers=headers,
+        files={"material_file": ("unknown-time.bin", b"unknown time payload", "application/octet-stream")},
+    )
+    assert imported.status_code == 200, imported.text
+    material = imported.json()["data"]
+    assert material["timeline_time_source"] == "attachment:added"
+    assert material["time_confidence"] == "low"
+
+    review = client.get(
+        "/api/v1/materials/browse?time_status=review&category=other&limit=48&offset=0",
+        headers=headers,
+    )
+    assert review.status_code == 200, review.text
+    review_data = review.json()["data"]
+    assert any(item["id"] == material["id"] for item in review_data["items"])
+    assert review_data["counts"]["review"] >= 1
+
+    corrected = client.put(
+        f"/api/v1/attachments/{material['id']}/timeline",
+        headers=headers,
+        json={"timeline_date": "2025-02-03", "timeline_time": None},
+    )
+    assert corrected.status_code == 200, corrected.text
+    corrected_data = corrected.json()["data"]
+    assert corrected_data["time_precision"] == "day"
+    assert corrected_data["time_confidence"] == "high"
+
+    review_after = client.get(
+        "/api/v1/materials/browse?time_status=review&category=other&limit=48&offset=0",
+        headers=headers,
+    )
+    assert review_after.status_code == 200, review_after.text
+    assert all(item["id"] != material["id"] for item in review_after.json()["data"]["items"])
+
+
+def test_period_drawer_materials_are_index_filtered_and_paged(tmp_path: Path, monkeypatch) -> None:
+    client = make_client(tmp_path / "vault")
+    headers = initialize(client)
+    memory = create_memory(client, headers)
+    target_time = datetime(2022, 6, 15, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    modified_ms = int(target_time.timestamp() * 1000)
+
+    for index in range(15):
+        upload_attachment(
+            client,
+            headers,
+            memory["id"],
+            filename=f"paged-{index:02d}.txt",
+            content=f"payload-{index}".encode("utf-8"),
+            media_type="text/plain",
+            file_last_modified_ms=modified_ms + index * 1000,
+        )
+
+    def fail_full_library_decrypt(*args, **kwargs):
+        raise AssertionError("period drawer must not decrypt the whole attachment library")
+
+    monkeypatch.setattr(client.app.state.vault.database, "list_all_attachments", fail_full_library_decrypt)
+
+    detail = client.get(
+        "/api/v1/periods/day/2022-06-15?material_limit=5",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    data = detail.json()["data"]
+    assert len(data["materials"]) == 5
+    assert data["materials_total"] == 15
+    assert data["materials_has_more"] is True
+    assert data["materials_next_offset"] == 5
+
+    second = client.get(
+        "/api/v1/periods/day/2022-06-15/materials?limit=5&offset=5",
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    page = second.json()["data"]
+    assert len(page["items"]) == 5
+    assert page["total"] == 15
+    assert page["next_offset"] == 10
+    assert page["has_more"] is True
