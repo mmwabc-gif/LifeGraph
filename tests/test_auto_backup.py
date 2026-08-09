@@ -81,15 +81,15 @@ def test_auto_backup_policy_creates_initial_backup_and_history(tmp_path: Path) -
     assert history.status_code == 200
     item = history.json()["data"]["items"][0]
     assert item["valid"] is True
-    assert item["schema_version"] == 7
-    assert item["producer_version"] == "0.0.8"
+    assert item["schema_version"] == 8
+    assert item["producer_version"] == "0.0.9"
 
     downloaded = client.get(
         f"/api/v1/backup/auto/history/{item['filename']}", headers=headers
     )
     assert downloaded.status_code == 200
     package = inspect_lifevault_package(downloaded.content)
-    assert package.manifest["producer"]["version"] == "0.0.8"
+    assert package.manifest["producer"]["version"] == "0.0.9"
     assert "自动备份测试者".encode("utf-8") not in downloaded.content
     assert "首个事件".encode("utf-8") not in downloaded.content
     metadata = json.loads(package.metadata_bytes.decode("utf-8"))
@@ -249,3 +249,43 @@ def test_auto_backup_filename_cannot_escape_history_directory(tmp_path: Path) ->
     )
     assert response.status_code in {404, 405}
     assert (tmp_path / "vault" / "vault.json").exists()
+
+
+def test_non_due_activity_and_home_reminder_do_not_scan_backup_payloads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = make_client(tmp_path / "vault")
+    headers = initialize(client)
+    status = client.put(
+        "/api/v1/backup/auto",
+        headers=headers,
+        json={
+            "enabled": True,
+            "frequency": "daily",
+            "retention_count": 10,
+            "create_initial_backup": True,
+        },
+    )
+    assert status.status_code == 200
+    assert status.json()["data"]["last_success_at"]
+
+    vault = client.app.state.vault
+
+    def fail_deep_history():
+        raise AssertionError("hot path must not deep-scan .lifevault history")
+
+    monkeypatch.setattr(vault, "list_auto_backup_history", fail_deep_history)
+
+    # Ordinary API activity within the backup interval must use metadata-only
+    # due checks; it must not hash every backup package after the response.
+    profile = client.get("/api/v1/profile", headers=headers)
+    assert profile.status_code == 200
+
+    # The home-page reminder is intentionally lightweight as well. Full backup
+    # verification remains on the settings/explicit verification paths.
+    reminder = client.get("/api/v1/backup/auto/reminder", headers=headers)
+    assert reminder.status_code == 200
+    data = reminder.json()["data"]
+    assert data["lightweight"] is True
+    assert data["history_count"] == 1
+    assert data["health"]["code"] == "healthy"

@@ -9,6 +9,7 @@ import shutil
 import threading
 import uuid
 import zipfile
+from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -30,6 +31,24 @@ from app.services.attachments import (
     MAX_ATTACHMENT_BYTES,
     extract_attachment_time_metadata,
     fallback_attachment_timeline_metadata,
+)
+from app.services.large_files import LargeFileConflict, LargeFileError, LargeUploadManager
+from app.services.media_previews import MediaPreviewError, MediaPreviewStore
+from app.services.media_inventory import build_media_inventory, inspect_chunked_asset, verify_original_media_library
+from app.services.media_backup import (
+    MediaBackupError,
+    inspect_media_backup_target,
+    sync_media_backup,
+    verify_media_backup,
+)
+from app.services.audio_compat import (
+    AUDIO_PROBE_BYTES,
+    AudioCompatibilityCancelled,
+    AudioCompatibilityError,
+    AudioCompatibilityManager,
+    codec_label as audio_codec_label,
+    codec_needs_compat,
+    normalize_codec_id,
 )
 from app.services.backup import (
     BackupArtifact,
@@ -57,7 +76,10 @@ PIN_AAD = b"lifegraph:v1:key-slot:pin"
 RECOVERY_AAD = b"lifegraph:v1:key-slot:recovery"
 VERIFY_AAD = b"lifegraph:v1:verification"
 VERIFY_TEXT = b"lifegraph-vault-ok-v1"
+MEDIA_BACKUP_TARGET_MAGIC = b"LGMBT001"
+MEDIA_BACKUP_TARGET_AAD = b"lifegraph:v1:media-backup-target"
 SECURITY_AUDIT_LIMIT = 50
+MEDIA_STREAM_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 SECURITY_ACTION_LABELS = {
     "vault_initialized": "加密仓库已初始化",
@@ -98,13 +120,27 @@ class VaultManager:
         self,
         data_dir: Path,
         session_ttl_seconds: int = 1800,
-        app_version: str = "0.0.8",
+        app_version: str = "0.0.9",
     ) -> None:
         self.data_dir = data_dir
         self.metadata_path = data_dir / "vault.json"
         self.database = Database(data_dir / "lifegraph.db")
         self.attachment_store = AttachmentStore(data_dir / "attachments")
         self.attachment_store.migrate_legacy_layout()
+        # v0.0.9 large-media work uses a physically separate chunked store.
+        # It is intentionally not part of the v0.0.8 attachment directory so
+        # core .lifevault backups can later exclude huge media by policy.
+        self.large_uploads = LargeUploadManager(data_dir / "media")
+        self.preview_store = MediaPreviewStore(data_dir / "previews")
+        self.audio_compat = AudioCompatibilityManager(data_dir / "audio_compat")
+        self._audio_jobs: dict[str, dict[str, Any]] = {}
+        self._audio_jobs_mutex = threading.RLock()
+        self.media_backup_config_path = data_dir / ".media-backup-target.lgcfg"
+        self._media_backup_job: dict[str, Any] | None = None
+        self._media_backup_job_mutex = threading.RLock()
+        self._media_chunk_cache: OrderedDict[tuple[str, int], bytes] = OrderedDict()
+        self._media_chunk_cache_bytes = 0
+        self._media_chunk_cache_mutex = threading.RLock()
         self.auto_backup_dir = data_dir / "backups" / "auto"
         self.app_version = app_version
         self.sessions = SessionManager(session_ttl_seconds)
@@ -253,9 +289,75 @@ class VaultManager:
             self._master_key = master_key
             return self.sessions.create()
 
+    def _clear_media_chunk_cache(self) -> None:
+        with self._media_chunk_cache_mutex:
+            self._media_chunk_cache.clear()
+            self._media_chunk_cache_bytes = 0
+
+    def _read_original_media_chunk_cached(
+        self, master_key: bytes, media_id: str, index: int
+    ) -> bytes:
+        if self._master_key != master_key:
+            raise VaultError("数据仓库当前已锁定")
+        key = (str(media_id), int(index))
+        with self._media_chunk_cache_mutex:
+            cached = self._media_chunk_cache.get(key)
+            if cached is not None:
+                self._media_chunk_cache.move_to_end(key)
+                return cached
+        plaintext = self.large_uploads.store.read_chunk(master_key, media_id, index)
+        if len(plaintext) > MEDIA_STREAM_CACHE_MAX_BYTES:
+            if self._master_key != master_key:
+                raise VaultError("数据仓库当前已锁定")
+            return plaintext
+        with self._media_chunk_cache_mutex:
+            if self._master_key != master_key:
+                raise VaultError("数据仓库当前已锁定")
+            previous = self._media_chunk_cache.pop(key, None)
+            if previous is not None:
+                self._media_chunk_cache_bytes -= len(previous)
+            self._media_chunk_cache[key] = plaintext
+            self._media_chunk_cache_bytes += len(plaintext)
+            while self._media_chunk_cache and self._media_chunk_cache_bytes > MEDIA_STREAM_CACHE_MAX_BYTES:
+                _, evicted = self._media_chunk_cache.popitem(last=False)
+                self._media_chunk_cache_bytes -= len(evicted)
+        return plaintext
+
+    def _iter_original_media_range_cached(
+        self,
+        master_key: bytes,
+        media_id: str,
+        *,
+        total_size: int,
+        chunk_size: int,
+        start: int,
+        end_exclusive: int,
+    ):
+        first = start // chunk_size
+        last = (end_exclusive - 1) // chunk_size
+        for index in range(first, last + 1):
+            plaintext = self._read_original_media_chunk_cached(master_key, media_id, index)
+            expected = min(chunk_size, total_size - index * chunk_size)
+            if len(plaintext) != expected:
+                raise VaultError(f"媒体分块 {index} 明文大小校验失败")
+            left = start - index * chunk_size if index == first else 0
+            right = end_exclusive - index * chunk_size if index == last else len(plaintext)
+            yield plaintext[left:right]
+
     def lock(self) -> None:
+        with self._media_backup_job_mutex:
+            if self._media_backup_job:
+                cancel_event = self._media_backup_job.get("cancel_event")
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
+        with self._audio_jobs_mutex:
+            for job in self._audio_jobs.values():
+                cancel_event = job.get("cancel_event")
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
         with self._mutex:
             self.sessions.revoke_all()
+            self._clear_media_chunk_cache()
             self._master_key = None
 
     def require_master_key(self) -> bytes:
@@ -505,7 +607,7 @@ class VaultManager:
                 "warning",
                 "尚无可用的自动备份，请立即生成首个备份。",
             )
-        elif not latest.get("valid"):
+        elif latest.get("valid") is False:
             code, level, message = (
                 "invalid",
                 "error",
@@ -559,6 +661,67 @@ class VaultManager:
             },
         }
 
+    def _lightweight_auto_backup_history(
+        self, policy: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Return file-stat-only backup history for hot-path reminders.
+
+        This deliberately does not open or hash .lifevault payloads. Full package
+        verification remains available through the backup settings and explicit
+        verification actions.
+        """
+        if not self.auto_backup_dir.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        verified_filename = str(policy.get("last_verified_filename") or "")
+        verification_error = str(policy.get("last_verification_error") or "")
+        last_filename = str(policy.get("last_filename") or "")
+        last_success_at = policy.get("last_success_at")
+        for path in self.auto_backup_dir.glob("*.lifevault"):
+            try:
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+            except OSError:
+                continue
+            valid: bool | None = None
+            if path.name == verified_filename:
+                valid = not bool(verification_error)
+            entry: dict[str, Any] = {
+                "filename": path.name,
+                "size": stat.st_size,
+                "modified_at": datetime.fromtimestamp(
+                    stat.st_mtime, tz=dt_timezone.utc
+                ).isoformat(),
+                "valid": valid,
+                "integrity_checked": valid is not None,
+            }
+            if path.name == last_filename and last_success_at:
+                entry["created_at"] = last_success_at
+            entries.append(entry)
+        entries.sort(
+            key=lambda item: item.get("created_at") or item["modified_at"],
+            reverse=True,
+        )
+        return entries
+
+    def get_auto_backup_reminder_status(self) -> dict[str, Any]:
+        """Cheap status used on the home page without scanning backup payloads."""
+        with self._mutex:
+            self.require_master_key()
+            metadata = self._read_metadata()
+            policy = self._normalized_backup_policy(metadata)
+            history = self._lightweight_auto_backup_history(policy)
+            return {
+                **policy,
+                "next_due_at": self._backup_next_due_at(policy),
+                "history_count": len(history),
+                "history_size": sum(int(item.get("size") or 0) for item in history),
+                "backup_directory": str(self.auto_backup_dir),
+                "health": self._auto_backup_health(policy, history),
+                "lightweight": True,
+            }
+
     def get_auto_backup_status(self) -> dict[str, Any]:
         with self._mutex:
             self.require_master_key()
@@ -573,6 +736,7 @@ class VaultManager:
                 "history_size": sum(item["size"] for item in history),
                 "backup_directory": str(self.auto_backup_dir),
                 "health": self._auto_backup_health(policy, history),
+                "lightweight": False,
             }
 
     def _write_backup_policy(self, metadata: dict[str, Any], policy: dict[str, Any]) -> None:
@@ -657,6 +821,9 @@ class VaultManager:
                     master_key=master_key,
                     app_version=self.app_version,
                     attachment_dir=self.attachment_store.root,
+                    media_dir=self.large_uploads.store.root,
+                    preview_dir=self.preview_store.root,
+                    audio_compat_dir=self.audio_compat.store.root,
                     output_path=path,
                 )
                 # Re-open and decrypt the exact disk-backed package before recording success.
@@ -737,10 +904,30 @@ class VaultManager:
                 raise VaultError(f"最近备份验证失败：{exc}") from exc
 
     def maybe_create_automatic_backup(self, *, reason: str = "activity") -> dict[str, Any] | None:
-        """Best-effort hook used after successful API activity."""
+        """Best-effort due check used after successful API activity.
+
+        The overwhelmingly common not-due path must remain metadata-only. Older
+        versions called ``create_automatic_backup`` for every request, whose
+        not-due return value built a fully verified backup history and repeatedly
+        re-hashed every .lifevault file. That made login and material browsing scale
+        with backup size rather than with the requested data.
+        """
         if not self.is_unlocked or self._restore_in_progress:
             return None
         try:
+            with self._mutex:
+                self.require_master_key()
+                metadata = self._read_metadata()
+                policy = self._normalized_backup_policy(metadata)
+                if not policy["enabled"]:
+                    return None
+                now = datetime.now(dt_timezone.utc)
+                last_success = self._parse_utc_timestamp(policy.get("last_success_at"))
+                if last_success and now < last_success + self._backup_interval(policy["frequency"]):
+                    return None
+                last_attempt = self._parse_utc_timestamp(policy.get("last_attempt_at"))
+                if policy.get("last_error") and last_attempt and now < last_attempt + timedelta(hours=1):
+                    return None
             return self.create_automatic_backup(
                 force=False,
                 reason=reason,
@@ -795,13 +982,247 @@ class VaultManager:
             self._write_backup_policy(metadata, policy)
             return {"deleted_count": len(deleted), "deleted_filenames": sorted(deleted), **self.get_auto_backup_status()}
 
+    def _read_media_backup_target(self, master_key: bytes) -> str | None:
+        path = self.media_backup_config_path
+        if not path.is_file():
+            return None
+        try:
+            payload = path.read_bytes()
+            if len(payload) <= len(MEDIA_BACKUP_TARGET_MAGIC) + 12 or not payload.startswith(MEDIA_BACKUP_TARGET_MAGIC):
+                raise VaultError("大型媒体备份目录配置损坏")
+            offset = len(MEDIA_BACKUP_TARGET_MAGIC)
+            nonce = payload[offset:offset + 12]
+            ciphertext = payload[offset + 12:]
+            plaintext = decrypt_bytes(master_key, nonce, ciphertext, aad=MEDIA_BACKUP_TARGET_AAD)
+            value = plaintext.decode("utf-8").strip()
+            return value or None
+        except (OSError, UnicodeDecodeError, CryptoError) as exc:
+            raise VaultError("大型媒体备份目录配置无法读取") from exc
+
+    def _write_media_backup_target(self, master_key: bytes, target: Path) -> None:
+        nonce, ciphertext = encrypt_bytes(
+            master_key,
+            str(target).encode("utf-8"),
+            aad=MEDIA_BACKUP_TARGET_AAD,
+        )
+        temp = self.media_backup_config_path.with_suffix(".tmp")
+        try:
+            temp.write_bytes(MEDIA_BACKUP_TARGET_MAGIC + nonce + ciphertext)
+            os.replace(temp, self.media_backup_config_path)
+        except OSError as exc:
+            temp.unlink(missing_ok=True)
+            raise VaultError(f"无法保存大型媒体备份目录：{exc}") from exc
+
+    def _resolve_media_backup_target(self, raw_target: str) -> Path:
+        value = os.path.expandvars(str(raw_target or "").strip())
+        if not value:
+            raise VaultError("请先填写大型媒体备份目录")
+        target = Path(value).expanduser().resolve(strict=False)
+        data_root = self.data_dir.resolve(strict=False)
+        try:
+            common = Path(os.path.commonpath([str(target), str(data_root)]))
+        except ValueError:
+            common = None
+        if common == data_root:
+            raise VaultError("大型媒体备份目录不能放在当前 data 目录内部")
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise VaultError(f"大型媒体备份目录无法创建或访问：{exc}") from exc
+        if not target.is_dir():
+            raise VaultError("大型媒体备份目标必须是目录")
+        return target
+
+    def _media_backup_public_job(self) -> dict[str, Any] | None:
+        with self._media_backup_job_mutex:
+            job = self._media_backup_job
+            if not job:
+                return None
+            return {
+                key: value
+                for key, value in job.items()
+                if key not in {"cancel_event", "thread"}
+            }
+
+    def media_backup_job_status(self) -> dict[str, Any]:
+        self.require_master_key()
+        return self._media_backup_public_job() or {"state": "idle"}
+
+    def start_media_backup_job(self, *, target_path: str | None = None, mode: str = "sync") -> dict[str, Any]:
+        if mode not in {"sync", "verify", "source-verify"}:
+            raise VaultError("大型媒体备份任务类型无效")
+        with self._mutex:
+            master_key = self.require_master_key()
+            configured = self._read_media_backup_target(master_key)
+            target = None if mode == "source-verify" else self._resolve_media_backup_target(target_path or configured or "")
+            media = self._media_library_status_for_key(master_key, include_items=True)
+            if int(media.get("offline") or 0) or int(media.get("incomplete") or 0) or int(media.get("invalid") or 0):
+                action = "校验" if mode == "source-verify" else "备份"
+                raise VaultError(f"大型媒体库存在离线、不完整或异常项目，请先处理后再{action}")
+            original_media = list(media.get("original_media") or [])
+            if target is not None:
+                self._write_media_backup_target(master_key, target)
+
+        with self._media_backup_job_mutex:
+            if self._media_backup_job and self._media_backup_job.get("state") in {"running", "cancelling"}:
+                raise VaultError("已有大型媒体备份任务正在执行")
+            cancel_event = threading.Event()
+            now = datetime.now(dt_timezone.utc).isoformat()
+            self._media_backup_job = {
+                "state": "running",
+                "mode": mode,
+                "target_path": str(target) if target is not None else None,
+                "started_at": now,
+                "finished_at": None,
+                "error": None,
+                "total_files": (
+                    sum(int(item.get("chunk_count") or 0) for item in original_media)
+                    if mode == "source-verify"
+                    else sum(int(item.get("chunk_count") or 0) + 1 for item in original_media)
+                ),
+                "completed_files": 0,
+                "total_bytes": sum(int(item.get("size_bytes") or 0) for item in original_media) if mode == "source-verify" else 0,
+                "completed_bytes": 0,
+                "copied_files": 0,
+                "copied_bytes": 0,
+                "skipped_files": 0,
+                "verified_files": 0,
+                "verified_media": 0,
+                "current_file": "",
+                "cancel_event": cancel_event,
+            }
+
+            def update_progress(values: dict[str, Any]) -> None:
+                with self._media_backup_job_mutex:
+                    if not self._media_backup_job:
+                        return
+                    for key in (
+                        "total_files", "completed_files", "total_bytes", "completed_bytes",
+                        "copied_files", "copied_bytes", "skipped_files", "verified_files", "verified_media", "current_file",
+                    ):
+                        if key in values:
+                            self._media_backup_job[key] = values[key]
+
+            def worker() -> None:
+                try:
+                    if mode == "sync":
+                        assert target is not None
+                        result = sync_media_backup(
+                            source_root=self.large_uploads.store.root,
+                            target_root=target,
+                            original_media=original_media,
+                            progress=update_progress,
+                            cancel_event=cancel_event,
+                        )
+                    elif mode == "verify":
+                        assert target is not None
+                        result = verify_media_backup(
+                            target_root=target,
+                            original_media=original_media,
+                            progress=update_progress,
+                            cancel_event=cancel_event,
+                        )
+                    else:
+                        result = verify_original_media_library(
+                            store=self.large_uploads.store,
+                            master_key=master_key,
+                            original_media=original_media,
+                            progress=update_progress,
+                            cancel_event=cancel_event,
+                        )
+                    with self._media_backup_job_mutex:
+                        if self._media_backup_job:
+                            self._media_backup_job.update(result)
+                            self._media_backup_job["state"] = "completed"
+                            self._media_backup_job["finished_at"] = datetime.now(dt_timezone.utc).isoformat()
+                except Exception as exc:
+                    with self._media_backup_job_mutex:
+                        if self._media_backup_job:
+                            self._media_backup_job["state"] = "cancelled" if cancel_event.is_set() else "failed"
+                            self._media_backup_job["error"] = str(exc)
+                            self._media_backup_job["finished_at"] = datetime.now(dt_timezone.utc).isoformat()
+
+            thread = threading.Thread(target=worker, name=f"lifegraph-media-backup-{mode}", daemon=True)
+            self._media_backup_job["thread"] = thread
+            thread.start()
+            return self._media_backup_public_job() or {"state": "running"}
+
+    def cancel_media_backup_job(self) -> dict[str, Any]:
+        self.require_master_key()
+        with self._media_backup_job_mutex:
+            if not self._media_backup_job or self._media_backup_job.get("state") not in {"running", "cancelling"}:
+                return self._media_backup_public_job() or {"state": "idle"}
+            cancel_event = self._media_backup_job.get("cancel_event")
+            if isinstance(cancel_event, threading.Event):
+                cancel_event.set()
+            self._media_backup_job["state"] = "cancelling"
+            return self._media_backup_public_job() or {"state": "cancelling"}
+
+    def _media_library_status_for_key(
+        self, master_key: bytes, *, include_items: bool = False
+    ) -> dict[str, Any]:
+        records = self.database.list_all_attachments(master_key)
+        inventory = build_media_inventory(
+            records=records,
+            master_key=master_key,
+            original_store=self.large_uploads.store,
+            audio_store=self.audio_compat.store,
+            check_chunks=True,
+        )
+        summary = dict(inventory.get("summary") or {})
+        originals = list(inventory.get("original_media") or [])
+        result = {
+            "backup_scope": "core+external-media",
+            "core_backup_format": "lifevault-v3",
+            "media_root": "data/media",
+            "audio_compat_root": "data/audio_compat",
+            "previews_policy": "embedded-in-core",
+            "audio_compat_policy": "regenerable-excluded",
+            "full_backup_ready": (
+                int(summary.get("offline") or 0) == 0
+                and int(summary.get("incomplete") or 0) == 0
+                and int(summary.get("invalid") or 0) == 0
+            ),
+            **summary,
+            "checked_at": datetime.now(dt_timezone.utc).isoformat(),
+        }
+        try:
+            configured_target = self._read_media_backup_target(master_key)
+            if configured_target:
+                result["external_backup"] = inspect_media_backup_target(Path(configured_target), originals)
+            else:
+                result["external_backup"] = {
+                    "configured": False,
+                    "state": "unconfigured",
+                    "current": False,
+                    "message": "尚未设置大型媒体独立备份目录",
+                }
+        except VaultError as exc:
+            result["external_backup"] = {
+                "configured": False,
+                "state": "invalid",
+                "current": False,
+                "message": str(exc),
+            }
+        result["backup_job"] = self._media_backup_public_job() or {"state": "idle"}
+        if include_items:
+            result["original_media"] = originals
+            result["derivatives"] = list(inventory.get("derivatives") or [])
+        return result
+
+    def media_library_status(self, *, include_items: bool = False) -> dict[str, Any]:
+        """Return structural status for external originals and derived audio."""
+        with self._mutex:
+            return self._media_library_status_for_key(
+                self.require_master_key(), include_items=include_items
+            )
+
     def check_backup_integrity(self) -> dict[str, Any]:
-        """Create and verify a temporary consistent snapshot without exporting it."""
+        """Verify core repository plus structural availability of external media."""
         with self._mutex:
             master_key = self.require_master_key()
             if not self.metadata_path.exists() or not self.database.path.exists():
                 raise VaultError("加密仓库文件不完整")
-            # Reading metadata here verifies that the wrapped-key document is valid JSON.
             self._read_metadata()
             import tempfile
 
@@ -809,28 +1230,65 @@ class VaultManager:
                 snapshot_path = Path(temporary_dir) / "lifegraph.db"
                 self.database.create_consistent_snapshot(snapshot_path)
                 try:
-                    result = self.database.verify_encrypted_snapshot(
-                        snapshot_path, master_key
-                    )
+                    result = self.database.verify_encrypted_snapshot(snapshot_path, master_key)
                 except DatabaseIntegrityError as exc:
                     raise VaultError(str(exc)) from exc
+
             attachment_records = self.database.list_all_attachments(master_key)
+            blob_records = [
+                record for record in attachment_records
+                if str(record.get("storage_kind") or "blob-v1") == "blob-v1"
+            ]
+            preview_verified = 0
+            preview_missing = 0
+            preview_invalid = 0
             for record in attachment_records:
-                try:
-                    content = self.attachment_store.read(
-                        master_key, record["id"], record["file_nonce"]
-                    )
-                except AttachmentFileError as exc:
-                    raise VaultError(f"附件完整性检查失败：{exc}") from exc
-                if len(content) != int(record.get("size_bytes") or -1):
-                    raise VaultError("附件完整性检查失败：附件大小不一致")
-                import hashlib
-                if hashlib.sha256(content).hexdigest() != record.get("sha256"):
-                    raise VaultError("附件完整性检查失败：附件摘要不一致")
+                if str(record.get("storage_kind") or "blob-v1") == "blob-v1":
+                    try:
+                        content = self.attachment_store.read(master_key, record["id"], record["file_nonce"])
+                    except AttachmentFileError as exc:
+                        raise VaultError(f"附件完整性检查失败：{exc}") from exc
+                    if len(content) != int(record.get("size_bytes") or -1):
+                        raise VaultError("附件完整性检查失败：附件大小不一致")
+                    if hashlib.sha256(content).hexdigest() != record.get("sha256"):
+                        raise VaultError("附件完整性检查失败：附件摘要不一致")
+                nonce_text = str(record.get("preview_nonce") or "").strip()
+                if nonce_text and record.get("preview_media_type"):
+                    preview_path = self.preview_store.path_for(str(record["id"]))
+                    if not preview_path.is_file():
+                        preview_missing += 1
+                    else:
+                        try:
+                            preview = self.preview_store.read(master_key, record["id"], b64d(nonce_text))
+                            if len(preview) != int(record.get("preview_size_bytes") or -1):
+                                preview_invalid += 1
+                            elif hashlib.sha256(preview).hexdigest() != str(record.get("preview_sha256") or ""):
+                                preview_invalid += 1
+                            else:
+                                preview_verified += 1
+                        except (MediaPreviewError, CryptoError, ValueError, OSError):
+                            # Preview files are regenerable derivatives. Report them
+                            # as degraded instead of blocking the core backup path.
+                            preview_invalid += 1
+
+            media = self.media_library_status(include_items=False)
             return {
                 "ready": True,
                 **result,
-                "attachment_files_verified": len(attachment_records),
+                "backup_format": "lifevault-v3",
+                "backup_scope": "core",
+                "attachment_files_verified": len(blob_records),
+                "preview_files_verified": preview_verified,
+                "preview_files_missing": preview_missing,
+                "preview_files_invalid": preview_invalid,
+                "external_media_records": int(media.get("original_records") or 0),
+                "external_media_bytes": int(media.get("original_bytes") or 0),
+                "external_media_online": int(media.get("online") or 0),
+                "external_media_offline": int(media.get("offline") or 0),
+                "external_media_incomplete": int(media.get("incomplete") or 0),
+                "external_media_invalid": int(media.get("invalid") or 0),
+                "audio_compat_records": int(media.get("audio_compat_records") or 0),
+                "full_backup_ready": bool(media.get("full_backup_ready")),
                 "checked_at": datetime.now(dt_timezone.utc).isoformat(),
             }
 
@@ -847,6 +1305,9 @@ class VaultManager:
                     master_key=master_key,
                     app_version=app_version,
                     attachment_dir=self.attachment_store.root,
+                    media_dir=self.large_uploads.store.root,
+                    preview_dir=self.preview_store.root,
+                    audio_compat_dir=self.audio_compat.store.root,
                 )
             except (DatabaseIntegrityError, OSError, ValueError, json.JSONDecodeError) as exc:
                 raise VaultError(f"备份导出失败：{exc}") from exc
@@ -868,6 +1329,9 @@ class VaultManager:
                     master_key=master_key,
                     app_version=app_version,
                     attachment_dir=self.attachment_store.root,
+                    media_dir=self.large_uploads.store.root,
+                    preview_dir=self.preview_store.root,
+                    audio_compat_dir=self.audio_compat.store.root,
                     output_path=path,
                 )
                 verify_lifevault_file(path, master_key)
@@ -945,6 +1409,15 @@ class VaultManager:
             "compatible_schema_version": integrity["schema_version"],
             "encrypted_records_verified": integrity["encrypted_records_verified"],
             "attachment_files_verified": integrity.get("attachment_files_verified", 0),
+            "external_media_records": integrity.get("external_media_records", 0),
+            "external_media_bytes": integrity.get("external_media_bytes", 0),
+            "external_media_online_at_backup": integrity.get("external_media_online_at_backup", 0),
+            "external_media_offline_at_backup": integrity.get("external_media_offline_at_backup", 0),
+            "external_media_incomplete_at_backup": integrity.get("external_media_incomplete_at_backup", 0),
+            "external_media_invalid_at_backup": integrity.get("external_media_invalid_at_backup", 0),
+            "preview_files_verified": integrity.get("preview_files_verified", 0),
+            "audio_compat_records": integrity.get("audio_compat_records", 0),
+            "backup_scope": (package.manifest.get("repository") or {}).get("backup_scope", "legacy"),
             "record_counts": integrity.get("record_counts", {}),
             "package_sha256": package.package_sha256,
             "credential_method": credential_method,
@@ -969,6 +1442,15 @@ class VaultManager:
             "compatible_schema_version": integrity["schema_version"],
             "encrypted_records_verified": integrity["encrypted_records_verified"],
             "attachment_files_verified": integrity.get("attachment_files_verified", 0),
+            "external_media_records": integrity.get("external_media_records", 0),
+            "external_media_bytes": integrity.get("external_media_bytes", 0),
+            "external_media_online_at_backup": integrity.get("external_media_online_at_backup", 0),
+            "external_media_offline_at_backup": integrity.get("external_media_offline_at_backup", 0),
+            "external_media_incomplete_at_backup": integrity.get("external_media_incomplete_at_backup", 0),
+            "external_media_invalid_at_backup": integrity.get("external_media_invalid_at_backup", 0),
+            "preview_files_verified": integrity.get("preview_files_verified", 0),
+            "audio_compat_records": integrity.get("audio_compat_records", 0),
+            "backup_scope": (manifest.get("repository") or {}).get("backup_scope", "legacy"),
             "record_counts": integrity.get("record_counts", {}),
             "package_sha256": package_sha256,
             "credential_method": credential_method,
@@ -1068,6 +1550,9 @@ class VaultManager:
                     master_key=current_master_key,
                     app_version=app_version,
                     attachment_dir=self.attachment_store.root,
+                    media_dir=self.large_uploads.store.root,
+                    preview_dir=self.preview_store.root,
+                    audio_compat_dir=self.audio_compat.store.root,
                 )
             except (DatabaseIntegrityError, OSError, ValueError, json.JSONDecodeError) as exc:
                 raise VaultError(f"无法创建恢复前安全备份：{exc}") from exc
@@ -1090,12 +1575,20 @@ class VaultManager:
             incoming_database = self.data_dir / ".restore-lifegraph.db"
             incoming_attachments = self.data_dir / ".restore-attachments"
             previous_attachments = self.data_dir / ".restore-attachments-previous"
+            incoming_previews = self.data_dir / ".restore-previews"
+            previous_previews = self.data_dir / ".restore-previews-previous"
             shutil.rmtree(incoming_attachments, ignore_errors=True)
             shutil.rmtree(previous_attachments, ignore_errors=True)
+            shutil.rmtree(incoming_previews, ignore_errors=True)
+            shutil.rmtree(previous_previews, ignore_errors=True)
             incoming_store = AttachmentStore(incoming_attachments)
+            incoming_preview_store = MediaPreviewStore(incoming_previews)
             incoming_attachments.mkdir(parents=True, exist_ok=True)
+            incoming_previews.mkdir(parents=True, exist_ok=True)
             for attachment_id, encrypted in package.attachment_files.items():
                 incoming_store.write_encrypted_bytes(attachment_id, encrypted)
+            for attachment_id, encrypted in package.preview_files.items():
+                self._atomic_write(incoming_preview_store.path_for(attachment_id), encrypted)
 
             self._atomic_write(incoming_metadata, package.metadata_bytes)
             self._atomic_write(incoming_database, package.database_bytes)
@@ -1107,18 +1600,27 @@ class VaultManager:
                     path.stem: path.read_bytes()
                     for path in incoming_attachments.rglob("*.lgatt")
                 } != package.attachment_files
+                or {
+                    path.stem: path.read_bytes()
+                    for path in incoming_previews.rglob("*.lgpreview")
+                } != package.preview_files
             ):
                 incoming_metadata.unlink(missing_ok=True)
                 incoming_database.unlink(missing_ok=True)
                 shutil.rmtree(incoming_attachments, ignore_errors=True)
+                shutil.rmtree(incoming_previews, ignore_errors=True)
                 raise VaultError("恢复候选文件写入校验失败")
 
             self._restore_in_progress = True
             had_live_attachments = self.attachment_store.root.exists()
+            had_live_previews = self.preview_store.root.exists()
             try:
                 if had_live_attachments:
                     os.replace(self.attachment_store.root, previous_attachments)
+                if had_live_previews:
+                    os.replace(self.preview_store.root, previous_previews)
                 os.replace(incoming_attachments, self.attachment_store.root)
+                os.replace(incoming_previews, self.preview_store.root)
                 for suffix in ("-wal", "-shm"):
                     self.database.path.with_name(self.database.path.name + suffix).unlink(
                         missing_ok=True
@@ -1135,12 +1637,16 @@ class VaultManager:
                 )
                 self._write_metadata(restored_metadata)
                 shutil.rmtree(previous_attachments, ignore_errors=True)
+                shutil.rmtree(previous_previews, ignore_errors=True)
             except Exception as exc:
                 # Roll back from the already verified pre-restore package.
                 try:
                     shutil.rmtree(self.attachment_store.root, ignore_errors=True)
+                    shutil.rmtree(self.preview_store.root, ignore_errors=True)
                     if had_live_attachments and previous_attachments.exists():
                         os.replace(previous_attachments, self.attachment_store.root)
+                    if had_live_previews and previous_previews.exists():
+                        os.replace(previous_previews, self.preview_store.root)
                     self._atomic_write(self.metadata_path, rollback_package.metadata_bytes)
                     self._atomic_write(self.database.path, rollback_package.database_bytes)
                     for suffix in ("-wal", "-shm"):
@@ -1164,10 +1670,13 @@ class VaultManager:
                 incoming_database.unlink(missing_ok=True)
                 shutil.rmtree(incoming_attachments, ignore_errors=True)
                 shutil.rmtree(previous_attachments, ignore_errors=True)
+                shutil.rmtree(incoming_previews, ignore_errors=True)
+                shutil.rmtree(previous_previews, ignore_errors=True)
                 self._restore_in_progress = False
 
             # A restored repository must always be unlocked again with its own credential.
             self.sessions.revoke_all()
+            self._clear_media_chunk_cache()
             self._master_key = None
             report = self._import_report(
                 package, source_integrity, credential_method=credential_method
@@ -1221,6 +1730,9 @@ class VaultManager:
                     master_key=current_master_key,
                     app_version=app_version,
                     attachment_dir=self.attachment_store.root,
+                    media_dir=self.large_uploads.store.root,
+                    preview_dir=self.preview_store.root,
+                    audio_compat_dir=self.audio_compat.store.root,
                     output_path=rescue_path,
                 )
                 verify_lifevault_file(rescue_path, current_master_key)
@@ -1231,10 +1743,16 @@ class VaultManager:
             incoming_database = self.data_dir / ".restore-lifegraph.db"
             incoming_attachments = self.data_dir / ".restore-attachments"
             previous_attachments = self.data_dir / ".restore-attachments-previous"
+            incoming_previews = self.data_dir / ".restore-previews"
+            previous_previews = self.data_dir / ".restore-previews-previous"
             shutil.rmtree(incoming_attachments, ignore_errors=True)
             shutil.rmtree(previous_attachments, ignore_errors=True)
+            shutil.rmtree(incoming_previews, ignore_errors=True)
+            shutil.rmtree(previous_previews, ignore_errors=True)
             incoming_attachments.mkdir(parents=True, exist_ok=True)
+            incoming_previews.mkdir(parents=True, exist_ok=True)
             incoming_store = AttachmentStore(incoming_attachments)
+            incoming_preview_store = MediaPreviewStore(incoming_previews)
             entry_map = {
                 entry.get("path"): entry
                 for entry in inspected["manifest"].get("files", [])
@@ -1259,26 +1777,38 @@ class VaultManager:
                         raise VaultError("恢复候选数据库写入校验失败")
 
                     for archive_name in archive.namelist():
-                        if not archive_name.startswith("repository/attachments/") or not archive_name.endswith(".lgatt"):
-                            continue
-                        attachment_id = archive_name.removeprefix("repository/attachments/").removesuffix(".lgatt")
-                        entry = entry_map.get(archive_name) or {}
-                        with archive.open(archive_name) as source:
-                            size, digest = incoming_store.write_encrypted_stream(attachment_id, source)
-                        if size != int(entry.get("size", -1)) or digest != entry.get("sha256"):
-                            raise VaultError(f"恢复候选附件 {attachment_id} 写入校验失败")
+                        if archive_name.startswith("repository/attachments/") and archive_name.endswith(".lgatt"):
+                            attachment_id = archive_name.removeprefix("repository/attachments/").removesuffix(".lgatt")
+                            entry = entry_map.get(archive_name) or {}
+                            with archive.open(archive_name) as source:
+                                size, digest = incoming_store.write_encrypted_stream(attachment_id, source)
+                            if size != int(entry.get("size", -1)) or digest != entry.get("sha256"):
+                                raise VaultError(f"恢复候选附件 {attachment_id} 写入校验失败")
+                        elif archive_name.startswith("repository/previews/") and archive_name.endswith(".lgpreview"):
+                            attachment_id = archive_name.removeprefix("repository/previews/").removesuffix(".lgpreview")
+                            entry = entry_map.get(archive_name) or {}
+                            content = archive.read(archive_name)
+                            if len(content) != int(entry.get("size", -1)) or hashlib.sha256(content).hexdigest() != entry.get("sha256"):
+                                raise VaultError(f"恢复候选视频封面 {attachment_id} 写入校验失败")
+                            preview_path = incoming_preview_store.path_for(attachment_id)
+                            self._atomic_write(preview_path, content)
             except Exception:
                 incoming_metadata.unlink(missing_ok=True)
                 incoming_database.unlink(missing_ok=True)
                 shutil.rmtree(incoming_attachments, ignore_errors=True)
+                shutil.rmtree(incoming_previews, ignore_errors=True)
                 raise
 
             self._restore_in_progress = True
             had_live_attachments = self.attachment_store.root.exists()
+            had_live_previews = self.preview_store.root.exists()
             try:
                 if had_live_attachments:
                     os.replace(self.attachment_store.root, previous_attachments)
+                if had_live_previews:
+                    os.replace(self.preview_store.root, previous_previews)
                 os.replace(incoming_attachments, self.attachment_store.root)
+                os.replace(incoming_previews, self.preview_store.root)
                 for suffix in ("-wal", "-shm"):
                     self.database.path.with_name(self.database.path.name + suffix).unlink(missing_ok=True)
                 os.replace(incoming_metadata, self.metadata_path)
@@ -1289,11 +1819,15 @@ class VaultManager:
                 self._append_security_audit(restored_metadata, "repository_restored")
                 self._write_metadata(restored_metadata)
                 shutil.rmtree(previous_attachments, ignore_errors=True)
+                shutil.rmtree(previous_previews, ignore_errors=True)
             except Exception as exc:
                 try:
                     shutil.rmtree(self.attachment_store.root, ignore_errors=True)
+                    shutil.rmtree(self.preview_store.root, ignore_errors=True)
                     if had_live_attachments and previous_attachments.exists():
                         os.replace(previous_attachments, self.attachment_store.root)
+                    if had_live_previews and previous_previews.exists():
+                        os.replace(previous_previews, self.preview_store.root)
                     rollback_metadata = self.data_dir / ".rollback-vault.json"
                     rollback_database = self.data_dir / ".rollback-lifegraph.db"
                     with zipfile.ZipFile(rescue_path) as archive:
@@ -1319,9 +1853,12 @@ class VaultManager:
                 incoming_database.unlink(missing_ok=True)
                 shutil.rmtree(incoming_attachments, ignore_errors=True)
                 shutil.rmtree(previous_attachments, ignore_errors=True)
+                shutil.rmtree(incoming_previews, ignore_errors=True)
+                shutil.rmtree(previous_previews, ignore_errors=True)
                 self._restore_in_progress = False
 
             self.sessions.revoke_all()
+            self._clear_media_chunk_cache()
             self._master_key = None
             report = self._import_report_values(
                 manifest=inspected["manifest"],
@@ -1944,15 +2481,117 @@ class VaultManager:
     ) -> dict[str, list[dict[str, Any]]]:
         return self.list_content_tags_for_items(kind="memory", content_ids=memory_ids)
 
-    @staticmethod
-    def _public_attachment(value: dict[str, Any]) -> dict[str, Any]:
+    def _public_attachment(self, value: dict[str, Any]) -> dict[str, Any]:
         public = {
             key: item
             for key, item in value.items()
-            if key not in {"file_nonce", "profile_id"}
+            if key not in {
+                "file_nonce", "profile_id", "preview_nonce", "preview_sha256",
+                "audio_compat_media_id", "audio_compat_sha256",
+            }
         }
         public["is_independent"] = not bool(value.get("kind") and value.get("content_id"))
+        is_large = str(value.get("storage_kind") or "blob-v1") == "chunked-v1"
+        public["is_large"] = is_large
+        try:
+            public["has_preview"] = bool(
+                value.get("preview_nonce")
+                and value.get("preview_media_type")
+                and self.preview_store.path_for(str(value.get("id") or "")).is_file()
+            )
+        except (MediaPreviewError, OSError):
+            public["has_preview"] = False
+        compat_id = str(value.get("audio_compat_media_id") or "").strip()
+        public["has_audio_compat"] = bool(
+            compat_id and value.get("audio_compat_media_type") and self.audio_compat.asset_exists(compat_id)
+        )
+        if is_large:
+            media_id = str(value.get("media_id") or "").strip()
+            status = inspect_chunked_asset(
+                self.large_uploads.store,
+                self.require_master_key(),
+                media_id=media_id,
+                expected_size=int(value.get("size_bytes") or 0),
+                expected_sha256=str(value.get("sha256") or ""),
+                expected_chunk_size=int(value.get("chunk_size") or 0),
+                expected_chunk_count=int(value.get("chunk_count") or 0),
+                check_chunks=False,
+            )
+            public["media_state"] = str(status.get("state") or "invalid")
+            public["media_available"] = public["media_state"] == "online"
+        else:
+            public["media_state"] = "embedded"
+            public["media_available"] = True
         return public
+
+    @staticmethod
+    def _normalize_video_metadata(
+        media_type: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        clean_type = str(media_type or "").lower()
+        if not clean_type.startswith("video/") and not metadata:
+            return {}
+        raw = dict(metadata or {})
+        result: dict[str, Any] = {}
+        try:
+            duration = float(raw.get("duration_seconds"))
+            if 0 <= duration <= 366 * 24 * 3600:
+                result["duration_seconds"] = round(duration, 3)
+        except (TypeError, ValueError):
+            pass
+        for source_key, target_key in (("video_width", "video_width"), ("video_height", "video_height")):
+            try:
+                value = int(raw.get(source_key))
+                if 1 <= value <= 32768:
+                    result[target_key] = value
+            except (TypeError, ValueError):
+                pass
+        for source_key, target_key, limit in (
+            ("video_codec", "video_codec", 80),
+            ("audio_codec", "audio_codec", 80),
+            ("audio_codec_id", "audio_codec_id", 80),
+            ("audio_channel_layout", "audio_channel_layout", 80),
+            ("metadata_source", "video_metadata_source", 80),
+            ("poster_source", "video_poster_source", 80),
+        ):
+            value = str(raw.get(source_key) or "").strip()
+            if value:
+                result[target_key] = value[:limit]
+        for source_key, target_key, low, high in (
+            ("audio_channels", "audio_channels", 1, 64),
+            ("audio_sample_rate", "audio_sample_rate", 1000, 768000),
+        ):
+            try:
+                value = int(raw.get(source_key))
+                if low <= value <= high:
+                    result[target_key] = value
+            except (TypeError, ValueError):
+                pass
+        return result
+
+    def _write_video_preview(
+        self,
+        *,
+        master_key: bytes,
+        attachment_id: str,
+        preview_content: bytes | None,
+        preview_media_type: str | None,
+    ) -> dict[str, Any]:
+        if not preview_content:
+            return {}
+        nonce, digest, clean_type = self.preview_store.write(
+            master_key,
+            attachment_id,
+            preview_content,
+            media_type=preview_media_type,
+        )
+        return {
+            "preview_nonce": b64e(nonce),
+            "preview_sha256": digest,
+            "preview_media_type": clean_type,
+            "preview_size_bytes": len(preview_content),
+        }
 
     def create_attachment(
         self,
@@ -1963,6 +2602,9 @@ class VaultManager:
         media_type: str | None,
         content: bytes,
         file_last_modified_ms: int | None = None,
+        video_metadata: dict[str, Any] | None = None,
+        preview_content: bytes | None = None,
+        preview_media_type: str | None = None,
     ) -> dict[str, Any]:
         with self._mutex:
             master_key = self.require_master_key()
@@ -2016,6 +2658,12 @@ class VaultManager:
                 file_nonce, sha256 = self.attachment_store.write(
                     master_key, attachment_id, content
                 )
+                preview_metadata = self._write_video_preview(
+                    master_key=master_key,
+                    attachment_id=attachment_id,
+                    preview_content=preview_content,
+                    preview_media_type=preview_media_type,
+                )
                 value = self.database.create_attachment(
                     master_key,
                     attachment_id=attachment_id,
@@ -2028,18 +2676,23 @@ class VaultManager:
                         "media_type": (media_type or "application/octet-stream")[:200],
                         "size_bytes": len(content),
                         "sha256": sha256,
+                        **self._normalize_video_metadata(media_type, video_metadata),
+                        **preview_metadata,
                         **time_metadata,
                     },
                     timestamp=now,
                 )
             except DatabaseContentNotFound as exc:
                 self.attachment_store.delete(attachment_id)
+                self.preview_store.delete(attachment_id)
                 raise ContentNotFound(str(exc)) from exc
-            except AttachmentFileError as exc:
+            except (AttachmentFileError, MediaPreviewError) as exc:
                 self.attachment_store.delete(attachment_id)
+                self.preview_store.delete(attachment_id)
                 raise VaultError(str(exc)) from exc
             except Exception:
                 self.attachment_store.delete(attachment_id)
+                self.preview_store.delete(attachment_id)
                 raise
             return self._public_attachment(value)
 
@@ -2053,6 +2706,9 @@ class VaultManager:
         source_relative_path: str | None = None,
         source_directory_name: str | None = None,
         reject_duplicate: bool = False,
+        video_metadata: dict[str, Any] | None = None,
+        preview_content: bytes | None = None,
+        preview_media_type: str | None = None,
     ) -> dict[str, Any]:
         """Import one encrypted material without requiring a parent content item.
 
@@ -2106,6 +2762,12 @@ class VaultManager:
                 file_nonce, sha256 = self.attachment_store.write(
                     master_key, attachment_id, content
                 )
+                preview_metadata = self._write_video_preview(
+                    master_key=master_key,
+                    attachment_id=attachment_id,
+                    preview_content=preview_content,
+                    preview_media_type=preview_media_type,
+                )
                 value = self.database.create_attachment(
                     master_key,
                     attachment_id=attachment_id,
@@ -2118,6 +2780,8 @@ class VaultManager:
                         "media_type": (media_type or "application/octet-stream")[:200],
                         "size_bytes": len(content),
                         "sha256": sha256,
+                        **self._normalize_video_metadata(media_type, video_metadata),
+                        **preview_metadata,
                         "material_origin": "directory_import" if clean_relative_path else "independent",
                         **({"source_relative_path": clean_relative_path} if clean_relative_path else {}),
                         **({"source_directory_name": clean_directory_name} if clean_directory_name else {}),
@@ -2125,13 +2789,285 @@ class VaultManager:
                     },
                     timestamp=now,
                 )
-            except AttachmentFileError as exc:
+            except (AttachmentFileError, MediaPreviewError) as exc:
                 self.attachment_store.delete(attachment_id)
+                self.preview_store.delete(attachment_id)
                 raise VaultError(str(exc)) from exc
             except Exception:
                 self.attachment_store.delete(attachment_id)
+                self.preview_store.delete(attachment_id)
                 raise
             return self._public_attachment(value)
+
+    def create_large_material_upload(
+        self,
+        *,
+        filename: str,
+        media_type: str | None,
+        size_bytes: int,
+        chunk_size: int | None = None,
+        file_last_modified_ms: int | None = None,
+        source_relative_path: str | None = None,
+        source_directory_name: str | None = None,
+        quick_fingerprint: str | None = None,
+        reject_duplicate: bool = False,
+    ) -> dict[str, Any]:
+        """Create one persistent resumable upload session for independent material.
+
+        Large files cannot be hashed in full in the browser without defeating the
+        bounded-memory upload path.  When duplicate rejection is requested, use a
+        lightweight sampled fingerprint first and retain a filename/size/mtime
+        fallback for media created before sampled fingerprints existed.  Finalize
+        still performs the authoritative whole-file SHA-256 check.
+        """
+        master_key = self.require_master_key()
+        if reject_duplicate:
+            candidates = self.find_large_material_duplicate_candidates(
+                filename=filename,
+                size_bytes=size_bytes,
+                file_last_modified_ms=file_last_modified_ms,
+                quick_fingerprint=quick_fingerprint,
+            )
+            if candidates:
+                raise MaterialDuplicate("相同文件已经存在于人生资料库中")
+        try:
+            return self.large_uploads.create_session(
+                master_key,
+                filename=filename,
+                media_type=media_type,
+                size_bytes=size_bytes,
+                chunk_size=chunk_size,
+                file_last_modified_ms=file_last_modified_ms,
+                source_relative_path=source_relative_path,
+                source_directory_name=source_directory_name,
+                quick_fingerprint=quick_fingerprint,
+                reject_duplicate=reject_duplicate,
+            )
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+    def find_large_material_duplicate_candidates(
+        self,
+        *,
+        filename: str,
+        size_bytes: int,
+        file_last_modified_ms: int | None,
+        quick_fingerprint: str | None,
+    ) -> list[dict[str, Any]]:
+        """Find likely duplicate large media without reading multi-GB payloads."""
+        master_key = self.require_master_key()
+        profile = self.get_profile()
+        clean_name = Path(filename or "").name.strip()
+        size_value = int(size_bytes)
+        mtime_value = int(file_last_modified_ms) if file_last_modified_ms is not None else None
+        quick_value = str(quick_fingerprint or "").strip().lower()
+        matches: list[dict[str, Any]] = []
+        for value in self.database.list_all_attachments(master_key, profile_id=profile["id"]):
+            if int(value.get("size_bytes") or 0) != size_value:
+                continue
+            stored_quick = str(value.get("quick_fingerprint") or "").strip().lower()
+            sampled_match = bool(quick_value and stored_quick and quick_value == stored_quick)
+            legacy_match = (
+                not stored_quick
+                and clean_name == str(value.get("filename") or "")
+                and mtime_value is not None
+                and int(value.get("file_last_modified_ms") or -1) == mtime_value
+            )
+            if not (sampled_match or legacy_match):
+                continue
+            matches.append(
+                {
+                    "id": value.get("id"),
+                    "filename": value.get("filename") or "未命名资料",
+                    "storage_kind": value.get("storage_kind") or "blob-v1",
+                }
+            )
+        return matches
+
+    def get_large_material_upload(self, *, session_id: str) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            return self.large_uploads.status(master_key, session_id)
+        except LargeFileError as exc:
+            raise ContentNotFound(str(exc)) from exc
+
+    def update_large_material_video_metadata(
+        self,
+        *,
+        session_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            session = self.large_uploads.get_session(master_key, session_id)
+            normalized = self._normalize_video_metadata(
+                str(session.get("media_type") or "application/octet-stream"),
+                metadata,
+            )
+            return self.large_uploads.update_video_metadata(master_key, session_id, normalized)
+        except LargeFileError as exc:
+            raise ContentNotFound(str(exc)) from exc
+
+    def put_large_material_preview(
+        self,
+        *,
+        session_id: str,
+        content: bytes,
+        media_type: str | None,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            return self.large_uploads.put_preview(
+                master_key,
+                session_id,
+                content,
+                media_type=media_type,
+            )
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+    def large_upload_maintenance_status(self, *, stale_days: int = 30) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            return self.large_uploads.maintenance_status(master_key, stale_days=stale_days)
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+    def cleanup_stale_large_uploads(self, *, stale_days: int = 30) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            return self.large_uploads.cleanup_stale_sessions(master_key, stale_days=stale_days)
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+    def put_large_material_chunk(
+        self,
+        *,
+        session_id: str,
+        index: int,
+        content: bytes,
+    ) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            return self.large_uploads.put_chunk(master_key, session_id, index, content)
+        except LargeFileConflict as exc:
+            raise MaterialDuplicate(str(exc)) from exc
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+    def cancel_large_material_upload(self, *, session_id: str) -> dict[str, Any]:
+        master_key = self.require_master_key()
+        try:
+            session = self.large_uploads.get_session(master_key, session_id)
+        except LargeFileError as exc:
+            raise ContentNotFound(str(exc)) from exc
+        self.large_uploads.cancel(session_id)
+        return {
+            "session_id": session_id,
+            "media_id": session.get("media_id"),
+            "cancelled": True,
+        }
+
+    def finalize_large_material_upload(self, *, session_id: str) -> dict[str, Any]:
+        """Finalize encrypted chunks and register the material in schema v8.
+
+        The expensive whole-file SHA-256 pass is performed against decrypted chunks
+        without joining the file in memory. Only after that succeeds is the media
+        directory committed and the encrypted material metadata inserted.
+        """
+        master_key = self.require_master_key()
+        try:
+            manifest = self.large_uploads.finalize(master_key, session_id)
+        except LargeFileConflict as exc:
+            raise MaterialDuplicate(str(exc)) from exc
+        except LargeFileError as exc:
+            raise VaultError(str(exc)) from exc
+
+        media_id = str(manifest["media_id"])
+        try:
+            if bool(manifest.get("reject_duplicate")):
+                duplicates = self.find_material_duplicates([str(manifest["sha256"])])
+                if duplicates.get("matched_hashes"):
+                    raise MaterialDuplicate("相同文件已经存在于人生资料库中")
+
+            with self._mutex:
+                profile = self.get_profile()
+                attachment_id = str(uuid.uuid4())
+                now = datetime.now(dt_timezone.utc).isoformat()
+                timezone_name = str(profile.get("timezone") or "UTC")
+                timeline = extract_attachment_time_metadata(
+                    b"",
+                    filename=str(manifest.get("filename") or "未命名大型资料"),
+                    media_type=str(manifest.get("media_type") or "application/octet-stream"),
+                    file_last_modified_ms=manifest.get("file_last_modified_ms"),
+                    timezone_name=timezone_name,
+                )
+                if not timeline.get("timeline_date"):
+                    timeline.update(
+                        fallback_attachment_timeline_metadata(
+                            source_time_scope=None,
+                            source_period_key=None,
+                            attachment_created_at=str(manifest.get("created_at") or now),
+                            timezone_name=timezone_name,
+                        )
+                    )
+                relative_path = str(manifest.get("source_relative_path") or "").strip()
+                directory_name = str(manifest.get("source_directory_name") or "").strip()
+                preview_metadata: dict[str, Any] = {}
+                try:
+                    pending_preview = self.large_uploads.read_committed_preview(master_key, media_id)
+                except LargeFileError:
+                    # A derivative thumbnail must never invalidate a successfully
+                    # uploaded multi-GB original. Keep the media and simply fall
+                    # back to the generic video card when preview recovery fails.
+                    pending_preview = None
+                    self.large_uploads.delete_committed_preview(media_id)
+                if pending_preview:
+                    preview_type, preview_content = pending_preview
+                    preview_metadata = self._write_video_preview(
+                        master_key=master_key,
+                        attachment_id=attachment_id,
+                        preview_content=preview_content,
+                        preview_media_type=preview_type,
+                    )
+                value = self.database.create_attachment(
+                    master_key,
+                    attachment_id=attachment_id,
+                    profile_id=profile["id"],
+                    kind=None,
+                    content_id=None,
+                    storage_kind="chunked-v1",
+                    file_nonce=None,
+                    media_id=media_id,
+                    metadata={
+                        "filename": str(manifest.get("filename") or "未命名大型资料"),
+                        "media_type": str(manifest.get("media_type") or "application/octet-stream"),
+                        "size_bytes": int(manifest["size_bytes"]),
+                        "sha256": str(manifest["sha256"]),
+                        "chunk_size": int(manifest["chunk_size"]),
+                        "chunk_count": int(manifest["chunk_count"]),
+                        "chunked_format_version": int(manifest.get("format_version") or 1),
+                        "file_last_modified_ms": manifest.get("file_last_modified_ms"),
+                        "quick_fingerprint": manifest.get("quick_fingerprint"),
+                        **dict(manifest.get("video_metadata") or {}),
+                        **preview_metadata,
+                        "material_origin": "directory_import" if relative_path else "independent",
+                        **({"source_relative_path": relative_path} if relative_path else {}),
+                        **({"source_directory_name": directory_name} if directory_name else {}),
+                        "time_metadata_checked": True,
+                        **timeline,
+                    },
+                    timestamp=now,
+                )
+                self.large_uploads.delete_committed_preview(media_id)
+                return self._public_attachment(value)
+        except Exception:
+            try:
+                self.preview_store.delete(locals().get("attachment_id", ""))
+            except Exception:
+                pass
+            self.large_uploads.store.delete(media_id)
+            raise
 
     def find_material_duplicates(self, sha256_values: list[str]) -> dict[str, Any]:
         master_key = self.require_master_key()
@@ -2172,6 +3108,8 @@ class VaultManager:
             "kind",
             "content_id",
             "file_nonce",
+            "storage_kind",
+            "media_id",
             "created_at",
             "updated_at",
         }
@@ -2229,6 +3167,25 @@ class VaultManager:
             if not fallback:
                 return value
             metadata.update(fallback)
+            return self.database.update_attachment_metadata(
+                master_key,
+                profile_id=profile_id,
+                attachment_id=value["id"],
+                metadata=metadata,
+                timestamp=datetime.now(dt_timezone.utc).isoformat(),
+            )
+
+        if str(value.get("storage_kind") or "blob-v1") == "chunked-v1":
+            metadata["time_metadata_checked"] = True
+            if not metadata.get("timeline_date"):
+                metadata.update(
+                    self._attachment_context_fallback_metadata(
+                        master_key=master_key,
+                        profile_id=profile_id,
+                        timezone_name=timezone_name,
+                        value=value,
+                    )
+                )
             return self.database.update_attachment_metadata(
                 master_key,
                 profile_id=profile_id,
@@ -2403,6 +3360,10 @@ class VaultManager:
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif",
         }:
             return "image"
+        if media_type.startswith("video/") or suffix in {
+            ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".mpeg", ".mpg", ".ts", ".mts", ".m2ts",
+        }:
+            return "video"
         if (
             media_type.startswith("text/")
             or media_type in {"application/pdf", "application/rtf"}
@@ -2439,11 +3400,12 @@ class VaultManager:
         """
         master_key = self.require_master_key()
         profile = self.get_profile()
-        category_set = {value for value in (categories or ["image", "document", "other"]) if value in {"image", "document", "other"}}
+        allowed_categories = {"image", "video", "document", "other"}
+        category_set = {value for value in (categories or ["image", "video", "document", "other"]) if value in allowed_categories}
         if not category_set:
-            category_set = {"image", "document", "other"}
+            category_set = set(allowed_categories)
         needle = query.strip().casefold()
-        counts = {"image": 0, "document": 0, "other": 0, "undated": 0}
+        counts = {"image": 0, "video": 0, "document": 0, "other": 0, "undated": 0}
         total = 0
         page_cap = max(0, int(offset)) + max(1, int(limit))
 
@@ -2541,16 +3503,544 @@ class VaultManager:
 
     def delete_independent_material(self, *, attachment_id: str) -> dict[str, Any]:
         with self._mutex:
-            self.require_master_key()
+            master_key = self.require_master_key()
             profile = self.get_profile()
             try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
                 result = self.database.delete_independent_material(
                     profile_id=profile["id"], attachment_id=attachment_id
                 )
             except DatabaseContentNotFound as exc:
                 raise ContentNotFound(str(exc)) from exc
-            self.attachment_store.delete(attachment_id)
+            storage_kind = str(result.pop("storage_kind", "blob-v1"))
+            media_id = result.pop("media_id", None)
+            compat_media_id = str(value.get("audio_compat_media_id") or "").strip()
+            self._cancel_audio_compat_job(attachment_id)
+            if storage_kind == "chunked-v1" and media_id:
+                self.large_uploads.store.delete(str(media_id))
+            else:
+                self.attachment_store.delete(attachment_id)
+            self.preview_store.delete(attachment_id)
+            self.audio_compat.delete(compat_media_id)
             return result
+
+    def read_attachment_preview(self, *, attachment_id: str) -> tuple[dict[str, Any], bytes]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            nonce_text = str(value.get("preview_nonce") or "").strip()
+            if not nonce_text or not value.get("preview_media_type"):
+                raise ContentNotFound("该视频暂无封面")
+            try:
+                content = self.preview_store.read(master_key, attachment_id, b64d(nonce_text))
+            except (MediaPreviewError, CryptoError, ValueError) as exc:
+                raise VaultError(str(exc)) from exc
+            if len(content) != int(value.get("preview_size_bytes") or -1):
+                raise VaultError("视频封面大小校验失败")
+            if hashlib.sha256(content).hexdigest() != str(value.get("preview_sha256") or ""):
+                raise VaultError("视频封面完整性校验失败")
+            return self._public_attachment(value), content
+
+    def get_attachment_stream_metadata(self, *, attachment_id: str) -> dict[str, Any]:
+        """Return verified metadata needed to serve an attachment over HTTP Range."""
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+
+            total_size = int(value.get("size_bytes") or 0)
+            if total_size <= 0:
+                raise VaultError("附件大小信息无效")
+            if str(value.get("storage_kind") or "blob-v1") == "chunked-v1":
+                media_id = str(value.get("media_id") or "").strip()
+                if not media_id:
+                    raise VaultError("大型资料缺少媒体标识")
+                if not self.large_uploads.store.manifest_path(media_id).is_file():
+                    raise VaultError("大型媒体文件离线，请恢复 data/media 媒体库后重试")
+                try:
+                    manifest = self.large_uploads.store.read_manifest(master_key, media_id)
+                except LargeFileError as exc:
+                    raise VaultError(f"大型媒体文件无法验证：{exc}") from exc
+                if int(manifest.get("size_bytes") or -1) != total_size:
+                    raise VaultError("大型资料清单大小与索引不一致")
+                if int(manifest.get("chunk_size") or -1) != int(value.get("chunk_size") or -2):
+                    raise VaultError("大型资料分块参数与索引不一致")
+            return self._public_attachment(value)
+
+    def iter_attachment_stream_range(
+        self,
+        *,
+        attachment_id: str,
+        start: int,
+        end_exclusive: int,
+    ):
+        """Yield only the requested plaintext bytes without materializing large media."""
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+
+            total_size = int(value.get("size_bytes") or 0)
+            start = int(start)
+            end_exclusive = int(end_exclusive)
+            if total_size <= 0 or start < 0 or end_exclusive <= start or end_exclusive > total_size:
+                raise VaultError("请求的附件字节范围无效")
+
+            if str(value.get("storage_kind") or "blob-v1") != "chunked-v1":
+                try:
+                    content = self.attachment_store.read(master_key, attachment_id, value["file_nonce"])
+                except AttachmentFileError as exc:
+                    raise VaultError(str(exc)) from exc
+                if len(content) != total_size:
+                    raise VaultError("附件大小校验失败")
+                if hashlib.sha256(content).hexdigest() != str(value.get("sha256") or ""):
+                    raise VaultError("附件完整性校验失败")
+                return iter((content[start:end_exclusive],))
+
+            media_id = str(value.get("media_id") or "").strip()
+            chunk_size = int(value.get("chunk_size") or 0)
+            if not media_id or chunk_size <= 0:
+                raise VaultError("大型资料分块索引无效")
+            if not self.large_uploads.store.manifest_path(media_id).is_file():
+                raise VaultError("大型媒体文件离线，请恢复 data/media 媒体库后重试")
+
+        # Do not hold the vault-wide mutex while StreamingResponse iterates a
+        # potentially multi-GB range. Each chunk authenticates independently.
+        return self._iter_original_media_range_cached(
+            master_key,
+            media_id,
+            total_size=total_size,
+            chunk_size=chunk_size,
+            start=start,
+            end_exclusive=end_exclusive,
+        )
+
+    def _attachment_audio_source_iter(
+        self,
+        *,
+        master_key: bytes,
+        value: dict[str, Any],
+    ):
+        total_size = int(value.get("size_bytes") or 0)
+        if str(value.get("storage_kind") or "blob-v1") == "chunked-v1":
+            media_id = str(value.get("media_id") or "").strip()
+            chunk_size = int(value.get("chunk_size") or 0)
+            if not media_id or chunk_size <= 0:
+                raise VaultError("大型资料分块索引无效")
+            return self.large_uploads.store.iter_plain_chunks_buffered(
+                master_key,
+                media_id,
+                total_size=total_size,
+                chunk_size=chunk_size,
+                buffer_chunks=3,
+            )
+        try:
+            content = self.attachment_store.read(master_key, value["id"], value["file_nonce"])
+        except AttachmentFileError as exc:
+            raise VaultError(str(exc)) from exc
+        if len(content) != total_size:
+            raise VaultError("附件大小校验失败")
+        return iter((content,))
+
+    def _read_attachment_probe_prefix(
+        self,
+        *,
+        master_key: bytes,
+        value: dict[str, Any],
+    ) -> bytes:
+        total_size = int(value.get("size_bytes") or 0)
+        if total_size <= 0:
+            return b""
+        end = min(total_size, AUDIO_PROBE_BYTES)
+        if str(value.get("storage_kind") or "blob-v1") == "chunked-v1":
+            media_id = str(value.get("media_id") or "").strip()
+            chunk_size = int(value.get("chunk_size") or 0)
+            if not media_id or chunk_size <= 0:
+                return b""
+            try:
+                return b"".join(
+                    self.large_uploads.store.iter_plain_range(
+                        master_key,
+                        media_id,
+                        total_size=total_size,
+                        chunk_size=chunk_size,
+                        start=0,
+                        end_exclusive=end,
+                    )
+                )
+            except LargeFileError:
+                return b""
+        try:
+            content = self.attachment_store.read(master_key, value["id"], value["file_nonce"])
+        except AttachmentFileError:
+            return b""
+        return content[:end]
+
+    def _probe_attachment_audio_metadata(
+        self,
+        *,
+        master_key: bytes,
+        profile_id: str,
+        value: dict[str, Any],
+    ) -> dict[str, Any]:
+        if value.get("audio_codec_id") or value.get("audio_codec"):
+            return value
+        media_type = str(value.get("media_type") or "").lower()
+        filename = str(value.get("filename") or "").lower()
+        if not media_type.startswith("video/") and not filename.endswith(
+            (".mkv", ".webm", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".mts")
+        ):
+            return value
+        prefix = self._read_attachment_probe_prefix(master_key=master_key, value=value)
+        probe = self.audio_compat.probe_prefix(prefix)
+        if probe is None or not probe.codec_id:
+            return value
+        metadata = self._attachment_metadata_payload(value)
+        metadata.update({key: item for key, item in probe.as_dict().items() if item is not None})
+        metadata["audio_metadata_source"] = "server:ffprobe-prefix"
+        return self.database.update_attachment_metadata(
+            master_key,
+            profile_id=profile_id,
+            attachment_id=value["id"],
+            metadata=metadata,
+            timestamp=datetime.now(dt_timezone.utc).isoformat(),
+        )
+
+    def _audio_job_snapshot(self, attachment_id: str) -> dict[str, Any] | None:
+        with self._audio_jobs_mutex:
+            job = self._audio_jobs.get(str(attachment_id))
+            if not job:
+                return None
+            return {
+                "state": str(job.get("state") or "building"),
+                "progress_percent": round(float(job.get("progress_percent") or 0.0), 1),
+                "processed_bytes": int(job.get("processed_bytes") or 0),
+                "source_size_bytes": int(job.get("source_size_bytes") or 0),
+                "error": str(job.get("error") or "") or None,
+                "target_codec": str(job.get("target_codec") or "") or None,
+                "target_media_type": str(job.get("target_media_type") or "") or None,
+            }
+
+    def get_attachment_audio_compat_status(self, *, attachment_id: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            value = self._probe_attachment_audio_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                value=value,
+            )
+            tools = self.audio_compat.refresh_tools()
+            codec_id = normalize_codec_id(value.get("audio_codec_id") or value.get("audio_codec"))
+            label = str(value.get("audio_codec") or audio_codec_label(codec_id) or "").strip()
+            compat_id = str(value.get("audio_compat_media_id") or "").strip()
+            has_compat = bool(compat_id and self.audio_compat.asset_exists(compat_id))
+            compat_size = int(value.get("audio_compat_size_bytes") or 0) if has_compat else 0
+            compat_chunk = int(value.get("audio_compat_chunk_size") or 0) if has_compat else 0
+            compat_media_type = str(value.get("audio_compat_media_type") or "").strip() if has_compat else ""
+            compat_codec = str(value.get("audio_compat_codec") or "").strip() if has_compat else ""
+            needs_compat = codec_needs_compat(codec_id)
+
+        job = self._audio_job_snapshot(attachment_id)
+        if has_compat:
+            state = "ready"
+        elif job and job.get("state") == "building":
+            state = "building"
+        elif job and job.get("state") in {"error", "cancelled"}:
+            state = str(job["state"])
+        elif needs_compat and not tools.available:
+            state = "unavailable"
+        elif needs_compat:
+            state = "idle"
+        elif codec_id:
+            state = "not_needed"
+        else:
+            state = "unknown"
+        return {
+            "attachment_id": attachment_id,
+            "state": state,
+            "ffmpeg_available": bool(tools.ffmpeg),
+            "ffprobe_available": bool(tools.ffprobe),
+            "audio_codec_id": codec_id or None,
+            "audio_codec": label or None,
+            "audio_channels": value.get("audio_channels"),
+            "audio_channel_layout": value.get("audio_channel_layout"),
+            "audio_sample_rate": value.get("audio_sample_rate"),
+            "needs_compat": needs_compat,
+            "has_compat_audio": has_compat,
+            "compat_media_type": compat_media_type or None,
+            "compat_codec": compat_codec or None,
+            "compat_size_bytes": compat_size or None,
+            "compat_chunk_size": compat_chunk or None,
+            **(job or {}),
+        }
+
+    def _cancel_audio_compat_job(self, attachment_id: str) -> None:
+        with self._audio_jobs_mutex:
+            job = self._audio_jobs.get(str(attachment_id))
+            if job:
+                cancel_event = job.get("cancel_event")
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
+
+    def start_attachment_audio_compat(self, *, attachment_id: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            value = self._probe_attachment_audio_metadata(
+                master_key=master_key,
+                profile_id=profile["id"],
+                value=value,
+            )
+            codec_id = normalize_codec_id(value.get("audio_codec_id") or value.get("audio_codec"))
+            if not codec_needs_compat(codec_id):
+                if codec_id:
+                    return self.get_attachment_audio_compat_status(attachment_id=attachment_id)
+                raise VaultError("暂未识别到需要兼容转换的音轨")
+            tools = self.audio_compat.refresh_tools()
+            if not tools.ffmpeg:
+                raise VaultError("未找到 FFmpeg；当前会自动检测 C:\\ffmpeg\\bin\\ffmpeg.exe、C:\\ffmpeg\\ffmpeg.exe 和系统 PATH")
+            existing_id = str(value.get("audio_compat_media_id") or "").strip()
+            if existing_id and self.audio_compat.asset_exists(existing_id):
+                return self.get_attachment_audio_compat_status(attachment_id=attachment_id)
+            source_size = int(value.get("size_bytes") or 0)
+            compat_target = self.audio_compat.preferred_target()
+            captured_value = dict(value)
+            captured_key = bytes(master_key)
+            profile_id = str(profile["id"])
+
+        with self._audio_jobs_mutex:
+            existing_job = self._audio_jobs.get(attachment_id)
+            if existing_job and existing_job.get("state") == "building":
+                return self.get_attachment_audio_compat_status(attachment_id=attachment_id)
+            cancel_event = threading.Event()
+            compat_media_id = f"aud_{uuid.uuid4().hex}"
+            self._audio_jobs[attachment_id] = {
+                "state": "building",
+                "progress_percent": 0.0,
+                "processed_bytes": 0,
+                "source_size_bytes": source_size,
+                "error": None,
+                "cancel_event": cancel_event,
+                "compat_media_id": compat_media_id,
+                "target_codec": compat_target.codec_label,
+                "target_media_type": compat_target.media_type,
+            }
+
+        def progress(processed: int, total: int) -> None:
+            with self._audio_jobs_mutex:
+                job = self._audio_jobs.get(attachment_id)
+                if not job or job.get("compat_media_id") != compat_media_id:
+                    return
+                job["processed_bytes"] = int(processed)
+                job["source_size_bytes"] = int(total)
+                job["progress_percent"] = min(99.5, max(0.0, processed * 100.0 / max(1, total)))
+
+        def worker() -> None:
+            try:
+                source_iter = self._attachment_audio_source_iter(
+                    master_key=captured_key,
+                    value=captured_value,
+                )
+                manifest = self.audio_compat.transcode_browser_audio(
+                    master_key=captured_key,
+                    media_id=compat_media_id,
+                    source_iter=source_iter,
+                    source_size=source_size,
+                    cancel_event=cancel_event,
+                    progress=progress,
+                    target=compat_target,
+                )
+                if cancel_event.is_set():
+                    raise AudioCompatibilityCancelled("兼容音轨生成已取消")
+                with self._mutex:
+                    current = self.database.get_attachment(
+                        captured_key,
+                        profile_id=profile_id,
+                        attachment_id=attachment_id,
+                    )
+                    metadata = self._attachment_metadata_payload(current)
+                    old_compat = str(metadata.get("audio_compat_media_id") or "").strip()
+                    metadata.update(
+                        {
+                            "audio_compat_media_id": compat_media_id,
+                            "audio_compat_media_type": str(manifest.get("media_type") or compat_target.media_type),
+                            "audio_compat_codec": str(manifest.get("audio_codec") or compat_target.codec_label),
+                            "audio_compat_size_bytes": int(manifest["size_bytes"]),
+                            "audio_compat_chunk_size": int(manifest["chunk_size"]),
+                            "audio_compat_sha256": str(manifest["sha256"]),
+                            "audio_compat_created_at": datetime.now(dt_timezone.utc).isoformat(),
+                            "audio_compat_source_codec": normalize_codec_id(
+                                current.get("audio_codec_id") or current.get("audio_codec")
+                            ),
+                        }
+                    )
+                    self.database.update_attachment_metadata(
+                        captured_key,
+                        profile_id=profile_id,
+                        attachment_id=attachment_id,
+                        metadata=metadata,
+                        timestamp=datetime.now(dt_timezone.utc).isoformat(),
+                    )
+                    if old_compat and old_compat != compat_media_id:
+                        self.audio_compat.delete(old_compat)
+                with self._audio_jobs_mutex:
+                    job = self._audio_jobs.get(attachment_id)
+                    if job and job.get("compat_media_id") == compat_media_id:
+                        job.update(
+                            {
+                                "state": "ready",
+                                "progress_percent": 100.0,
+                                "processed_bytes": source_size,
+                                "error": None,
+                            }
+                        )
+            except AudioCompatibilityCancelled as exc:
+                self.audio_compat.delete(compat_media_id)
+                with self._audio_jobs_mutex:
+                    job = self._audio_jobs.get(attachment_id)
+                    if job and job.get("compat_media_id") == compat_media_id:
+                        job.update({"state": "cancelled", "error": str(exc)})
+            except (AudioCompatibilityError, LargeFileError, AttachmentFileError, DatabaseContentNotFound, VaultError, OSError) as exc:
+                self.audio_compat.delete(compat_media_id)
+                with self._audio_jobs_mutex:
+                    job = self._audio_jobs.get(attachment_id)
+                    if job and job.get("compat_media_id") == compat_media_id:
+                        job.update({"state": "error", "error": str(exc)})
+            except Exception as exc:  # keep background failure visible without crashing the app
+                self.audio_compat.delete(compat_media_id)
+                with self._audio_jobs_mutex:
+                    job = self._audio_jobs.get(attachment_id)
+                    if job and job.get("compat_media_id") == compat_media_id:
+                        job.update({"state": "error", "error": f"{exc.__class__.__name__}: {exc}"})
+
+        threading.Thread(
+            target=worker,
+            name=f"lifegraph-audio-compat-{attachment_id[:8]}",
+            daemon=True,
+        ).start()
+        return self.get_attachment_audio_compat_status(attachment_id=attachment_id)
+
+    def get_attachment_audio_compat_stream_metadata(self, *, attachment_id: str) -> dict[str, Any]:
+        with self._mutex:
+            master_key = self.require_master_key()
+            profile = self.get_profile()
+            try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
+            except DatabaseContentNotFound as exc:
+                raise ContentNotFound(str(exc)) from exc
+            media_id = str(value.get("audio_compat_media_id") or "").strip()
+            if not media_id:
+                raise ContentNotFound("该视频尚未生成兼容音轨")
+            try:
+                manifest = self.audio_compat.read_manifest(master_key, media_id)
+            except LargeFileError as exc:
+                raise ContentNotFound("兼容音轨文件缺失，可重新生成") from exc
+            original_name = str(value.get("filename") or "video")
+            base_name = original_name.rsplit(".", 1)[0] if "." in original_name else original_name
+            media_type = str(
+                value.get("audio_compat_media_type")
+                or manifest.get("media_type")
+                or "audio/mp4"
+            ).strip()
+            codec = str(
+                value.get("audio_compat_codec")
+                or manifest.get("audio_codec")
+                or "AAC"
+            ).strip()
+            extension = "mp3" if media_type == "audio/mpeg" or codec.upper() == "MP3" else "m4a"
+            return {
+                "attachment_id": attachment_id,
+                "media_id": media_id,
+                "filename": f"{base_name}.browser-audio.{extension}",
+                "media_type": media_type,
+                "audio_codec": codec,
+                "size_bytes": int(manifest.get("size_bytes") or 0),
+                "chunk_size": int(manifest.get("chunk_size") or 0),
+            }
+
+    def iter_attachment_audio_compat_range(
+        self,
+        *,
+        attachment_id: str,
+        start: int,
+        end_exclusive: int,
+    ):
+        with self._mutex:
+            master_key = self.require_master_key()
+            metadata = self.get_attachment_audio_compat_stream_metadata(attachment_id=attachment_id)
+            total_size = int(metadata["size_bytes"])
+            chunk_size = int(metadata["chunk_size"])
+            media_id = str(metadata["media_id"])
+            if start < 0 or end_exclusive <= start or end_exclusive > total_size:
+                raise VaultError("请求的兼容音轨字节范围无效")
+        return self.audio_compat.store.iter_plain_range(
+            master_key,
+            media_id,
+            total_size=total_size,
+            chunk_size=chunk_size,
+            start=start,
+            end_exclusive=end_exclusive,
+        )
+
+    def create_attachment_playback_ticket(self, *, attachment_id: str) -> dict[str, Any]:
+        metadata = self.get_attachment_stream_metadata(attachment_id=attachment_id)
+        ticket = self.sessions.create_media_ticket(attachment_id)
+        return {
+            "attachment_id": attachment_id,
+            "ticket": ticket.token,
+            "expires_at": ticket.expires_at,
+            "filename": metadata.get("filename") or "attachment",
+            "media_type": metadata.get("media_type") or "application/octet-stream",
+            "size_bytes": int(metadata.get("size_bytes") or 0),
+            "is_large": bool(metadata.get("is_large")),
+        }
 
     def read_attachment(self, *, attachment_id: str) -> tuple[dict[str, Any], bytes]:
         with self._mutex:
@@ -2562,6 +4052,8 @@ class VaultManager:
                     profile_id=profile["id"],
                     attachment_id=attachment_id,
                 )
+                if str(value.get("storage_kind") or "blob-v1") == "chunked-v1":
+                    raise VaultError("大型资料需使用分块媒体读取接口")
                 content = self.attachment_store.read(
                     master_key, attachment_id, value["file_nonce"]
                 )
@@ -2585,9 +4077,14 @@ class VaultManager:
         attachment_id: str,
     ) -> dict[str, Any]:
         with self._mutex:
-            self.require_master_key()
+            master_key = self.require_master_key()
             profile = self.get_profile()
             try:
+                value = self.database.get_attachment(
+                    master_key,
+                    profile_id=profile["id"],
+                    attachment_id=attachment_id,
+                )
                 result = self.database.delete_attachment(
                     profile_id=profile["id"],
                     kind=kind,
@@ -2596,7 +4093,16 @@ class VaultManager:
                 )
             except DatabaseContentNotFound as exc:
                 raise ContentNotFound(str(exc)) from exc
-            self.attachment_store.delete(attachment_id)
+            storage_kind = str(result.pop("storage_kind", "blob-v1"))
+            media_id = result.pop("media_id", None)
+            compat_media_id = str(value.get("audio_compat_media_id") or "").strip()
+            self._cancel_audio_compat_job(attachment_id)
+            if storage_kind == "chunked-v1" and media_id:
+                self.large_uploads.store.delete(str(media_id))
+            else:
+                self.attachment_store.delete(attachment_id)
+            self.preview_store.delete(attachment_id)
+            self.audio_compat.delete(compat_media_id)
             return result
 
     def create_plan(

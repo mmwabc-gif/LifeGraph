@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -8,8 +9,9 @@ from urllib.parse import quote
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from app.models import (
     AutoBackupHistoryClearRequest,
@@ -23,6 +25,10 @@ from app.models import (
     InitializeRequest,
     MemoryCreateRequest,
     MaterialDuplicateCheckRequest,
+    LargeMaterialUploadInitRequest,
+    LargeMaterialVideoMetadataRequest,
+    LargeUploadCleanupRequest,
+    MediaBackupJobRequest,
     PinChangeRequest,
     PinResetRequest,
     PlanCreateRequest,
@@ -44,6 +50,8 @@ from app.security.vault import (
     VaultManager,
 )
 from app.services.attachments import MAX_ATTACHMENT_BYTES
+from app.services.large_files import MAX_MEDIA_CHUNK_SIZE
+from app.services.media_previews import MAX_MEDIA_PREVIEW_BYTES
 from app.services.backup import LIFEVAULT_MEDIA_TYPE, MAX_LIFEVAULT_IMPORT_BYTES
 from app.services.date_detail import DateOutOfLifeRange
 from app.services.periods import child_periods, resolve_period
@@ -83,6 +91,74 @@ def locked_error(exc: VaultError) -> HTTPException:
         status_code=status.HTTP_423_LOCKED,
         detail={"code": "VAULT_LOCKED", "message": str(exc)},
     )
+
+
+def parse_video_metadata_form(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_VIDEO_METADATA", "message": "视频元数据格式无效"},
+        ) from exc
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_VIDEO_METADATA", "message": "视频元数据必须为对象"},
+        )
+    return value
+
+
+
+
+def parse_http_byte_range(range_header: str | None, total_size: int) -> tuple[int, int, bool]:
+    """Parse one RFC 7233 byte range and return [start, end_exclusive)."""
+    total_size = int(total_size)
+    if total_size <= 0:
+        raise ValueError("invalid total size")
+    value = str(range_header or "").strip()
+    if not value:
+        return 0, total_size, False
+    if not value.lower().startswith("bytes=") or "," in value:
+        raise ValueError("unsupported byte range")
+    spec = value.split("=", 1)[1].strip()
+    if "-" not in spec:
+        raise ValueError("invalid byte range")
+    start_text, end_text = (part.strip() for part in spec.split("-", 1))
+    if not start_text:
+        if not end_text.isdigit():
+            raise ValueError("invalid suffix range")
+        suffix = int(end_text)
+        if suffix <= 0:
+            raise ValueError("invalid suffix range")
+        start = max(0, total_size - suffix)
+        return start, total_size, True
+    if not start_text.isdigit():
+        raise ValueError("invalid range start")
+    start = int(start_text)
+    if start >= total_size:
+        raise ValueError("range starts past end")
+    if not end_text:
+        return start, total_size, True
+    if not end_text.isdigit():
+        raise ValueError("invalid range end")
+    end_inclusive = min(int(end_text), total_size - 1)
+    if end_inclusive < start:
+        raise ValueError("range end before start")
+    return start, end_inclusive + 1, True
+
+async def read_optional_preview(preview_file: UploadFile | None) -> tuple[bytes | None, str | None]:
+    if preview_file is None:
+        return None, None
+    content = await preview_file.read(MAX_MEDIA_PREVIEW_BYTES + 1)
+    if len(content) > MAX_MEDIA_PREVIEW_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={"code": "VIDEO_PREVIEW_TOO_LARGE", "message": "视频封面不能超过 512 KB"},
+        )
+    return content or None, preview_file.content_type
 
 
 def date_range_error(exc: DateOutOfLifeRange) -> HTTPException:
@@ -175,6 +251,11 @@ def system_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
             "api_version": "v1",
             "schema_version": vault.database.schema_version(),
             "storage_mode": "sqlite+aead-field-encryption+encrypted-attachments",
+            "large_media": {
+                "foundation": "chunked-v1",
+                "root": "media",
+                "api_enabled": False,
+            },
         }
     )
 
@@ -308,6 +389,14 @@ def profile(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
         raise locked_error(exc) from exc
 
 
+@router.get("/backup/auto/reminder", dependencies=[Depends(require_session)])
+def auto_backup_reminder_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.get_auto_backup_reminder_status())
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
 @router.get("/backup/auto", dependencies=[Depends(require_session)])
 def auto_backup_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     try:
@@ -422,6 +511,80 @@ def delete_auto_backup(
         ) from exc
 
 
+@router.get("/backup/media/status", dependencies=[Depends(require_session)])
+def media_backup_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.media_library_status(include_items=False))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "MEDIA_BACKUP_STATUS_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/backup/media/job", dependencies=[Depends(require_session)])
+def media_backup_job_status(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.media_backup_job_status())
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MEDIA_BACKUP_JOB_STATUS_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/media/sync", dependencies=[Depends(require_session)])
+def start_media_backup_sync(
+    payload: MediaBackupJobRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_media_backup_job(target_path=payload.target_path, mode="sync"))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MEDIA_BACKUP_SYNC_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/media/verify", dependencies=[Depends(require_session)])
+def start_media_backup_verify(
+    payload: MediaBackupJobRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_media_backup_job(target_path=payload.target_path, mode="verify"))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MEDIA_BACKUP_VERIFY_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/media/verify-library", dependencies=[Depends(require_session)])
+def start_media_library_verify(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_media_backup_job(mode="source-verify"))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MEDIA_LIBRARY_VERIFY_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/backup/media/cancel", dependencies=[Depends(require_session)])
+def cancel_media_backup_job(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
+    try:
+        return envelope(vault.cancel_media_backup_job())
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "MEDIA_BACKUP_CANCEL_FAILED", "message": str(exc)},
+        ) from exc
+
+
 @router.get("/backup/check", dependencies=[Depends(require_session)])
 def check_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> dict:
     try:
@@ -455,7 +618,7 @@ def export_backup(vault: Annotated[VaultManager, Depends(get_vault)]) -> Respons
         filename=artifact.filename,
         media_type=LIFEVAULT_MEDIA_TYPE,
         headers={
-            "X-LifeGraph-Backup-Format": "lifegraph-lifevault-v2",
+            "X-LifeGraph-Backup-Format": "lifegraph-lifevault-v3",
             "Cache-Control": "no-store",
         },
         background=BackgroundTask(cleanup_export),
@@ -701,6 +864,8 @@ async def import_material(
     source_relative_path: Annotated[str | None, Form(max_length=1000)] = None,
     source_directory_name: Annotated[str | None, Form(max_length=120)] = None,
     reject_duplicate: Annotated[bool, Form()] = False,
+    video_metadata_json: Annotated[str | None, Form(max_length=2000)] = None,
+    video_preview: Annotated[UploadFile | None, File()] = None,
 ) -> dict:
     content = await material_file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(content) > MAX_ATTACHMENT_BYTES:
@@ -708,6 +873,7 @@ async def import_material(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail={"code": "MATERIAL_TOO_LARGE", "message": "单个资料不能超过 50 MB"},
         )
+    preview_content, preview_media_type = await read_optional_preview(video_preview)
     try:
         return envelope(
             vault.import_material(
@@ -718,6 +884,9 @@ async def import_material(
                 source_relative_path=source_relative_path,
                 source_directory_name=source_directory_name,
                 reject_duplicate=reject_duplicate,
+                video_metadata=parse_video_metadata_form(video_metadata_json),
+                preview_content=preview_content,
+                preview_media_type=preview_media_type,
             )
         )
     except MaterialDuplicate as exc:
@@ -729,6 +898,214 @@ async def import_material(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "MATERIAL_IMPORT_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/materials/large/uploads/maintenance", dependencies=[Depends(require_session)])
+def large_upload_maintenance_status(
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    stale_days: Annotated[int, Query(ge=7, le=365)] = 30,
+) -> dict:
+    try:
+        return envelope(vault.large_upload_maintenance_status(stale_days=stale_days))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LARGE_UPLOAD_MAINTENANCE_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/materials/large/uploads/cleanup", dependencies=[Depends(require_session)])
+def cleanup_stale_large_uploads(
+    payload: LargeUploadCleanupRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.cleanup_stale_large_uploads(stale_days=payload.stale_days))
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LARGE_UPLOAD_CLEANUP_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.post("/materials/large/uploads", dependencies=[Depends(require_session)])
+def create_large_material_upload(
+    payload: LargeMaterialUploadInitRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.create_large_material_upload(
+                filename=payload.filename,
+                media_type=payload.media_type,
+                size_bytes=payload.size_bytes,
+                chunk_size=payload.chunk_size,
+                file_last_modified_ms=payload.file_last_modified_ms,
+                source_relative_path=payload.source_relative_path,
+                source_directory_name=payload.source_directory_name,
+                quick_fingerprint=payload.quick_fingerprint,
+                reject_duplicate=payload.reject_duplicate,
+            )
+        )
+    except MaterialDuplicate as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "MATERIAL_DUPLICATE", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LARGE_UPLOAD_INIT_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.get("/materials/large/uploads/{session_id}", dependencies=[Depends(require_session)])
+def get_large_material_upload(
+    session_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.get_large_material_upload(session_id=session_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "LARGE_UPLOAD_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.put("/materials/large/uploads/{session_id}/video-metadata", dependencies=[Depends(require_session)])
+def update_large_material_video_metadata(
+    session_id: str,
+    payload: LargeMaterialVideoMetadataRequest,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(
+            vault.update_large_material_video_metadata(
+                session_id=session_id,
+                metadata=payload.model_dump(exclude_none=True),
+            )
+        )
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "LARGE_UPLOAD_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "VIDEO_METADATA_UPDATE_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.put("/materials/large/uploads/{session_id}/preview", dependencies=[Depends(require_session)])
+async def upload_large_material_preview(
+    session_id: str,
+    request: Request,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    content = bytearray()
+    async for part in request.stream():
+        if not part:
+            continue
+        if len(content) + len(part) > MAX_MEDIA_PREVIEW_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "VIDEO_PREVIEW_TOO_LARGE", "message": "视频封面不能超过 512 KB"},
+            )
+        content.extend(part)
+    try:
+        return envelope(
+            vault.put_large_material_preview(
+                session_id=session_id,
+                content=bytes(content),
+                media_type=request.headers.get("content-type"),
+            )
+        )
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "VIDEO_PREVIEW_UPLOAD_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.put("/materials/large/uploads/{session_id}/chunks/{index}", dependencies=[Depends(require_session)])
+async def upload_large_material_chunk(
+    session_id: str,
+    index: int,
+    request: Request,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    if index < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_CHUNK_INDEX", "message": "分块序号不能小于 0"},
+        )
+    content = bytearray()
+    async for part in request.stream():
+        if not part:
+            continue
+        if len(content) + len(part) > MAX_MEDIA_CHUNK_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "CHUNK_TOO_LARGE", "message": "单个上传分块不能超过 32 MB"},
+            )
+        content.extend(part)
+    try:
+        result = await run_in_threadpool(
+            vault.put_large_material_chunk,
+            session_id=session_id,
+            index=index,
+            content=bytes(content),
+        )
+        return envelope(result)
+    except MaterialDuplicate as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "LARGE_UPLOAD_CHUNK_CONFLICT", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LARGE_UPLOAD_CHUNK_FAILED", "message": str(exc)},
+        ) from exc
+
+
+@router.delete("/materials/large/uploads/{session_id}", dependencies=[Depends(require_session)])
+def cancel_large_material_upload(
+    session_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.cancel_large_material_upload(session_id=session_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "LARGE_UPLOAD_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/materials/large/uploads/{session_id}/finalize", dependencies=[Depends(require_session)])
+def finalize_large_material_upload(
+    session_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.finalize_large_material_upload(session_id=session_id))
+    except MaterialDuplicate as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "MATERIAL_DUPLICATE", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "LARGE_UPLOAD_FINALIZE_FAILED", "message": str(exc)},
         ) from exc
 
 
@@ -747,7 +1124,7 @@ def check_material_duplicates(
 def browse_materials(
     vault: Annotated[VaultManager, Depends(get_vault)],
     q: Annotated[str, Query(max_length=120)] = "",
-    category: Annotated[list[Literal["image", "document", "other"]] | None, Query()] = None,
+    category: Annotated[list[Literal["image", "video", "document", "other"]] | None, Query()] = None,
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
     sort: Annotated[Literal["timeline_desc", "timeline_asc", "added_desc"], Query()] = "timeline_desc",
@@ -1160,6 +1537,8 @@ async def upload_content_attachment(
     attachment_file: Annotated[UploadFile, File()],
     vault: Annotated[VaultManager, Depends(get_vault)],
     file_last_modified_ms: Annotated[int | None, Form()] = None,
+    video_metadata_json: Annotated[str | None, Form(max_length=2000)] = None,
+    video_preview: Annotated[UploadFile | None, File()] = None,
 ) -> dict:
     content = await attachment_file.read(MAX_ATTACHMENT_BYTES + 1)
     if len(content) > MAX_ATTACHMENT_BYTES:
@@ -1167,6 +1546,7 @@ async def upload_content_attachment(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail={"code": "ATTACHMENT_TOO_LARGE", "message": "单个附件不能超过 50 MB"},
         )
+    preview_content, preview_media_type = await read_optional_preview(video_preview)
     try:
         return envelope(
             vault.create_attachment(
@@ -1176,6 +1556,9 @@ async def upload_content_attachment(
                 media_type=attachment_file.content_type,
                 content=content,
                 file_last_modified_ms=file_last_modified_ms,
+                video_metadata=parse_video_metadata_form(video_metadata_json),
+                preview_content=preview_content,
+                preview_media_type=preview_media_type,
             )
         )
     except ContentNotFound as exc:
@@ -1210,6 +1593,299 @@ def download_attachment(
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
             "X-LifeGraph-Attachment-Id": attachment_id,
         },
+    )
+
+
+@router.post("/attachments/{attachment_id}/playback-ticket", dependencies=[Depends(require_session)])
+def create_attachment_playback_ticket(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.create_attachment_playback_ticket(attachment_id=attachment_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+def _attachment_stream_response(
+    *,
+    attachment_id: str,
+    ticket: str,
+    range_header: str | None,
+    download: bool,
+    vault: VaultManager,
+    head_only: bool = False,
+) -> Response:
+    if not vault.sessions.validate_media_ticket(ticket, attachment_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "MEDIA_TICKET_INVALID", "message": "视频播放凭据已失效，请重新打开视频"},
+        )
+    try:
+        metadata = vault.get_attachment_stream_metadata(attachment_id=attachment_id)
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+    total_size = int(metadata.get("size_bytes") or 0)
+    try:
+        start, end_exclusive, partial = parse_http_byte_range(range_header, total_size)
+    except ValueError:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes */{total_size}",
+                "Cache-Control": "private, no-store",
+            },
+        )
+
+    filename = str(metadata.get("filename") or "attachment")
+    encoded = quote(filename, safe="")
+    content_length = end_exclusive - start
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Disposition": f"{'attachment' if download else 'inline'}; filename*=UTF-8''{encoded}",
+        "Cache-Control": "private, no-store",
+        "X-LifeGraph-Attachment-Id": attachment_id,
+    }
+    status_code = status.HTTP_206_PARTIAL_CONTENT if partial else status.HTTP_200_OK
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end_exclusive - 1}/{total_size}"
+    if head_only:
+        return Response(
+            status_code=status_code,
+            media_type=str(metadata.get("media_type") or "application/octet-stream"),
+            headers=headers,
+        )
+    try:
+        iterator = vault.iter_attachment_stream_range(
+            attachment_id=attachment_id,
+            start=start,
+            end_exclusive=end_exclusive,
+        )
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+    return StreamingResponse(
+        iterator,
+        status_code=status_code,
+        media_type=str(metadata.get("media_type") or "application/octet-stream"),
+        headers=headers,
+    )
+
+
+@router.get("/attachments/{attachment_id}/stream")
+def stream_attachment(
+    attachment_id: str,
+    ticket: Annotated[str, Query(min_length=20, max_length=200)],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+    download: bool = False,
+) -> Response:
+    return _attachment_stream_response(
+        attachment_id=attachment_id,
+        ticket=ticket,
+        range_header=range_header,
+        download=download,
+        vault=vault,
+    )
+
+
+@router.head("/attachments/{attachment_id}/stream")
+def head_stream_attachment(
+    attachment_id: str,
+    ticket: Annotated[str, Query(min_length=20, max_length=200)],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+    download: bool = False,
+) -> Response:
+    return _attachment_stream_response(
+        attachment_id=attachment_id,
+        ticket=ticket,
+        range_header=range_header,
+        download=download,
+        vault=vault,
+        head_only=True,
+    )
+
+
+@router.get("/attachments/{attachment_id}/audio-compat", dependencies=[Depends(require_session)])
+def attachment_audio_compat_status(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.get_attachment_audio_compat_status(attachment_id=attachment_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+
+@router.post("/attachments/{attachment_id}/audio-compat", dependencies=[Depends(require_session)])
+def start_attachment_audio_compat(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> dict:
+    try:
+        return envelope(vault.start_attachment_audio_compat(attachment_id=attachment_id))
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "AUDIO_COMPAT_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+
+def _attachment_audio_compat_stream_response(
+    *,
+    attachment_id: str,
+    ticket: str,
+    range_header: str | None,
+    vault: VaultManager,
+    head_only: bool = False,
+) -> Response:
+    if not vault.sessions.validate_media_ticket(ticket, attachment_id):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "MEDIA_TICKET_INVALID", "message": "视频播放凭据已失效，请重新打开视频"},
+        )
+    try:
+        metadata = vault.get_attachment_audio_compat_stream_metadata(attachment_id=attachment_id)
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "AUDIO_COMPAT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+
+    total_size = int(metadata.get("size_bytes") or 0)
+    try:
+        start, end_exclusive, partial = parse_http_byte_range(range_header, total_size)
+    except ValueError:
+        return Response(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Range": f"bytes */{total_size}",
+                "Cache-Control": "private, no-store",
+            },
+        )
+    media_type = str(metadata.get("media_type") or "audio/mp4")
+    codec = str(metadata.get("audio_codec") or "AAC").strip().lower()
+    fallback_name = "browser-audio.mp3" if media_type == "audio/mpeg" else "browser-audio.m4a"
+    encoded = quote(str(metadata.get("filename") or fallback_name), safe="")
+    content_length = end_exclusive - start
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Disposition": f"inline; filename*=UTF-8''{encoded}",
+        "Cache-Control": "private, no-store",
+        "X-LifeGraph-Attachment-Id": attachment_id,
+        "X-LifeGraph-Audio-Compat": codec or "compat",
+    }
+    status_code = status.HTTP_206_PARTIAL_CONTENT if partial else status.HTTP_200_OK
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end_exclusive - 1}/{total_size}"
+    if head_only:
+        return Response(
+            status_code=status_code,
+            media_type=media_type,
+            headers=headers,
+        )
+    try:
+        iterator = vault.iter_attachment_audio_compat_range(
+            attachment_id=attachment_id,
+            start=start,
+            end_exclusive=end_exclusive,
+        )
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "AUDIO_COMPAT_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+    return StreamingResponse(
+        iterator,
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
+@router.get("/attachments/{attachment_id}/audio-compat/stream")
+def stream_attachment_audio_compat(
+    attachment_id: str,
+    ticket: Annotated[str, Query(min_length=20, max_length=200)],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+) -> Response:
+    return _attachment_audio_compat_stream_response(
+        attachment_id=attachment_id,
+        ticket=ticket,
+        range_header=range_header,
+        vault=vault,
+    )
+
+
+@router.head("/attachments/{attachment_id}/audio-compat/stream")
+def head_stream_attachment_audio_compat(
+    attachment_id: str,
+    ticket: Annotated[str, Query(min_length=20, max_length=200)],
+    vault: Annotated[VaultManager, Depends(get_vault)],
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+) -> Response:
+    return _attachment_audio_compat_stream_response(
+        attachment_id=attachment_id,
+        ticket=ticket,
+        range_header=range_header,
+        vault=vault,
+        head_only=True,
+    )
+
+
+@router.get("/attachments/{attachment_id}/preview", dependencies=[Depends(require_session)])
+def preview_attachment(
+    attachment_id: str,
+    vault: Annotated[VaultManager, Depends(get_vault)],
+) -> Response:
+    try:
+        metadata, content = vault.read_attachment_preview(attachment_id=attachment_id)
+    except ContentNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ATTACHMENT_PREVIEW_NOT_FOUND", "message": str(exc)},
+        ) from exc
+    except VaultError as exc:
+        raise locked_error(exc) from exc
+    return Response(
+        content=content,
+        media_type=str(metadata.get("preview_media_type") or "image/jpeg"),
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 

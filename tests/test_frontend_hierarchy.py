@@ -33,7 +33,7 @@ def test_three_level_full_range_view_markup_is_present() -> None:
 def test_hierarchy_logic_keeps_life_canvas_and_full_range_months() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.8"' in javascript
+    assert 'const frontendBuildVersion = "0.0.9"' in javascript
     assert 'switchLifeMapView("day")' not in javascript
     assert 'while (monthStart < bounds.target)' in javascript
     assert 'monthStart = monthEnd' in javascript
@@ -288,7 +288,7 @@ def test_content_cards_support_confirmed_soft_delete() -> None:
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert 'const frontendBuildVersion = "0.0.8"' in javascript
+    assert 'const frontendBuildVersion = "0.0.9"' in javascript
     assert 'async function deleteScopedContent(kind, item, button)' in javascript
     assert 'const confirmed = await askConfirmation({' in javascript
     assert 'method: "DELETE"' in javascript
@@ -511,6 +511,7 @@ def test_auto_backup_settings_and_history_ui_is_available() -> None:
         assert f'id="{element_id}"' in html
     assert 'async function loadAutoBackupPanel()' in javascript
     assert 'api("/api/v1/backup/auto"' in javascript
+    assert 'api("/api/v1/backup/auto/reminder"' in javascript
     assert 'api("/api/v1/backup/auto/run"' in javascript
     assert 'api("/api/v1/backup/auto/history/clear"' in javascript
     assert 'downloadAutoBackup(item, downloadButton)' in javascript
@@ -661,8 +662,8 @@ def test_tag_management_settings_ui_and_handlers_are_present() -> None:
     assert 'method: "DELETE"' in javascript
     assert '.tag-management-list {' in css
     assert '.tag-management-row {' in css
-    assert 'const frontendBuildVersion = "0.0.8";' in javascript
-    assert '/assets/app.js?v=0.0.8' in html
+    assert 'const frontendBuildVersion = "0.0.9";' in javascript
+    assert '/assets/app.js?v=0.0.9' in html
 
 
 def test_unified_content_center_ui_and_handlers_are_present() -> None:
@@ -1221,6 +1222,50 @@ def test_material_directory_scan_preview_and_batch_import_are_present() -> None:
     assert '.material-directory-scan-item {' in css
 
 
+
+def test_material_center_supports_resumable_large_file_uploads() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="largeMaterialUploadPanel"' in html
+    assert 'id="largeMaterialUploadList"' in html
+    assert 'id="cleanupStaleLargeUploadsButton"' in html
+    assert 'value="video" checked> 视频' in html
+    assert 'const LARGE_UPLOAD_STORAGE_KEY = "lifegraph.large-material-uploads.v1";' in javascript
+    assert 'sessionId: task.sessionId' in javascript
+    assert 'filename: task.filename' not in javascript[javascript.index('function persistLargeMaterialUploadTasks()'):javascript.index('function restoreLargeMaterialUploadTasksForCurrentProfile()')]
+    assert 'return queueLargeMaterialUploadFile(file, options);' in javascript
+    assert 'file.slice(start, end)' in javascript
+    assert '/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}/chunks/${index}' in javascript
+    assert 'LARGE_UPLOAD_MAX_RETRIES = 3' in javascript
+    assert 'const LARGE_UPLOAD_CONCURRENCY = 3;' in javascript
+    assert 'Promise.allSettled(Array.from({ length: workerCount }, () => uploadWorker()))' in javascript
+    assert 'function formatLargeUploadRate(bytesPerSecond)' in javascript
+    assert '预计剩余 ${eta}' in javascript
+    assert 'dismiss.textContent = "清理";' in javascript
+    assert 'function pauseLargeMaterialUploadTask(task)' in javascript
+    assert 'function resumeLargeMaterialUploadTask(task)' in javascript
+    assert 'function scheduleLargeMaterialUploadPanelRender(delay = 180)' in javascript
+    assert 'task.cancelRequested = true;' in javascript
+    assert 'computeLargeMaterialQuickFingerprint(file)' in javascript
+    assert 'quick_fingerprint: quickFingerprint || null' in javascript
+    assert 'reject_duplicate: options.rejectDuplicate !== false' in javascript
+    assert 'focusMaterialCenterImportedAttachment(result);' in javascript
+    assert 'row.dataset.timelineDate = String(timelineDate);' in javascript
+    assert 'restoreLargeMaterialUploadTasksForCurrentProfile()' in javascript
+    assert '/api/v1/materials/large/uploads/maintenance?stale_days=30' in javascript
+    assert '/api/v1/materials/large/uploads/cleanup' in javascript
+    assert '请选择同一个本地文件继续断点上传' in javascript
+    assert 'if (file.size > MAX_LARGE_MATERIAL_BYTES) return "超过 2 TB";' in javascript
+    assert 'file.size > MAX_ATTACHMENT_BYTES ? "ready" : "hashing"' in javascript
+    assert 'attachment.category === "video" ? "影"' in javascript
+    assert '.large-material-upload-panel {' in css
+    assert '.large-material-upload-progress {' in css
+    assert '.material-center-file-icon.is-video {' in css
+    assert '.material-timeline-date-row.is-upload-focus' in css
+
+
 def test_period_materials_default_to_six_item_collapsed_view() -> None:
     html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -1339,8 +1384,8 @@ def test_day_calendars_use_horizontal_lunar_watermark_without_growing_home_cells
     javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
-    assert '/assets/calendar_meta.js?v=0.0.8' in html
-    assert '/assets/app.js?v=0.0.8' in html
+    assert '/assets/calendar_meta.js?v=0.0.9' in html
+    assert '/assets/app.js?v=0.0.9' in html
     assert 'function decorateDayCalendarButton(button, child, options = {})' in javascript
     assert 'window.LifeGraphCalendarMeta?.getDateMeta?.(child.period_key)' in javascript
     assert 'watermark.className = "calendar-day-watermark";' in javascript
@@ -1416,3 +1461,106 @@ def test_material_center_uses_paged_loading_and_lazy_thumbnails() -> None:
     assert 'material-center-load-sentinel' in javascript
     assert '滚动继续加载' in html
     assert '.material-center-load-sentinel {' in css
+
+
+def test_global_toast_stays_above_material_center_and_other_overlays() -> None:
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "/* LifeGraph v0.0.9.3.2：全局提示始终显示在弹窗/遮罩层之上 */" in css
+    assert ".toast {\n  z-index: 1200;\n  pointer-events: none;\n}" in css
+    assert ".material-center-modal {\n  z-index: 319;" in css
+    assert ".attachment-preview-modal {\n  position: fixed;\n  inset: 0;\n  z-index: 500;" in css
+
+
+def test_video_material_metadata_preview_and_mkv_fallback_are_wired() -> None:
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert "async function extractNativeVideoAssets(file)" in javascript
+    assert "async function extractMatroskaVideoMetadata(file)" in javascript
+    assert '"V_MPEGH/ISO/HEVC": "H.265 / HEVC"' in javascript
+    assert "async function generateVideoInfoPoster(file, metadata)" in javascript
+    assert "/video-metadata`" in javascript
+    assert "/preview`" in javascript
+    assert "function createVideoThumbnail(attachment" in javascript
+    assert "videoTechnicalMetaParts(attachment)" in javascript
+    assert ".video-thumbnail {" in css
+    assert ".video-thumbnail-duration {" in css
+
+
+def test_video_player_uses_scoped_ticket_and_http_range_stream() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="videoPlayerModal"' in html
+    assert 'id="videoPlayer" class="video-player" controls playsinline preload="metadata"' in html
+    assert 'id="downloadVideoPlayer"' in html
+    assert 'async function requestAttachmentStreamTicket(attachment)' in javascript
+    assert '/playback-ticket`' in javascript
+    assert '/stream?${params.toString()}`' in javascript
+    assert 'function openVideoPlayer(attachment' in javascript
+    assert 'videoPlayer?.addEventListener("seeking"' in javascript
+    assert '正在定位并解密目标分块' in javascript
+    assert 'Range 播放通道已建立' in javascript
+    assert 'preview.addEventListener("click"' in javascript
+    assert 'download.textContent = "下载";' in javascript
+    assert 'download.disabled = true;' not in javascript
+    assert '.video-player-modal {' in css
+    assert 'z-index: 700;' in css
+    assert 'body.video-player-open {' in css
+
+
+def test_video_player_audio_compat_layer_detects_dts_and_syncs_separate_audio() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="videoCompatAudio" class="video-compat-audio"' in html
+    assert 'id="videoAudioCompatStatus"' in html
+    assert 'id="videoAudioCompatAction"' in html
+    assert '"A_DTS": "DTS"' in javascript
+    assert 'metadata.audio_codec_id = result.audioCodecId;' in javascript
+    assert '/audio-compat`' in javascript
+    assert '/audio-compat/stream?${params.toString()}`' in javascript
+    assert 'async function prepareVideoAudioCompatibility' in javascript
+    assert 'function syncCompatAudioFromVideo' in javascript
+    assert 'videoPlayer?.addEventListener("volumechange"' in javascript
+    assert 'videoPlayer?.addEventListener("ratechange"' in javascript
+    assert 'videoCompatAudio?.addEventListener("error"' in javascript
+    assert '.video-compat-audio {' in css
+    assert '.video-audio-compat-status {' in css
+
+
+
+def test_audio_compat_progress_shows_rate_and_eta() -> None:
+    app_js = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert "videoAudioCompatRateSample" in app_js
+    assert "formatLargeUploadRate(speedBps)" in app_js
+    assert "预计剩余" in app_js
+
+
+def test_backup_errors_preserve_server_detail() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    javascript = (project_root / "frontend" / "app.js").read_text(encoding="utf-8")
+    assert 'preferServerDetail.has(error?.code)' in javascript
+    assert '"BACKUP_EXPORT_FAILED"' in javascript
+    assert '"AUTO_BACKUP_FAILED"' in javascript
+
+
+def test_media_backup_panel_supports_incremental_sync_and_verify() -> None:
+    html = (PROJECT_ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    javascript = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="mediaBackupTargetPath"' in html
+    assert 'id="startMediaBackupButton"' in html
+    assert 'id="verifyMediaBackupButton"' in html
+    assert 'id="verifyMediaLibraryButton"' in html
+    assert 'id="cancelMediaBackupButton"' in html
+    assert '增量备份媒体库' in html
+    assert '/api/v1/backup/media/${mode}' in javascript
+    assert '/api/v1/backup/media/verify-library' in javascript
+    assert '/api/v1/backup/media/cancel' in javascript
+    assert '媒体分块 ${chunks} 个' in javascript
+    assert '.media-backup-controls {' in css

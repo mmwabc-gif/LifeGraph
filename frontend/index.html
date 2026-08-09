@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>人生图谱 · v0.0.8</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=0.0.8">
+  <title>人生图谱 · v0.0.9</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=0.0.9">
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="topbar-inner">
         <div>
-          <p class="eyebrow">LIFEGRAPH · v0.0.8</p>
+          <p class="eyebrow">LIFEGRAPH · v0.0.9</p>
           <h1>人生图谱</h1>
         </div>
         <div class="top-actions">
-          <span class="build-badge">v0.0.8</span>
+          <span class="build-badge">v0.0.9</span>
           <span id="statusBadge" class="status-badge">正在连接</span>
           <button id="settingsButton" class="ghost-button hidden" type="button">个人设置</button>
           <button id="trashButton" class="ghost-button hidden" type="button">回收站</button>
@@ -214,7 +214,7 @@
       </section>
 
       <section class="panel next-panel">
-        <p class="eyebrow">v0.0.8</p>
+        <p class="eyebrow">v0.0.9</p>
         <h2>统一内容整理与浏览</h2>
         <p>内容中心支持关键词、标签、类型、日期与排序组合整理事件、记忆和计划。</p>
         <div class="button-row">
@@ -418,7 +418,7 @@
 
           <form id="planForm" class="plan-form hidden">
             <label>计划标题
-              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.8">
+              <input name="title" required maxlength="120" placeholder="例如：发布 LifeGraph v0.0.9">
             </label>
             <label>计划内容
               <textarea name="content" maxlength="20000" rows="5" placeholder="记录目标、准备事项或希望达成的结果（可留空）"></textarea>
@@ -686,6 +686,38 @@
                 </div>
                 <p id="backupStatusText" class="backup-status-text" aria-live="polite">尚未执行备份检查。</p>
 
+                <div class="media-backup-panel">
+                  <div class="settings-section-heading backup-import-heading">
+                    <h4>大型媒体库</h4>
+                    <p>.lifevault v3 保存核心仓库、普通附件、视频封面和加密媒体清单；GB 级原始媒体保留在 data/media，完整备份需要另外镜像该目录。兼容音轨位于 data/audio_compat，可重新生成，无需备份。</p>
+                  </div>
+                  <div id="mediaBackupStatusCard" class="media-backup-status-card" data-level="neutral" aria-live="polite">
+                    <div class="media-backup-status-main">
+                      <span id="mediaBackupStatusBadge" class="backup-health-badge">检查中</span>
+                      <div>
+                        <strong id="mediaBackupStatusTitle">正在检查大型媒体库</strong>
+                        <p id="mediaBackupStatusMessage">请稍候…</p>
+                        <span id="mediaBackupStatusMeta"></span>
+                      </div>
+                    </div>
+                    <button id="refreshMediaBackupStatusButton" class="ghost-button" type="button">刷新</button>
+                  </div>
+                  <div class="media-backup-controls">
+                    <label class="full-width">
+                      <span>独立备份目录</span>
+                      <input id="mediaBackupTargetPath" type="text" maxlength="2048" placeholder="例如 E:\LifeGraph-Media-Backup" autocomplete="off">
+                    </label>
+                    <div class="backup-settings-actions media-backup-actions">
+                      <button id="startMediaBackupButton" class="primary-button" type="button">增量备份媒体库</button>
+                      <button id="verifyMediaLibraryButton" class="ghost-button" type="button">校验原始媒体</button>
+                      <button id="verifyMediaBackupButton" class="ghost-button" type="button">校验媒体备份</button>
+                      <button id="cancelMediaBackupButton" class="ghost-button hidden" type="button">取消</button>
+                    </div>
+                    <p id="mediaBackupJobStatusText" class="backup-status-text" aria-live="polite">尚未执行大型媒体独立备份。</p>
+                    <p class="settings-help-text">目标目录中会保存 <code>media/</code> 和媒体备份清单；再次执行时只复制新增或变化的加密分块，不删除目标中已有的历史块。</p>
+                  </div>
+                </div>
+
                 <div class="auto-backup-panel">
                   <div class="settings-section-heading backup-import-heading">
                     <h4>本地自动备份</h4>
@@ -802,7 +834,7 @@
         <header class="material-center-header">
           <div>
             <p class="eyebrow">人生资料库</p>
-            <h2 id="materialCenterTitle">浏览照片、文档与其他资料</h2>
+            <h2 id="materialCenterTitle">浏览照片、视频、文档与其他资料</h2>
           </div>
           <div class="material-center-header-actions">
             <button id="scanMaterialDirectoryButton" class="ghost-button material-directory-scan-button" type="button">扫描目录</button>
@@ -812,6 +844,14 @@
             <button id="closeMaterialCenter" class="icon-button" type="button" aria-label="关闭资料中心">×</button>
           </div>
         </header>
+        <section id="largeMaterialUploadPanel" class="large-material-upload-panel hidden" aria-live="polite">
+          <div class="large-material-upload-panel-heading">
+            <strong>大文件分块上传</strong>
+            <span id="largeMaterialUploadSummary"></span>
+            <button id="cleanupStaleLargeUploadsButton" class="ghost-button large-upload-cleanup-button" type="button">清理过期任务</button>
+          </div>
+          <div id="largeMaterialUploadList" class="large-material-upload-list"></div>
+        </section>
         <form id="materialCenterForm" class="material-center-form">
           <div class="material-center-quick-row">
             <label class="material-center-inline-field material-center-keyword">
@@ -822,6 +862,7 @@
               <legend>资料类型</legend>
               <div class="material-center-category-options">
                 <label><input type="checkbox" name="material_category" value="image" checked> 图片</label>
+                <label><input type="checkbox" name="material_category" value="video" checked> 视频</label>
                 <label><input type="checkbox" name="material_category" value="document" checked> 文档</label>
                 <label><input type="checkbox" name="material_category" value="other" checked> 其他</label>
               </div>
@@ -1115,6 +1156,34 @@
       </div>
     </div>
 
+    <div id="videoPlayerModal" class="video-player-modal hidden" role="dialog" aria-modal="true" aria-labelledby="videoPlayerTitle" aria-hidden="true">
+      <div class="video-player-shell">
+        <header class="video-player-header">
+          <div class="video-player-heading">
+            <p class="eyebrow">视频资料</p>
+            <h2 id="videoPlayerTitle">视频播放</h2>
+            <p id="videoPlayerMeta" class="video-player-meta">—</p>
+          </div>
+          <button id="closeVideoPlayer" class="icon-button video-player-close" type="button" aria-label="关闭视频播放">×</button>
+        </header>
+        <div class="video-player-stage">
+          <video id="videoPlayer" class="video-player" controls playsinline preload="metadata"></video>
+          <audio id="videoCompatAudio" class="video-compat-audio" preload="metadata"></audio>
+          <div id="videoPlayerStatus" class="video-player-status" aria-live="polite">正在建立安全播放通道…</div>
+        </div>
+        <footer class="video-player-footer">
+          <div class="video-player-footer-info">
+            <span>支持 HTTP Range，拖动进度条时只解密所需分块。</span>
+            <span id="videoAudioCompatStatus" class="video-audio-compat-status hidden" aria-live="polite"></span>
+          </div>
+          <div class="video-player-footer-actions">
+            <button id="videoAudioCompatAction" class="secondary-button hidden" type="button">生成兼容音轨</button>
+            <button id="downloadVideoPlayer" class="secondary-button" type="button">下载原视频</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+
     <div id="recoveryModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
       <div class="modal-card">
         <p class="eyebrow">仅显示一次</p>
@@ -1131,7 +1200,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   </main>
   <script src="/static/tinymce/tinymce.min.js"></script>
-  <script src="/assets/calendar_meta.js?v=0.0.8"></script>
-  <script src="/assets/app.js?v=0.0.8"></script>
+  <script src="/assets/calendar_meta.js?v=0.0.9"></script>
+  <script src="/assets/app.js?v=0.0.9"></script>
 </body>
 </html>

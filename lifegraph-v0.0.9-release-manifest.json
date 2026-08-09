@@ -1,0 +1,34 @@
+{
+  "name": "LifeGraph",
+  "version": "0.0.9",
+  "released_at": "2026-08-09T18:46:00+08:00",
+  "schema_version": 8,
+  "lifevault_format_version": 3,
+  "frontend_version": "0.0.9",
+  "backend_version": "0.0.9",
+  "large_media_format": "chunked-v1",
+  "normal_attachment_format": "blob-v1",
+  "features": [
+    "large_file_chunked_encryption",
+    "resumable_upload",
+    "large_file_duplicate_detection",
+    "video_metadata_preview",
+    "http_range_video_playback",
+    "browser_audio_compat",
+    "lifevault_v3_layered_backup",
+    "media_incremental_backup",
+    "media_deep_integrity_check",
+    "range_lru_cache"
+  ],
+  "compatibility": [
+    "schema_v7_migration",
+    "lifevault_v1_import",
+    "lifevault_v2_import"
+  ],
+  "optional_ffmpeg_paths": [
+    "C:/ffmpeg/bin/ffmpeg.exe",
+    "C:/ffmpeg/ffmpeg.exe",
+    "PATH"
+  ],
+  "tests": "234 passed"
+}

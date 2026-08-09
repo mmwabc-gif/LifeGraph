@@ -10,7 +10,7 @@ from app.security.vault import VaultManager
 
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-BUILD_VERSION = "0.0.8"
+BUILD_VERSION = "0.0.9"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -45,6 +45,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and request.url.path.startswith("/api/v1/")
             and not request.url.path.startswith("/api/v1/backup/")
             and request.url.path != "/api/v1/auth/lock"
+            and not request.url.path.endswith("/stream")
+            and "/audio-compat" not in request.url.path
         ):
             app.state.vault.maybe_create_automatic_backup(
                 reason=f"api:{request.method.lower()}"

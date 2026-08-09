@@ -185,7 +185,7 @@ def test_attachment_survives_soft_delete_and_is_removed_on_permanent_delete(tmp_
     assert not encrypted_path.exists()
 
 
-def test_lifevault_v2_contains_and_restores_encrypted_attachments(tmp_path: Path) -> None:
+def test_lifevault_v3_contains_and_restores_encrypted_attachments(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source = make_client(source_dir)
     source_headers = initialize(source, pin="654321")
@@ -202,12 +202,13 @@ def test_lifevault_v2_contains_and_restores_encrypted_attachments(tmp_path: Path
 
     exported = source.get("/api/v1/backup/export", headers=source_headers)
     assert exported.status_code == 200
-    assert exported.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v2"
+    assert exported.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v3"
     assert plaintext not in exported.content
 
     with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["format_version"] == 2
+        assert manifest["format_version"] == 3
+        assert "repository/media-inventory.lgindex" in archive.namelist()
         attachment_path = f"repository/attachments/{attachment['id']}.lgatt"
         assert attachment_path in archive.namelist()
         assert plaintext not in archive.read(attachment_path)
@@ -271,6 +272,41 @@ def test_lifevault_v2_contains_and_restores_encrypted_attachments(tmp_path: Path
     )
     assert downloaded.status_code == 200
     assert downloaded.content == plaintext
+
+
+def test_legacy_lifevault_v2_with_encrypted_attachment_remains_importable(tmp_path: Path) -> None:
+    source = make_client(tmp_path / "source-v2")
+    source_headers = initialize(source, pin="654321")
+    memory = create_memory(source, source_headers)
+    attachment = upload_attachment(
+        source, source_headers, memory["id"], filename="legacy-v2.bin", content=b"legacy-v2-bytes"
+    )
+    current = source.get("/api/v1/backup/export", headers=source_headers).content
+    with zipfile.ZipFile(io.BytesIO(current)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        attachment_path = f"repository/attachments/{attachment['id']}.lgatt"
+        legacy_paths = {"repository/vault.json", "repository/lifegraph.db", attachment_path}
+        manifest["format_version"] = 2
+        manifest["files"] = [entry for entry in manifest.get("files", []) if entry.get("path") in legacy_paths]
+        payloads = {name: archive.read(name) for name in legacy_paths}
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for name, value in payloads.items():
+            archive.writestr(name, value)
+
+    target = make_client(tmp_path / "target-v2")
+    target_headers = initialize(target)
+    checked = target.post(
+        "/api/v1/backup/import/check",
+        headers=target_headers,
+        files={"backup_file": ("legacy.lifevault", buffer.getvalue(), "application/vnd.lifegraph.lifevault+zip")},
+        data={"credential_method": "pin", "credential_secret": "654321"},
+    )
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["data"]["format_version"] == 2
+    assert checked.json()["data"]["attachment_files_verified"] == 1
 
 
 def test_attachment_upload_limit_is_enforced(tmp_path: Path) -> None:

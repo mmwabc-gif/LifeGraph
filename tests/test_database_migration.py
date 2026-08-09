@@ -202,3 +202,64 @@ def test_schema_v6_attachments_are_upgraded_for_independent_materials(tmp_path: 
     assert columns["kind"]["notnull"] == 0
     assert columns["content_id"]["notnull"] == 0
     assert tuple(old_row) == ("memory", "memory-1")
+
+
+def test_schema_v7_attachments_are_upgraded_for_chunked_media(tmp_path: Path) -> None:
+    database_path = tmp_path / "lifegraph.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key, value) VALUES('schema_version', '7');
+            CREATE TABLE profiles (
+                id TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO profiles VALUES('profile-1', X'00', X'01', '2026-08-09', '2026-08-09', 1);
+            CREATE TABLE attachments (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                kind TEXT CHECK(kind IS NULL OR kind IN ('event', 'memory', 'plan')),
+                content_id TEXT,
+                file_nonce BLOB NOT NULL,
+                metadata_nonce BLOB NOT NULL,
+                metadata_ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL))
+            );
+            INSERT INTO attachments VALUES(
+                'material-legacy', 'profile-1', NULL, NULL, X'01', X'02', X'03',
+                '2026-08-09', '2026-08-09'
+            );
+            """
+        )
+
+    database = Database(database_path)
+    database.initialize_schema()
+
+    assert database.schema_version() == 8
+    with database.connect() as connection:
+        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(attachments)")}
+        legacy = connection.execute(
+            "SELECT storage_kind, file_nonce, media_id FROM attachments WHERE id='material-legacy'"
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO attachments(
+                id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
+                metadata_nonce, metadata_ciphertext, created_at, updated_at
+            ) VALUES(
+                'material-large', 'profile-1', NULL, NULL, 'chunked-v1', NULL, 'media-1',
+                X'02', X'03', '2026-08-09', '2026-08-09'
+            )
+            """
+        )
+        large = connection.execute(
+            "SELECT storage_kind, file_nonce, media_id FROM attachments WHERE id='material-large'"
+        ).fetchone()
+
+    assert {"storage_kind", "media_id"}.issubset(columns)
+    assert columns["file_nonce"]["notnull"] == 0
+    assert tuple(legacy) == ("blob-v1", b"\x01", None)
+    assert tuple(large) == ("chunked-v1", None, "media-1")

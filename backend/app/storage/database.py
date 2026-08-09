@@ -10,7 +10,7 @@ from typing import Any
 from app.security.crypto import decrypt_json, encrypt_json
 
 
-LATEST_SCHEMA_VERSION = 7
+LATEST_SCHEMA_VERSION = 8
 PROFILE_AAD = b"lifegraph:v1:profile"
 EVENT_AAD_PREFIX = b"lifegraph:v2:event:"
 MEMORY_AAD_PREFIX = b"lifegraph:v2:memory:"
@@ -148,6 +148,116 @@ class Database:
             """
         )
 
+    def _ensure_attachment_storage_schema(self, connection: sqlite3.Connection) -> None:
+        """Upgrade attachment storage descriptors for chunked large-media records.
+
+        v8 keeps ordinary <=50 MB attachment blobs in the existing encrypted
+        ``attachments`` store while allowing large media to reference an external
+        encrypted chunk set under ``data/media``. Existing rows are migrated as
+        ``blob-v1`` without changing their encrypted metadata or ciphertext files.
+        """
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='attachments'"
+        ).fetchone()
+        if row is None:
+            return
+        columns = {item["name"]: item for item in connection.execute("PRAGMA table_info(attachments)")}
+        storage_kind = columns.get("storage_kind")
+        media_id = columns.get("media_id")
+        file_nonce = columns.get("file_nonce")
+        needs_upgrade = bool(
+            storage_kind is None
+            or media_id is None
+            or (file_nonce and int(file_nonce["notnull"]) == 1)
+        )
+        if not needs_upgrade:
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_media_id
+                ON attachments(media_id)
+                WHERE media_id IS NOT NULL
+                """
+            )
+            return
+
+        connection.execute("DROP INDEX IF EXISTS idx_attachments_content")
+        connection.execute("DROP INDEX IF EXISTS idx_attachments_profile")
+        connection.execute("DROP INDEX IF EXISTS idx_attachments_media_id")
+        connection.execute("DROP TABLE IF EXISTS attachments_v8")
+        connection.execute(
+            """
+            CREATE TABLE attachments_v8 (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL,
+                kind TEXT CHECK(kind IS NULL OR kind IN ('event', 'memory', 'plan')),
+                content_id TEXT,
+                storage_kind TEXT NOT NULL DEFAULT 'blob-v1'
+                    CHECK(storage_kind IN ('blob-v1', 'chunked-v1')),
+                file_nonce BLOB,
+                media_id TEXT,
+                metadata_nonce BLOB NOT NULL,
+                metadata_ciphertext BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+                CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL)),
+                CHECK(
+                    (storage_kind='blob-v1' AND file_nonce IS NOT NULL AND media_id IS NULL)
+                    OR
+                    (storage_kind='chunked-v1' AND file_nonce IS NULL AND media_id IS NOT NULL)
+                )
+            )
+            """
+        )
+        existing_columns = set(columns)
+        if {"storage_kind", "media_id"}.issubset(existing_columns):
+            connection.execute(
+                """
+                INSERT INTO attachments_v8(
+                    id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
+                    metadata_nonce, metadata_ciphertext, created_at, updated_at
+                )
+                SELECT id, profile_id, kind, content_id,
+                       COALESCE(NULLIF(storage_kind, ''), 'blob-v1'),
+                       file_nonce, media_id,
+                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                FROM attachments
+                """
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO attachments_v8(
+                    id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
+                    metadata_nonce, metadata_ciphertext, created_at, updated_at
+                )
+                SELECT id, profile_id, kind, content_id, 'blob-v1', file_nonce, NULL,
+                       metadata_nonce, metadata_ciphertext, created_at, updated_at
+                FROM attachments
+                """
+            )
+        connection.execute("DROP TABLE attachments")
+        connection.execute("ALTER TABLE attachments_v8 RENAME TO attachments")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_content
+            ON attachments(profile_id, kind, content_id, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_profile
+            ON attachments(profile_id, created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_attachments_media_id
+            ON attachments(media_id)
+            WHERE media_id IS NOT NULL
+            """
+        )
+
     def initialize_schema(self) -> None:
         """Create or migrate the encrypted repository to the latest additive schema."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,13 +368,21 @@ class Database:
                     profile_id TEXT NOT NULL,
                     kind TEXT CHECK(kind IS NULL OR kind IN ('event', 'memory', 'plan')),
                     content_id TEXT,
-                    file_nonce BLOB NOT NULL,
+                    storage_kind TEXT NOT NULL DEFAULT 'blob-v1'
+                        CHECK(storage_kind IN ('blob-v1', 'chunked-v1')),
+                    file_nonce BLOB,
+                    media_id TEXT,
                     metadata_nonce BLOB NOT NULL,
                     metadata_ciphertext BLOB NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
-                    CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL))
+                    CHECK((kind IS NULL AND content_id IS NULL) OR (kind IS NOT NULL AND content_id IS NOT NULL)),
+                    CHECK(
+                        (storage_kind='blob-v1' AND file_nonce IS NOT NULL AND media_id IS NULL)
+                        OR
+                        (storage_kind='chunked-v1' AND file_nonce IS NULL AND media_id IS NOT NULL)
+                    )
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_attachments_content
@@ -275,6 +393,7 @@ class Database:
                 """
             )
             self._ensure_material_attachment_schema(connection)
+            self._ensure_attachment_storage_schema(connection)
             for table, date_column, _ in _CONTENT_TABLES.values():
                 connection.execute(
                     f"""
@@ -1047,9 +1166,11 @@ class Database:
         profile_id: str,
         kind: str | None,
         content_id: str | None,
-        file_nonce: bytes,
+        file_nonce: bytes | None,
         metadata: dict[str, Any],
         timestamp: str,
+        storage_kind: str = "blob-v1",
+        media_id: str | None = None,
     ) -> dict[str, Any]:
         if (kind is None) != (content_id is None):
             raise ValueError("资料关联必须同时包含内容类型和内容 ID")
@@ -1060,6 +1181,15 @@ class Database:
                 profile_id=profile_id, kind=kind, content_id=content_id or "", include_deleted=False
             ):
                 raise DatabaseContentNotFound("内容不存在或已经被删除")
+        storage_kind = str(storage_kind or "").strip()
+        if storage_kind not in {"blob-v1", "chunked-v1"}:
+            raise ValueError("不支持的资料存储类型")
+        if storage_kind == "blob-v1":
+            if file_nonce is None or media_id is not None:
+                raise ValueError("普通附件存储参数无效")
+        else:
+            if file_nonce is not None or not media_id:
+                raise ValueError("大型媒体存储参数无效")
         metadata_nonce, metadata_ciphertext = encrypt_json(
             master_key,
             metadata,
@@ -1069,16 +1199,18 @@ class Database:
             connection.execute(
                 """
                 INSERT INTO attachments(
-                    id, profile_id, kind, content_id, file_nonce,
+                    id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
                     metadata_nonce, metadata_ciphertext, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attachment_id,
                     profile_id,
                     kind,
                     content_id,
+                    storage_kind,
                     file_nonce,
+                    media_id,
                     metadata_nonce,
                     metadata_ciphertext,
                     timestamp,
@@ -1090,6 +1222,9 @@ class Database:
             "profile_id": profile_id,
             "kind": kind,
             "content_id": content_id,
+            "storage_kind": storage_kind,
+            "file_nonce": file_nonce,
+            "media_id": media_id,
             **metadata,
             "created_at": timestamp,
             "updated_at": timestamp,
@@ -1122,7 +1257,8 @@ class Database:
                 raise DatabaseContentNotFound("附件不存在")
             row = connection.execute(
                 """
-                SELECT id, profile_id, kind, content_id, file_nonce, created_at, updated_at
+                SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
+                       created_at, updated_at
                 FROM attachments
                 WHERE id=? AND profile_id=?
                 """,
@@ -1135,7 +1271,9 @@ class Database:
             "profile_id": row["profile_id"],
             "kind": row["kind"],
             "content_id": row["content_id"],
+            "storage_kind": row["storage_kind"],
             "file_nonce": row["file_nonce"],
+            "media_id": row["media_id"],
             **metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1181,7 +1319,7 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, profile_id, kind, content_id, file_nonce,
+                SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
                        metadata_nonce, metadata_ciphertext, created_at, updated_at
                 FROM attachments
                 WHERE profile_id=? AND kind=? AND content_id=?
@@ -1203,7 +1341,9 @@ class Database:
                     "profile_id": row["profile_id"],
                     "kind": row["kind"],
                     "content_id": row["content_id"],
+                    "storage_kind": row["storage_kind"],
                     "file_nonce": row["file_nonce"],
+                    "media_id": row["media_id"],
                     **metadata,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
@@ -1221,7 +1361,7 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, profile_id, kind, content_id, file_nonce,
+                SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
                        metadata_nonce, metadata_ciphertext, created_at, updated_at
                 FROM attachments
                 WHERE id=? AND profile_id=?
@@ -1241,7 +1381,9 @@ class Database:
             "profile_id": row["profile_id"],
             "kind": row["kind"],
             "content_id": row["content_id"],
+            "storage_kind": row["storage_kind"],
             "file_nonce": row["file_nonce"],
+            "media_id": row["media_id"],
             **metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -1258,7 +1400,7 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT id FROM attachments
+                SELECT id, storage_kind, media_id FROM attachments
                 WHERE id=? AND profile_id=? AND kind=? AND content_id=?
                 """,
                 (attachment_id, profile_id, kind, content_id),
@@ -1269,7 +1411,12 @@ class Database:
                 "DELETE FROM attachments WHERE id=? AND profile_id=?",
                 (attachment_id, profile_id),
             )
-        return {"id": attachment_id, "deleted": True}
+        return {
+            "id": attachment_id,
+            "deleted": True,
+            "storage_kind": row["storage_kind"],
+            "media_id": row["media_id"],
+        }
 
     def delete_independent_material(
         self,
@@ -1280,7 +1427,7 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 """
-                SELECT id, kind, content_id FROM attachments
+                SELECT id, kind, content_id, storage_kind, media_id FROM attachments
                 WHERE id=? AND profile_id=?
                 """,
                 (attachment_id, profile_id),
@@ -1293,7 +1440,12 @@ class Database:
                 "DELETE FROM attachments WHERE id=? AND profile_id=?",
                 (attachment_id, profile_id),
             )
-        return {"id": attachment_id, "deleted": True}
+        return {
+            "id": attachment_id,
+            "deleted": True,
+            "storage_kind": row["storage_kind"],
+            "media_id": row["media_id"],
+        }
 
     def iter_all_attachments(
         self,
@@ -1309,7 +1461,7 @@ class Database:
         from materializing every decrypted metadata record in memory at once.
         """
         query = """
-            SELECT id, profile_id, kind, content_id, file_nonce,
+            SELECT id, profile_id, kind, content_id, storage_kind, file_nonce, media_id,
                    metadata_nonce, metadata_ciphertext, created_at, updated_at
             FROM attachments
         """
@@ -1336,7 +1488,9 @@ class Database:
                         "profile_id": row["profile_id"],
                         "kind": row["kind"],
                         "content_id": row["content_id"],
+                        "storage_kind": row["storage_kind"],
                         "file_nonce": row["file_nonce"],
+                        "media_id": row["media_id"],
                         **metadata,
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],

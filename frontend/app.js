@@ -12,7 +12,7 @@ const fullPageSettingsButton = document.getElementById("fullPageSettingsButton")
 const trashButton = document.getElementById("trashButton");
 const toast = document.getElementById("toast");
 const tokenKey = "lifegraph_session_token";
-const frontendBuildVersion = "0.0.8";
+const frontendBuildVersion = "0.0.9";
 console.info(`[LifeGraph] frontend build ${frontendBuildVersion}`);
 const buildBadge = document.querySelector(".build-badge");
 if (buildBadge) buildBadge.textContent = `v${frontendBuildVersion} · JS`;
@@ -88,6 +88,10 @@ const materialCenterTimelineViewButton = document.getElementById("materialCenter
 const materialCenterListViewButton = document.getElementById("materialCenterListView");
 const importMaterialButton = document.getElementById("importMaterialButton");
 const materialImportInput = document.getElementById("materialImportInput");
+const largeMaterialUploadPanel = document.getElementById("largeMaterialUploadPanel");
+const largeMaterialUploadSummary = document.getElementById("largeMaterialUploadSummary");
+const largeMaterialUploadList = document.getElementById("largeMaterialUploadList");
+const cleanupStaleLargeUploadsButton = document.getElementById("cleanupStaleLargeUploadsButton");
 const scanMaterialDirectoryButton = document.getElementById("scanMaterialDirectoryButton");
 const materialDirectoryInput = document.getElementById("materialDirectoryInput");
 const materialDirectoryScanModal = document.getElementById("materialDirectoryScanModal");
@@ -114,6 +118,16 @@ let materialDirectoryScanSequence = 0;
 let materialDirectoryScanItems = [];
 let materialDirectoryRootName = "";
 let materialDirectoryScanReturnFocus = null;
+const LARGE_UPLOAD_STORAGE_KEY = "lifegraph.large-material-uploads.v1";
+const MAX_LARGE_MATERIAL_BYTES = 2 * 1024 * 1024 * 1024 * 1024;
+const LARGE_UPLOAD_MAX_RETRIES = 3;
+const LARGE_UPLOAD_CONCURRENCY = 3;
+const LARGE_UPLOAD_SPEED_WINDOW_MS = 8000;
+const largeMaterialUploadTasks = new Map();
+let largeMaterialUploadQueueRunning = false;
+let largeMaterialUploadRestoreProfileId = null;
+let largeMaterialUploadRenderTimer = null;
+let largeUploadMaintenanceStatus = null;
 const contentCenterModal = document.getElementById("contentCenterModal");
 const contentCenterForm = document.getElementById("contentCenterForm");
 const contentCenterQuery = document.getElementById("contentCenterQuery");
@@ -195,12 +209,31 @@ const attachmentPreviewPrevious = document.getElementById("attachmentPreviewPrev
 const attachmentPreviewNext = document.getElementById("attachmentPreviewNext");
 const downloadAttachmentPreviewButton = document.getElementById("downloadAttachmentPreview");
 const closeAttachmentPreviewButton = document.getElementById("closeAttachmentPreview");
+const videoPlayerModal = document.getElementById("videoPlayerModal");
+const videoPlayerTitle = document.getElementById("videoPlayerTitle");
+const videoPlayerMeta = document.getElementById("videoPlayerMeta");
+const videoPlayer = document.getElementById("videoPlayer");
+const videoCompatAudio = document.getElementById("videoCompatAudio");
+const videoPlayerStatus = document.getElementById("videoPlayerStatus");
+const videoAudioCompatStatus = document.getElementById("videoAudioCompatStatus");
+const videoAudioCompatAction = document.getElementById("videoAudioCompatAction");
+const closeVideoPlayerButton = document.getElementById("closeVideoPlayer");
+const downloadVideoPlayerButton = document.getElementById("downloadVideoPlayer");
+let videoPlayerAttachment = null;
+let videoPlayerReturnFocus = null;
+let videoPlayerRequestSequence = 0;
+let videoPlayerTicket = null;
+let videoAudioCompatPollTimer = null;
+let videoAudioCompatState = null;
+let videoAudioCompatRateSample = null;
 let attachmentPreviewItems = [];
 let attachmentPreviewIndex = -1;
 let attachmentPreviewReturnFocus = null;
 let attachmentPreviewLastWheelAt = 0;
 const attachmentObjectUrls = new Map();
 const attachmentObjectUrlPromises = new Map();
+const mediaPreviewObjectUrls = new Map();
+const mediaPreviewObjectUrlPromises = new Map();
 
 const quickMemoryModal = document.getElementById("quickMemoryModal");
 const quickMemoryForm = document.getElementById("quickMemoryForm");
@@ -235,6 +268,7 @@ function showView(name) {
   trashButton.classList.toggle("hidden", name !== "home");
   if (name !== "home") {
     closeAttachmentPreview({ restoreFocus: false });
+    closeVideoPlayer({ restoreFocus: false });
     releaseAllAttachmentObjectUrls();
     closeDateDrawerNow();
     closeFullPageLifeViewNow();
@@ -285,6 +319,15 @@ function friendlyErrorMessage(error) {
     ATTACHMENT_NOT_FOUND: "附件不存在，或已经被删除。",
     ATTACHMENT_TIMELINE_FALLBACK_FAILED: "无法从来源内容日期或附件添加时间确定资料归属日期。",
   };
+  const preferServerDetail = new Set([
+    "BACKUP_CHECK_FAILED",
+    "BACKUP_EXPORT_FAILED",
+    "AUTO_BACKUP_FAILED",
+    "AUTO_BACKUP_VERIFY_FAILED",
+    "BACKUP_IMPORT_CHECK_FAILED",
+    "BACKUP_RESTORE_FAILED",
+  ]);
+  if (preferServerDetail.has(error?.code) && error?.message) return error.message;
   return messages[error?.code] || error?.message || "操作失败，请稍后重试。";
 }
 
@@ -1632,6 +1675,7 @@ function selectedMaterialCenterCategories() {
 
 function materialCenterCategoryLabel(category) {
   if (category === "image") return "图片";
+  if (category === "video") return "视频";
   if (category === "document") return "文档";
   return "其他";
 }
@@ -1702,7 +1746,7 @@ async function openMaterialCenterModal() {
   materialCenterModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("material-center-open");
   setMaterialCenterViewMode(materialCenterViewMode, { rerender: false });
-  await runMaterialCenterBrowse();
+  await Promise.all([runMaterialCenterBrowse(), loadLargeUploadMaintenanceStatus()]);
 }
 
 async function openMaterialCenterPeriod(scope, periodKey, trigger = null, target = null) {
@@ -1730,14 +1774,885 @@ function setMaterialCenterViewMode(mode, { rerender = true } = {}) {
   if (rerender && materialCenterLastData) renderMaterialCenterResults(materialCenterLastData);
 }
 
-async function importIndependentMaterialFile(file, options = {}) {
-  if (file.size > MAX_ATTACHMENT_BYTES) {
-    const error = new Error(`“${file.name}”超过 50 MB，暂不能导入。`);
+function largeUploadTaskFingerprint(fileOrRecord, options = {}) {
+  const name = String(fileOrRecord?.name || fileOrRecord?.filename || "");
+  const size = Number(fileOrRecord?.size ?? fileOrRecord?.sizeBytes ?? fileOrRecord?.size_bytes ?? 0);
+  const lastModified = Number(fileOrRecord?.lastModified ?? fileOrRecord?.fileLastModifiedMs ?? fileOrRecord?.file_last_modified_ms ?? 0);
+  const relativePath = String(options.sourceRelativePath ?? fileOrRecord?.sourceRelativePath ?? fileOrRecord?.source_relative_path ?? "");
+  return `${name}\n${size}\n${lastModified}\n${relativePath}`;
+}
+
+function readLargeUploadStorageRecords() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LARGE_UPLOAD_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function persistLargeMaterialUploadTasks() {
+  if (!currentProfile?.id) return;
+  const profileId = String(currentProfile.id);
+  const otherProfiles = readLargeUploadStorageRecords().filter((item) => String(item.profileId || "") !== profileId);
+  const currentRecords = Array.from(largeMaterialUploadTasks.values())
+    .filter((task) => task.status !== "completed" && task.status !== "cancelled")
+    .map((task) => ({
+      profileId,
+      sessionId: task.sessionId,
+      updatedAt: new Date().toISOString(),
+    }));
+  try {
+    localStorage.setItem(LARGE_UPLOAD_STORAGE_KEY, JSON.stringify([...otherProfiles, ...currentRecords]));
+  } catch (_) {
+    // Uploads still work for the current page even if browser storage is unavailable.
+  }
+}
+
+function restoreLargeMaterialUploadTasksForCurrentProfile() {
+  if (!currentProfile?.id) return;
+  const profileId = String(currentProfile.id);
+  if (largeMaterialUploadRestoreProfileId === profileId) return;
+  largeMaterialUploadRestoreProfileId = profileId;
+  largeMaterialUploadTasks.clear();
+  readLargeUploadStorageRecords()
+    .filter((item) => String(item.profileId || "") === profileId && item.sessionId)
+    .forEach((record) => {
+      largeMaterialUploadTasks.set(record.sessionId, {
+        sessionId: String(record.sessionId),
+        mediaId: null,
+        filename: "未完成的大文件上传",
+        mediaType: "application/octet-stream",
+        sizeBytes: 0,
+        fileLastModifiedMs: 0,
+        sourceRelativePath: "",
+        sourceDirectoryName: "",
+        rejectDuplicate: false,
+        quickFingerprint: "",
+        chunkSize: 0,
+        chunkCount: 0,
+        completedBytes: 0,
+        completedRanges: [],
+        status: "recoverable",
+        file: null,
+        abortController: null,
+        abortControllers: new Set(),
+        pauseRequested: false,
+        resumeRequested: false,
+        cancelRequested: false,
+        speedSamples: [],
+        uploadSpeedBps: 0,
+        estimatedSecondsRemaining: null,
+        errorMessage: "正在读取服务器断点信息……",
+      });
+    });
+  renderLargeMaterialUploadPanel();
+  void reconcileRecoverableLargeMaterialUploads();
+}
+
+function largeUploadStatusLabel(task) {
+  const labels = {
+    queued: "等待上传",
+    uploading: "正在分块上传",
+    pausing: "正在暂停",
+    paused: "已暂停",
+    recoverable: "等待重新选择原文件",
+    finalizing: "正在校验并写入资料库",
+    failed: "上传失败",
+    cancelling: "正在取消",
+    completed: "上传完成",
+    cancelled: "已取消",
+  };
+  return labels[task?.status] || "等待上传";
+}
+
+function largeUploadProgressPercent(task) {
+  const total = Number(task?.sizeBytes) || 0;
+  if (!total) return 0;
+  if (task.status === "completed") return 100;
+  return Math.max(0, Math.min(100, (Number(task.completedBytes || 0) / total) * 100));
+}
+
+function formatLargeUploadRate(bytesPerSecond) {
+  const value = Number(bytesPerSecond) || 0;
+  if (value <= 0) return "";
+  const mib = value / (1024 * 1024);
+  if (mib >= 1) return `${mib.toFixed(mib >= 100 ? 0 : mib >= 10 ? 1 : 2)} MB/s`;
+  const kib = value / 1024;
+  return `${kib.toFixed(kib >= 100 ? 0 : 1)} KB/s`;
+}
+
+function formatLargeUploadEta(seconds) {
+  const total = Math.max(0, Math.ceil(Number(seconds) || 0));
+  if (!Number.isFinite(total) || total <= 0) return "";
+  if (total < 60) return `${total}秒`;
+  const minutes = Math.floor(total / 60);
+  const remain = total % 60;
+  if (minutes < 60) return `${minutes}分${String(remain).padStart(2, "0")}秒`;
+  const hours = Math.floor(minutes / 60);
+  const minuteRemain = minutes % 60;
+  return `${hours}小时${String(minuteRemain).padStart(2, "0")}分`;
+}
+
+function resetLargeUploadSpeed(task) {
+  const now = globalThis.performance?.now?.() ?? Date.now();
+  task.speedSamples = [{ at: now, bytes: Number(task.completedBytes || 0) }];
+  task.uploadSpeedBps = 0;
+  task.estimatedSecondsRemaining = null;
+}
+
+function recordLargeUploadSpeed(task) {
+  const now = globalThis.performance?.now?.() ?? Date.now();
+  if (!Array.isArray(task.speedSamples) || !task.speedSamples.length) resetLargeUploadSpeed(task);
+  task.speedSamples.push({ at: now, bytes: Number(task.completedBytes || 0) });
+  const cutoff = now - LARGE_UPLOAD_SPEED_WINDOW_MS;
+  while (task.speedSamples.length > 2 && task.speedSamples[1].at < cutoff) task.speedSamples.shift();
+  const first = task.speedSamples[0];
+  const last = task.speedSamples[task.speedSamples.length - 1];
+  const elapsedSeconds = Math.max(0, (last.at - first.at) / 1000);
+  const transferred = Math.max(0, last.bytes - first.bytes);
+  if (elapsedSeconds >= 0.35 && transferred > 0) {
+    task.uploadSpeedBps = transferred / elapsedSeconds;
+    const remaining = Math.max(0, Number(task.sizeBytes || 0) - Number(task.completedBytes || 0));
+    task.estimatedSecondsRemaining = task.uploadSpeedBps > 0 ? remaining / task.uploadSpeedBps : null;
+  }
+}
+
+function largeUploadActiveRequestCount(task) {
+  if (task?.abortControllers instanceof Set) return task.abortControllers.size;
+  return task?.abortController ? 1 : 0;
+}
+
+function abortLargeUploadRequests(task) {
+  if (task?.abortControllers instanceof Set) {
+    Array.from(task.abortControllers).forEach((controller) => controller?.abort?.());
+  }
+  task?.abortController?.abort?.();
+}
+
+function largeUploadDetailsText(task) {
+  const percent = largeUploadProgressPercent(task);
+  const chunkText = task.chunkSize ? ` · ${formatAttachmentSize(task.chunkSize)}/块` : "";
+  let transferText = "";
+  if (task.status === "uploading") {
+    const rate = formatLargeUploadRate(task.uploadSpeedBps);
+    const eta = formatLargeUploadEta(task.estimatedSecondsRemaining);
+    if (rate) transferText += ` · ${rate}`;
+    if (eta) transferText += ` · 预计剩余 ${eta}`;
+  } else if (task.status === "finalizing") {
+    transferText = " · 上传已完成，正在校验";
+  }
+  return `${percent.toFixed(percent >= 10 ? 0 : 1)}% · ${formatAttachmentSize(task.completedBytes || 0)} / ${formatAttachmentSize(task.sizeBytes || 0)}${chunkText}${transferText}`;
+}
+
+function largeUploadCompletedIndexSet(ranges) {
+  const set = new Set();
+  (Array.isArray(ranges) ? ranges : []).forEach((range) => {
+    if (!Array.isArray(range) || range.length < 2) return;
+    const start = Math.max(0, Number(range[0]) || 0);
+    const end = Math.max(start, Number(range[1]) || start);
+    for (let index = start; index <= end; index += 1) set.add(index);
+  });
+  return set;
+}
+
+function applyLargeUploadServerStatus(task, status) {
+  task.sessionId = String(status.session_id || task.sessionId || "");
+  task.mediaId = status.media_id || task.mediaId || null;
+  task.filename = String(status.filename || task.filename || "未命名大型资料");
+  task.mediaType = String(status.media_type || task.mediaType || "application/octet-stream");
+  task.sizeBytes = Number(status.size_bytes) || task.sizeBytes || 0;
+  task.fileLastModifiedMs = Number(status.file_last_modified_ms) || task.fileLastModifiedMs || 0;
+  task.sourceRelativePath = String(status.source_relative_path || task.sourceRelativePath || "");
+  task.sourceDirectoryName = String(status.source_directory_name || task.sourceDirectoryName || "");
+  task.rejectDuplicate = Boolean(status.reject_duplicate ?? task.rejectDuplicate);
+  task.quickFingerprint = String(status.quick_fingerprint || task.quickFingerprint || "");
+  task.chunkSize = Number(status.chunk_size) || task.chunkSize || 0;
+  task.chunkCount = Number(status.chunk_count) || task.chunkCount || 0;
+  task.completedBytes = Number(status.completed_bytes) || 0;
+  task.completedRanges = Array.isArray(status.completed_ranges) ? status.completed_ranges : [];
+}
+
+function updateLargeMaterialUploadProgressDisplay(task) {
+  if (!largeMaterialUploadList || !task?.sessionId) return;
+  const row = largeMaterialUploadList.querySelector(`[data-large-upload-session="${String(task.sessionId)}"]`);
+  if (!(row instanceof HTMLElement)) return;
+  const percent = largeUploadProgressPercent(task);
+  const progressBar = row.querySelector('[data-large-upload-role="progress-bar"]');
+  const details = row.querySelector('[data-large-upload-role="details"]');
+  if (progressBar instanceof HTMLElement) progressBar.style.width = `${percent.toFixed(2)}%`;
+  if (details instanceof HTMLElement) {
+    const detailText = largeUploadDetailsText(task);
+    details.textContent = detailText;
+    details.title = task.errorMessage || detailText;
+  }
+}
+
+function scheduleLargeMaterialUploadPanelRender(delay = 180) {
+  if (largeMaterialUploadRenderTimer !== null) return;
+  largeMaterialUploadRenderTimer = window.setTimeout(() => {
+    largeMaterialUploadRenderTimer = null;
+    largeMaterialUploadTasks.forEach((task) => updateLargeMaterialUploadProgressDisplay(task));
+  }, Math.max(0, Number(delay) || 0));
+}
+
+function flushLargeMaterialUploadPanelRender() {
+  if (largeMaterialUploadRenderTimer !== null) {
+    window.clearTimeout(largeMaterialUploadRenderTimer);
+    largeMaterialUploadRenderTimer = null;
+  }
+  renderLargeMaterialUploadPanel();
+}
+
+function renderLargeMaterialUploadPanel() {
+  if (!largeMaterialUploadPanel || !largeMaterialUploadList) return;
+  const tasks = Array.from(largeMaterialUploadTasks.values()).filter((task) => task.status !== "cancelled");
+  const stale = Number(largeUploadMaintenanceStatus?.stale_sessions || 0);
+  largeMaterialUploadPanel.classList.toggle("hidden", tasks.length === 0 && stale === 0);
+  largeMaterialUploadList.replaceChildren();
+  const active = tasks.filter((task) => ["queued", "uploading", "finalizing"].includes(task.status)).length;
+  const paused = tasks.filter((task) => ["paused", "recoverable", "failed"].includes(task.status)).length;
+  if (largeMaterialUploadSummary) {
+    const parts = [];
+    if (tasks.length) parts.push(`${tasks.length} 个任务`);
+    if (active) parts.push(`进行中 ${active}`);
+    if (paused) parts.push(`待处理 ${paused}`);
+    if (stale) parts.push(`过期断点 ${stale}`);
+    largeMaterialUploadSummary.textContent = parts.join(" · ");
+  }
+  cleanupStaleLargeUploadsButton?.classList.toggle("hidden", stale === 0);
+  if (!tasks.length) return;
+
+  tasks.forEach((task) => {
+    const row = document.createElement("article");
+    row.className = `large-material-upload-item is-${task.status || "queued"}`;
+    row.dataset.largeUploadSession = String(task.sessionId || "");
+
+    const main = document.createElement("div");
+    main.className = "large-material-upload-main";
+    const heading = document.createElement("div");
+    heading.className = "large-material-upload-heading";
+    const name = document.createElement("strong");
+    name.textContent = task.filename || "未命名大型资料";
+    name.title = name.textContent;
+    const state = document.createElement("span");
+    state.textContent = largeUploadStatusLabel(task);
+    heading.append(name, state);
+
+    const progress = document.createElement("div");
+    progress.className = "large-material-upload-progress";
+    const progressBar = document.createElement("span");
+    progressBar.dataset.largeUploadRole = "progress-bar";
+    progressBar.style.width = `${largeUploadProgressPercent(task).toFixed(2)}%`;
+    progress.appendChild(progressBar);
+
+    const details = document.createElement("div");
+    details.className = "large-material-upload-details";
+    details.dataset.largeUploadRole = "details";
+    details.textContent = largeUploadDetailsText(task);
+    details.title = task.errorMessage || details.textContent;
+    main.append(heading, progress, details);
+
+    const actions = document.createElement("div");
+    actions.className = "large-material-upload-actions";
+    if (task.status === "uploading" || task.status === "queued") {
+      const pause = document.createElement("button");
+      pause.className = "ghost-button";
+      pause.type = "button";
+      pause.textContent = "暂停";
+      pause.addEventListener("click", () => pauseLargeMaterialUploadTask(task));
+      actions.appendChild(pause);
+    } else if (["paused", "failed", "recoverable"].includes(task.status)) {
+      const resume = document.createElement("button");
+      resume.className = "ghost-button";
+      resume.type = "button";
+      resume.textContent = task.file ? "继续" : "选择原文件继续";
+      resume.addEventListener("click", () => {
+        if (task.file) resumeLargeMaterialUploadTask(task);
+        else {
+          showToast(`请重新选择“${task.filename}”，系统会自动匹配断点。`, "info");
+          materialImportInput?.click();
+        }
+      });
+      actions.appendChild(resume);
+    }
+    if (!["finalizing", "completed", "cancelling"].includes(task.status)) {
+      const cancel = document.createElement("button");
+      cancel.className = "ghost-button is-danger";
+      cancel.type = "button";
+      cancel.textContent = "取消";
+      cancel.addEventListener("click", () => cancelLargeMaterialUploadTask(task));
+      actions.appendChild(cancel);
+    }
+    if (task.status === "completed") {
+      const dismiss = document.createElement("button");
+      dismiss.className = "ghost-button";
+      dismiss.type = "button";
+      dismiss.textContent = "清理";
+      dismiss.addEventListener("click", () => {
+        largeMaterialUploadTasks.delete(task.sessionId);
+        renderLargeMaterialUploadPanel();
+      });
+      actions.appendChild(dismiss);
+    }
+    row.append(main, actions);
+    largeMaterialUploadList.appendChild(row);
+  });
+}
+
+async function reconcileRecoverableLargeMaterialUploads() {
+  const tasks = Array.from(largeMaterialUploadTasks.values()).filter((task) => task.status === "recoverable");
+  for (const task of tasks) {
+    try {
+      const status = await api(`/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}`, {}, true);
+      applyLargeUploadServerStatus(task, status);
+      task.status = "recoverable";
+      task.errorMessage = "请选择同一个本地文件继续断点上传。";
+    } catch (error) {
+      if (error?.code === "LARGE_UPLOAD_NOT_FOUND") {
+        largeMaterialUploadTasks.delete(task.sessionId);
+      } else {
+        task.errorMessage = error?.message || "断点状态暂时无法确认";
+      }
+    }
+  }
+  persistLargeMaterialUploadTasks();
+  renderLargeMaterialUploadPanel();
+}
+
+async function loadLargeUploadMaintenanceStatus() {
+  if (!currentProfile?.id) return null;
+  try {
+    largeUploadMaintenanceStatus = await api("/api/v1/materials/large/uploads/maintenance?stale_days=30", {}, true);
+  } catch (_) {
+    largeUploadMaintenanceStatus = null;
+  }
+  renderLargeMaterialUploadPanel();
+  return largeUploadMaintenanceStatus;
+}
+
+cleanupStaleLargeUploadsButton?.addEventListener("click", async () => {
+  const stale = Number(largeUploadMaintenanceStatus?.stale_sessions || 0);
+  if (!stale) {
+    showToast("当前没有超过 30 天的过期上传断点", "info");
+    return;
+  }
+  const confirmed = await askConfirmation({
+    eyebrow: "清理上传断点",
+    title: `清理 ${stale} 个过期任务？`,
+    message: "只会删除超过 30 天且当前没有正在写入的未完成大文件上传会话；已经入库的资料不会受影响。",
+    confirmLabel: "清理过期任务",
+    tone: "warning",
+  });
+  if (!confirmed) return;
+  setButtonBusy(cleanupStaleLargeUploadsButton, true, "清理中…");
+  try {
+    const result = await api("/api/v1/materials/large/uploads/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stale_days: 30 }),
+    }, true);
+    await reconcileRecoverableLargeMaterialUploads();
+    await loadLargeUploadMaintenanceStatus();
+    showToast(`已清理 ${Number(result.removed_sessions || 0)} 个过期上传任务`, "success");
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(cleanupStaleLargeUploadsButton, false);
+  }
+});
+
+function findMatchingLargeUploadTask(file, options = {}) {
+  const fingerprint = largeUploadTaskFingerprint(file, options);
+  const tasks = Array.from(largeMaterialUploadTasks.values());
+  const exact = tasks.find((task) => (
+    largeUploadTaskFingerprint({
+      filename: task.filename,
+      sizeBytes: task.sizeBytes,
+      fileLastModifiedMs: task.fileLastModifiedMs,
+      sourceRelativePath: task.sourceRelativePath,
+    }) === fingerprint
+  ));
+  if (exact) return exact;
+  if (options.sourceRelativePath) return null;
+  const fallback = tasks.filter((task) => (
+    String(task.filename || "") === String(file?.name || "")
+    && Number(task.sizeBytes || 0) === Number(file?.size || 0)
+    && Number(task.fileLastModifiedMs || 0) === Number(file?.lastModified || 0)
+    && ["recoverable", "paused", "failed"].includes(task.status)
+  ));
+  return fallback.length === 1 ? fallback[0] : null;
+}
+
+async function computeLargeMaterialQuickFingerprint(file) {
+  if (!file?.size || !window.crypto?.subtle) return "";
+  const sampleSize = 1024 * 1024;
+  const ranges = [
+    [0, Math.min(file.size, sampleSize)],
+    [Math.max(0, Math.floor(file.size / 2) - Math.floor(sampleSize / 2)), Math.min(file.size, Math.max(0, Math.floor(file.size / 2) - Math.floor(sampleSize / 2)) + sampleSize)],
+    [Math.max(0, file.size - sampleSize), file.size],
+  ];
+  const unique = [];
+  const seen = new Set();
+  ranges.forEach(([start, end]) => {
+    const key = `${start}:${end}`;
+    if (end > start && !seen.has(key)) {
+      seen.add(key);
+      unique.push(file.slice(start, end));
+    }
+  });
+  const prefix = new TextEncoder().encode(`LifeGraph-quick-v1:${file.size}:`);
+  const sampled = await new Blob([prefix, ...unique]).arrayBuffer();
+  const digest = await window.crypto.subtle.digest("SHA-256", sampled);
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function createLargeMaterialUploadTask(file, options = {}) {
+  const quickFingerprint = await computeLargeMaterialQuickFingerprint(file);
+  const data = await api("/api/v1/materials/large/uploads", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: file.name || "未命名大型资料",
+      media_type: file.type || "application/octet-stream",
+      size_bytes: file.size,
+      file_last_modified_ms: Number.isFinite(file.lastModified) && file.lastModified > 0 ? Math.trunc(file.lastModified) : null,
+      source_relative_path: options.sourceRelativePath || null,
+      source_directory_name: options.sourceDirectoryName || null,
+      quick_fingerprint: quickFingerprint || null,
+      reject_duplicate: options.rejectDuplicate !== false,
+    }),
+  }, true);
+  const task = {
+    sessionId: data.session_id,
+    mediaId: data.media_id || null,
+    filename: data.filename || file.name,
+    mediaType: data.media_type || file.type || "application/octet-stream",
+    sizeBytes: Number(data.size_bytes) || file.size,
+    fileLastModifiedMs: Number(data.file_last_modified_ms) || Number(file.lastModified) || 0,
+    sourceRelativePath: String(data.source_relative_path || options.sourceRelativePath || ""),
+    sourceDirectoryName: String(data.source_directory_name || options.sourceDirectoryName || ""),
+    rejectDuplicate: Boolean(data.reject_duplicate ?? (options.rejectDuplicate !== false)),
+    quickFingerprint: String(data.quick_fingerprint || quickFingerprint || ""),
+    chunkSize: Number(data.chunk_size) || 0,
+    chunkCount: Number(data.chunk_count) || 0,
+    completedBytes: Number(data.completed_bytes) || 0,
+    completedRanges: Array.isArray(data.completed_ranges) ? data.completed_ranges : [],
+    status: "queued",
+    file,
+    abortController: null,
+    abortControllers: new Set(),
+    pauseRequested: false,
+    resumeRequested: false,
+    cancelRequested: false,
+    speedSamples: [],
+    uploadSpeedBps: 0,
+    estimatedSecondsRemaining: null,
+    errorMessage: "",
+  };
+  largeMaterialUploadTasks.set(task.sessionId, task);
+  persistLargeMaterialUploadTasks();
+  renderLargeMaterialUploadPanel();
+  return task;
+}
+
+async function prepareLargeMaterialVideoAssets(task) {
+  if (!task?.file || !isVideoFile(task.file)) return;
+  const assets = await extractVideoMediaAssets(task.file);
+  if (assets?.metadata && Object.keys(assets.metadata).length) {
+    await api(
+      `/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}/video-metadata`,
+      { method: "PUT", body: JSON.stringify(assets.metadata) },
+      true,
+    );
+  }
+  if (assets?.previewBlob) {
+    const headers = { "Content-Type": assets.previewBlob.type || "image/jpeg" };
+    if (token()) headers.Authorization = `Bearer ${token()}`;
+    const response = await fetch(
+      `/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}/preview`,
+      { method: "PUT", headers, body: assets.previewBlob },
+    );
+    if (!response.ok) {
+      let message = `视频封面保存失败：HTTP ${response.status}`;
+      try {
+        const payload = await response.json();
+        message = payload.error?.message || message;
+      } catch (_) {}
+      throw new Error(message);
+    }
+  }
+}
+
+async function queueLargeMaterialUploadFile(file, options = {}) {
+  if (!file?.size) throw new Error("大型资料文件不能为空。");
+  if (Array.from(largeMaterialUploadTasks.values()).some((task) => task.status === "recoverable" && !task.sizeBytes)) {
+    await reconcileRecoverableLargeMaterialUploads();
+  }
+  if (file.size > MAX_LARGE_MATERIAL_BYTES) {
+    const error = new Error(`“${file.name}”超过 2 TB，暂不能导入。`);
     error.code = "MATERIAL_TOO_LARGE";
     throw error;
   }
+  let task = findMatchingLargeUploadTask(file, options);
+  if (task) {
+    task.file = file;
+    task.pauseRequested = false;
+    task.resumeRequested = false;
+    task.cancelRequested = false;
+    try {
+      const status = await api(`/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}`, {}, true);
+      if (Number(status.size_bytes) !== file.size || String(status.filename || "") !== String(file.name || "")) {
+        throw new Error("本地文件与断点上传会话不匹配。");
+      }
+      applyLargeUploadServerStatus(task, status);
+      task.status = status.complete ? "queued" : "queued";
+      task.errorMessage = "";
+    } catch (error) {
+      if (error?.code !== "LARGE_UPLOAD_NOT_FOUND") throw error;
+      largeMaterialUploadTasks.delete(task.sessionId);
+      task = null;
+    }
+  }
+  if (!task) task = await createLargeMaterialUploadTask(file, options);
+  if (isVideoFile(file)) {
+    try {
+      await prepareLargeMaterialVideoAssets(task);
+    } catch (error) {
+      console.warn("LifeGraph video metadata extraction/upload skipped:", error);
+    }
+  }
+  persistLargeMaterialUploadTasks();
+  renderLargeMaterialUploadPanel();
+  scheduleLargeMaterialUploadQueue();
+  return task;
+}
+
+async function uploadLargeMaterialChunk(task, index, blob) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= LARGE_UPLOAD_MAX_RETRIES; attempt += 1) {
+    if (task.cancelRequested) {
+      const cancelled = new Error("UPLOAD_CANCELLED");
+      cancelled.code = "UPLOAD_CANCELLED";
+      throw cancelled;
+    }
+    if (task.pauseRequested) {
+      const paused = new Error("UPLOAD_PAUSED");
+      paused.code = "UPLOAD_PAUSED";
+      throw paused;
+    }
+    const controller = new AbortController();
+    if (!(task.abortControllers instanceof Set)) task.abortControllers = new Set();
+    task.abortControllers.add(controller);
+    task.abortController = controller;
+    try {
+      const headers = { "Content-Type": "application/octet-stream" };
+      if (token()) headers.Authorization = `Bearer ${token()}`;
+      const response = await fetch(
+        `/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}/chunks/${index}`,
+        { method: "PUT", headers, body: blob, signal: controller.signal },
+      );
+      const text = await response.text();
+      let payload;
+      try {
+        payload = text ? JSON.parse(text) : { ok: false, error: { message: "响应为空" } };
+      } catch (_) {
+        payload = { ok: false, error: { message: `响应格式错误：HTTP ${response.status}` } };
+      }
+      if (!response.ok || !payload.ok) {
+        const error = new Error(payload.error?.message || `分块上传失败：HTTP ${response.status}`);
+        error.code = payload.error?.code || "LARGE_UPLOAD_CHUNK_FAILED";
+        error.httpStatus = response.status;
+        throw error;
+      }
+      return payload.data;
+    } catch (error) {
+      if (controller.signal.aborted && task.cancelRequested) {
+        const cancelled = new Error("UPLOAD_CANCELLED");
+        cancelled.code = "UPLOAD_CANCELLED";
+        throw cancelled;
+      }
+      if (controller.signal.aborted && task.pauseRequested) {
+        const paused = new Error("UPLOAD_PAUSED");
+        paused.code = "UPLOAD_PAUSED";
+        throw paused;
+      }
+      lastError = error;
+      const retryable = !error?.httpStatus || error.httpStatus >= 500 || error.httpStatus === 429;
+      if (!retryable || attempt >= LARGE_UPLOAD_MAX_RETRIES) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 500 * attempt));
+    } finally {
+      task.abortControllers?.delete?.(controller);
+      if (task.abortController === controller) task.abortController = null;
+    }
+  }
+  throw lastError || new Error("分块上传失败");
+}
+
+function syncMaterialDirectoryItemFromLargeTask(task) {
+  const item = materialDirectoryScanItems.find((entry) => entry.largeUploadSessionId === task.sessionId);
+  if (!item) return;
+  if (task.status === "completed") item.status = "imported";
+  else if (task.status === "cancelled") {
+    item.status = "ready";
+    item.selected = false;
+    item.largeUploadSessionId = null;
+  } else if (task.status === "failed") {
+    item.status = "failed";
+    item.errorMessage = task.errorMessage || "大文件上传失败";
+  } else if (["paused", "pausing", "recoverable"].includes(task.status)) item.status = "paused_large";
+  else if (["queued", "uploading", "finalizing", "cancelling"].includes(task.status)) item.status = task.status === "uploading" ? "uploading_large" : "queued_large";
+  if (isMaterialDirectoryScanOpen()) renderMaterialDirectoryScanList();
+}
+
+async function runLargeMaterialUploadTask(task) {
+  if (!task.file) {
+    task.status = "recoverable";
+    task.errorMessage = "请选择同一个本地文件继续断点上传。";
+    persistLargeMaterialUploadTasks();
+    renderLargeMaterialUploadPanel();
+    return;
+  }
+  try {
+    const status = await api(`/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}`, {}, true);
+    applyLargeUploadServerStatus(task, status);
+    if (task.cancelRequested) {
+      const cancelled = new Error("UPLOAD_CANCELLED");
+      cancelled.code = "UPLOAD_CANCELLED";
+      throw cancelled;
+    }
+    if (task.pauseRequested) {
+      const paused = new Error("UPLOAD_PAUSED");
+      paused.code = "UPLOAD_PAUSED";
+      throw paused;
+    }
+    if (Number(status.size_bytes) !== task.file.size) throw new Error("本地文件大小与上传会话不匹配。");
+    const completed = largeUploadCompletedIndexSet(task.completedRanges);
+    const pendingIndices = [];
+    for (let index = 0; index < task.chunkCount; index += 1) {
+      if (!completed.has(index)) pendingIndices.push(index);
+    }
+    task.status = "uploading";
+    task.errorMessage = "";
+    resetLargeUploadSpeed(task);
+    syncMaterialDirectoryItemFromLargeTask(task);
+    persistLargeMaterialUploadTasks();
+    renderLargeMaterialUploadPanel();
+
+    let nextPendingIndex = 0;
+    let workerFailure = null;
+    const uploadWorker = async () => {
+      while (true) {
+        if (workerFailure) return;
+        if (task.cancelRequested) {
+          const cancelled = new Error("UPLOAD_CANCELLED");
+          cancelled.code = "UPLOAD_CANCELLED";
+          throw cancelled;
+        }
+        if (task.pauseRequested) {
+          const paused = new Error("UPLOAD_PAUSED");
+          paused.code = "UPLOAD_PAUSED";
+          throw paused;
+        }
+        const cursor = nextPendingIndex;
+        nextPendingIndex += 1;
+        if (cursor >= pendingIndices.length) return;
+        const index = pendingIndices[cursor];
+        const start = index * task.chunkSize;
+        const end = Math.min(task.sizeBytes, start + task.chunkSize);
+        const chunk = task.file.slice(start, end);
+        try {
+          await uploadLargeMaterialChunk(task, index, chunk);
+        } catch (error) {
+          if (!workerFailure) {
+            workerFailure = error;
+            abortLargeUploadRequests(task);
+          }
+          throw error;
+        }
+        completed.add(index);
+        task.completedBytes = Math.min(task.sizeBytes, Number(task.completedBytes || 0) + (end - start));
+        recordLargeUploadSpeed(task);
+        scheduleLargeMaterialUploadPanelRender();
+      }
+    };
+
+    const workerCount = Math.min(LARGE_UPLOAD_CONCURRENCY, Math.max(1, pendingIndices.length));
+    const settled = await Promise.allSettled(Array.from({ length: workerCount }, () => uploadWorker()));
+    const rejected = settled.find((item) => item.status === "rejected");
+    if (rejected) throw rejected.reason;
+
+    const sorted = Array.from(completed).sort((a, b) => a - b);
+    task.completedRanges = [];
+    sorted.forEach((value) => {
+      const last = task.completedRanges[task.completedRanges.length - 1];
+      if (!last || value > last[1] + 1) task.completedRanges.push([value, value]);
+      else last[1] = value;
+    });
+
+    task.status = "finalizing";
+    task.completedBytes = task.sizeBytes;
+    persistLargeMaterialUploadTasks();
+    renderLargeMaterialUploadPanel();
+    const result = await api(`/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}/finalize`, { method: "POST" }, true);
+    task.status = "completed";
+    task.completedBytes = task.sizeBytes;
+    task.errorMessage = "";
+    persistLargeMaterialUploadTasks();
+    syncMaterialDirectoryItemFromLargeTask(task);
+    renderLargeMaterialUploadPanel();
+    showToast(`“${task.filename}”大文件上传完成`, "success");
+    if (isMaterialCenterOpen()) {
+      await runMaterialCenterBrowse();
+      focusMaterialCenterImportedAttachment(result);
+    }
+    await refreshContentStatuses();
+    return result;
+  } catch (error) {
+    if (error?.code === "UPLOAD_CANCELLED" || task.cancelRequested) {
+      task.status = "cancelled";
+      task.errorMessage = "";
+    } else if (error?.code === "UPLOAD_PAUSED" || task.pauseRequested) {
+      const resumeAfterPause = Boolean(task.resumeRequested && task.file);
+      task.pauseRequested = false;
+      task.resumeRequested = false;
+      task.status = resumeAfterPause ? "queued" : "paused";
+      task.errorMessage = resumeAfterPause ? "" : "已暂停，可从现有断点继续。";
+    } else if (error?.code === "LARGE_UPLOAD_NOT_FOUND") {
+      task.status = "failed";
+      task.errorMessage = "服务器端上传会话已不存在，请取消此任务后重新选择文件。";
+    } else {
+      task.status = "failed";
+      task.errorMessage = error?.message || "上传失败";
+      showToast(`${task.filename}：${task.errorMessage}`, "error");
+    }
+    persistLargeMaterialUploadTasks();
+    syncMaterialDirectoryItemFromLargeTask(task);
+    renderLargeMaterialUploadPanel();
+  }
+}
+
+async function scheduleLargeMaterialUploadQueue() {
+  if (largeMaterialUploadQueueRunning) return;
+  largeMaterialUploadQueueRunning = true;
+  try {
+    while (true) {
+      const task = Array.from(largeMaterialUploadTasks.values()).find((item) => item.status === "queued" && item.file);
+      if (!task) break;
+      await runLargeMaterialUploadTask(task);
+    }
+  } finally {
+    largeMaterialUploadQueueRunning = false;
+  }
+}
+
+function pauseLargeMaterialUploadTask(task) {
+  if (!task || !["queued", "uploading"].includes(task.status)) return;
+  task.pauseRequested = true;
+  task.resumeRequested = false;
+  task.cancelRequested = false;
+  const hasActiveRequest = largeUploadActiveRequestCount(task) > 0;
+  task.status = hasActiveRequest ? "pausing" : "paused";
+  task.errorMessage = hasActiveRequest ? "正在停止当前分块请求……" : "已暂停，可从服务器记录的断点继续。";
+  abortLargeUploadRequests(task);
+  persistLargeMaterialUploadTasks();
+  syncMaterialDirectoryItemFromLargeTask(task);
+  flushLargeMaterialUploadPanelRender();
+}
+
+function resumeLargeMaterialUploadTask(task) {
+  if (!task?.file) {
+    task.status = "recoverable";
+    renderLargeMaterialUploadPanel();
+    return;
+  }
+  if (largeUploadActiveRequestCount(task) > 0) {
+    task.resumeRequested = true;
+    task.errorMessage = "正在结束当前分块请求，随后自动继续。";
+    renderLargeMaterialUploadPanel();
+    return;
+  }
+  task.pauseRequested = false;
+  task.resumeRequested = false;
+  task.cancelRequested = false;
+  task.status = "queued";
+  task.errorMessage = "";
+  persistLargeMaterialUploadTasks();
+  syncMaterialDirectoryItemFromLargeTask(task);
+  renderLargeMaterialUploadPanel();
+  scheduleLargeMaterialUploadQueue();
+}
+
+async function cancelLargeMaterialUploadTask(task) {
+  if (!task?.sessionId) return;
+  const confirmed = await askConfirmation({
+    eyebrow: "取消大文件上传",
+    title: `取消“${task.filename || "未命名大型资料"}”的上传？`,
+    message: "服务器上已上传的加密分块会一起删除。之后如需导入，需要重新开始。",
+    confirmLabel: "取消上传",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+  task.cancelRequested = true;
+  task.pauseRequested = false;
+  task.resumeRequested = false;
+  task.status = "cancelling";
+  task.errorMessage = "正在停止上传并清理服务器分块……";
+  abortLargeUploadRequests(task);
+  persistLargeMaterialUploadTasks();
+  flushLargeMaterialUploadPanelRender();
+  try {
+    await api(`/api/v1/materials/large/uploads/${encodeURIComponent(task.sessionId)}`, { method: "DELETE" }, true);
+  } catch (error) {
+    if (error?.code !== "LARGE_UPLOAD_NOT_FOUND") {
+      task.cancelRequested = false;
+      task.status = task.file ? "paused" : "recoverable";
+      task.errorMessage = "取消失败，可再次尝试。";
+      persistLargeMaterialUploadTasks();
+      flushLargeMaterialUploadPanelRender();
+      showOperationError(error);
+      return;
+    }
+  }
+  task.status = "cancelled";
+  largeMaterialUploadTasks.delete(task.sessionId);
+  persistLargeMaterialUploadTasks();
+  syncMaterialDirectoryItemFromLargeTask(task);
+  renderLargeMaterialUploadPanel();
+  showToast("大文件上传任务已取消", "success");
+}
+
+function pauseLargeMaterialUploadsForLock() {
+  largeMaterialUploadTasks.forEach((task) => {
+    if (!["queued", "uploading"].includes(task.status)) return;
+    task.pauseRequested = true;
+    task.resumeRequested = false;
+    task.status = "paused";
+    task.errorMessage = "仓库锁定，上传已暂停。重新解锁后可继续。";
+    abortLargeUploadRequests(task);
+  });
+  persistLargeMaterialUploadTasks();
+  renderLargeMaterialUploadPanel();
+}
+
+async function importIndependentMaterialFile(file, options = {}) {
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    return queueLargeMaterialUploadFile(file, options);
+  }
   const formData = new FormData();
   formData.append("material_file", file, file.name);
+  if (isVideoFile(file)) {
+    try {
+      const assets = await extractVideoMediaAssets(file);
+      if (assets?.metadata && Object.keys(assets.metadata).length) {
+        formData.append("video_metadata_json", JSON.stringify(assets.metadata));
+      }
+      if (assets?.previewBlob) {
+        formData.append("video_preview", assets.previewBlob, "video-preview.jpg");
+      }
+    } catch (error) {
+      console.warn("LifeGraph video metadata extraction skipped:", error);
+    }
+  }
   if (Number.isFinite(file.lastModified) && file.lastModified > 0) {
     formData.append("file_last_modified_ms", String(Math.trunc(file.lastModified)));
   }
@@ -1767,13 +2682,19 @@ async function importIndependentMaterials(files) {
   if (!selected.length) return;
   setButtonBusy(importMaterialButton, true, `导入中 0/${selected.length}`);
   let imported = 0;
+  let queuedLarge = 0;
+  let lastImportedResult = null;
   const failed = [];
   for (let index = 0; index < selected.length; index += 1) {
     const file = selected[index];
     if (importMaterialButton) importMaterialButton.textContent = `导入中 ${index + 1}/${selected.length}`;
     try {
-      await importIndependentMaterialFile(file);
-      imported += 1;
+      const result = await importIndependentMaterialFile(file, { rejectDuplicate: true });
+      if (file.size > MAX_ATTACHMENT_BYTES) queuedLarge += 1;
+      else {
+        imported += 1;
+        lastImportedResult = result;
+      }
     } catch (error) {
       failed.push({ file, error });
     }
@@ -1781,9 +2702,16 @@ async function importIndependentMaterials(files) {
   setButtonBusy(importMaterialButton, false);
   if (importMaterialButton) importMaterialButton.textContent = "＋ 导入资料";
   if (imported) {
-    showToast(`已导入 ${imported} 份独立资料${failed.length ? `，${failed.length} 份失败` : ""}`, failed.length ? "info" : "success");
     await runMaterialCenterBrowse();
+    if (lastImportedResult) focusMaterialCenterImportedAttachment(lastImportedResult);
     await refreshContentStatuses();
+  }
+  if (imported || queuedLarge) {
+    const parts = [];
+    if (imported) parts.push(`已导入 ${imported} 份`);
+    if (queuedLarge) parts.push(`${queuedLarge} 个大文件已加入分块上传`);
+    if (failed.length) parts.push(`${failed.length} 份失败`);
+    showToast(parts.join("，"), failed.length ? "info" : "success");
   }
   if (failed.length) {
     const first = failed[0];
@@ -1809,6 +2737,7 @@ function materialFileCategory(file) {
   const name = String(file?.name || "").toLowerCase();
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
   if (type.startsWith("image/") || [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"].includes(ext)) return "image";
+  if (type.startsWith("video/") || [".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv", ".mpeg", ".mpg", ".ts", ".mts", ".m2ts"].includes(ext)) return "video";
   if (type.startsWith("text/") || type === "application/pdf" || type.includes("office") || type.includes("msword") || type.includes("excel") || type.includes("powerpoint") || type.includes("opendocument") || [".pdf", ".txt", ".md", ".rtf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".csv"].includes(ext)) return "document";
   return "other";
 }
@@ -1824,14 +2753,17 @@ function materialDirectoryExclusionReason(file) {
   if (MATERIAL_DIRECTORY_EXCLUDED_NAMES.has(fileName)) return "系统文件";
   if (parts.some((part, index) => index > 0 && (part.startsWith(".") || MATERIAL_DIRECTORY_EXCLUDED_SEGMENTS.has(part.toLowerCase())))) return "隐藏/系统目录";
   if (!file?.size) return "空文件";
-  if (file.size > MAX_ATTACHMENT_BYTES) return "超过 50 MB";
+  if (file.size > MAX_LARGE_MATERIAL_BYTES) return "超过 2 TB";
   return "";
 }
 
 function materialDirectoryStatusLabel(item) {
   const labels = {
     hashing: "检查重复中",
-    ready: "可导入",
+    ready: item?.file?.size > MAX_ATTACHMENT_BYTES ? "可分块导入" : "可导入",
+    queued_large: "大文件已入队",
+    uploading_large: "大文件上传中",
+    paused_large: "大文件已暂停",
     excluded: item.reason || "已排除",
     duplicate_selection: "目录内重复",
     duplicate_repository: "仓库已存在",
@@ -1991,10 +2923,11 @@ async function startMaterialDirectoryScan(files) {
       file,
       relativePath: materialDirectoryRelativePath(file),
       category: materialFileCategory(file),
-      status: reason ? "excluded" : "hashing",
+      status: reason ? "excluded" : (file.size > MAX_ATTACHMENT_BYTES ? "ready" : "hashing"),
       reason,
-      selected: false,
+      selected: !reason && file.size > MAX_ATTACHMENT_BYTES,
       sha256: "",
+      largeUploadSessionId: null,
     };
   });
   openMaterialDirectoryScanModal();
@@ -2045,6 +2978,7 @@ async function importSelectedScannedMaterials() {
   if (!selected.length || !importScannedMaterialsButton) return;
   setButtonBusy(importScannedMaterialsButton, true, `导入中 0/${selected.length}`);
   let imported = 0;
+  let queuedLarge = 0;
   let failed = 0;
   for (let index = 0; index < selected.length; index += 1) {
     const item = selected[index];
@@ -2053,13 +2987,19 @@ async function importSelectedScannedMaterials() {
     importScannedMaterialsButton.textContent = `导入中 ${index + 1}/${selected.length}`;
     if (index % 5 === 0) renderMaterialDirectoryScanList();
     try {
-      await importIndependentMaterialFile(item.file, {
+      const result = await importIndependentMaterialFile(item.file, {
         sourceRelativePath: item.relativePath,
         sourceDirectoryName: materialDirectoryRootName,
         rejectDuplicate: true,
       });
-      item.status = "imported";
-      imported += 1;
+      if (item.file.size > MAX_ATTACHMENT_BYTES) {
+        item.largeUploadSessionId = result.sessionId;
+        item.status = result.status === "uploading" ? "uploading_large" : "queued_large";
+        queuedLarge += 1;
+      } else {
+        item.status = "imported";
+        imported += 1;
+      }
     } catch (error) {
       if (error?.code === "MATERIAL_DUPLICATE") {
         item.status = "duplicate_repository";
@@ -2072,12 +3012,15 @@ async function importSelectedScannedMaterials() {
     }
   }
   setButtonBusy(importScannedMaterialsButton, false);
-  if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = `导入完成：成功 ${imported}${failed ? ` · 失败 ${failed}` : ""}`;
+  const queuedText = queuedLarge ? ` · 大文件队列 ${queuedLarge}` : "";
+  if (materialDirectoryScanProgress) materialDirectoryScanProgress.textContent = `导入处理完成：立即成功 ${imported}${queuedText}${failed ? ` · 失败 ${failed}` : ""}`;
   renderMaterialDirectoryScanList();
   if (imported) {
     await runMaterialCenterBrowse();
     await refreshContentStatuses();
-    showToast(`已从目录导入 ${imported} 份资料${failed ? `，${failed} 份失败` : ""}`, failed ? "info" : "success");
+  }
+  if (imported || queuedLarge) {
+    showToast(`已导入 ${imported} 份资料${queuedLarge ? `，${queuedLarge} 个大文件进入分块上传队列` : ""}${failed ? `，${failed} 份失败` : ""}`, failed ? "info" : "success");
   } else if (failed) {
     showToast("目录资料导入失败，请查看状态提示", "error");
   }
@@ -2097,6 +3040,7 @@ async function deleteIndependentMaterial(attachment, button) {
   try {
     await api(`/api/v1/materials/${encodeURIComponent(attachment.id)}`, { method: "DELETE" }, true);
     releaseAttachmentObjectUrl(attachment.id);
+    if (videoPlayerAttachment?.id === attachment.id) closeVideoPlayer({ restoreFocus: false });
     showToast("独立资料已删除", "success");
     await runMaterialCenterBrowse();
     await refreshContentStatuses();
@@ -2169,9 +3113,31 @@ function appendMaterialCenterLoadSentinel(data) {
   materialCenterLoadObserver.observe(sentinel);
 }
 
+function isLargeMediaOffline(attachment) {
+  return Boolean(attachment?.is_large && attachment?.media_available === false);
+}
+
+function mediaAvailabilityLabel(attachment) {
+  if (!isLargeMediaOffline(attachment)) return "";
+  const state = String(attachment?.media_state || "offline");
+  if (state === "incomplete") return "媒体不完整";
+  if (state === "invalid") return "媒体异常";
+  return "媒体离线";
+}
+
+function applyMediaAvailabilityToButton(button, attachment, normalLabel) {
+  if (!button) return;
+  if (!isLargeMediaOffline(attachment)) return;
+  button.disabled = true;
+  button.textContent = mediaAvailabilityLabel(attachment);
+  button.title = `${normalLabel}不可用：请恢复 data/media 媒体库后重试`;
+}
+
 function createMaterialCenterCard(attachment, imageItems, imageIndexById, { timeline = false } = {}) {
   const card = document.createElement("article");
   card.className = `material-center-card-item is-${attachment.category || "other"}${timeline ? " is-timeline" : ""}`;
+  card.classList.toggle("is-media-offline", isLargeMediaOffline(attachment));
+  if (attachment.id) card.dataset.attachmentId = String(attachment.id);
 
   if (isImageAttachment(attachment)) {
     const thumbnail = createAttachmentThumbnail(
@@ -2182,10 +3148,14 @@ function createMaterialCenterCard(attachment, imageItems, imageIndexById, { time
     );
     thumbnail.classList.add("material-center-thumbnail");
     card.appendChild(thumbnail);
+  } else if (isVideoAttachment(attachment) && attachment.has_preview) {
+    const thumbnail = createVideoThumbnail(attachment, { lazy: true });
+    thumbnail.classList.add("material-center-thumbnail");
+    card.appendChild(thumbnail);
   } else {
     const icon = document.createElement("div");
     icon.className = `material-center-file-icon is-${attachment.category || "other"}`;
-    icon.textContent = attachment.category === "document" ? "文" : "档";
+    icon.textContent = attachment.category === "document" ? "文" : (attachment.category === "video" ? "影" : "档");
     card.appendChild(icon);
   }
 
@@ -2208,6 +3178,8 @@ function createMaterialCenterCard(attachment, imageItems, imageIndexById, { time
   meta.textContent = [
     formatAttachmentSize(attachment.size_bytes),
     attachment.media_type || "文件",
+    ...videoTechnicalMetaParts(attachment),
+    mediaAvailabilityLabel(attachment),
     timelineMeta,
   ].filter(Boolean).join(" · ");
   meta.title = meta.textContent;
@@ -2273,11 +3245,30 @@ function createMaterialCenterCard(attachment, imageItems, imageIndexById, { time
     deleteButton.addEventListener("click", () => deleteIndependentMaterial(attachment, deleteButton));
     actions.appendChild(deleteButton);
   }
+  if (isVideoAttachment(attachment)) {
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = "ghost-button material-center-play-button";
+    playButton.textContent = "播放";
+    applyMediaAvailabilityToButton(playButton, attachment, "播放");
+    playButton.addEventListener("click", () => openVideoPlayer(attachment, playButton));
+    actions.appendChild(playButton);
+  }
   const download = document.createElement("button");
   download.type = "button";
   download.className = "ghost-button";
   download.textContent = "下载";
-  download.addEventListener("click", () => downloadAttachmentFile(attachment));
+  applyMediaAvailabilityToButton(download, attachment, "下载");
+  download.addEventListener("click", async () => {
+    setButtonBusy(download, true, "准备中…");
+    try {
+      await downloadAttachmentFile(attachment);
+    } catch (error) {
+      showOperationError(error);
+    } finally {
+      setButtonBusy(download, false);
+    }
+  });
   actions.appendChild(download);
 
   card.append(main, actions);
@@ -2411,6 +3402,7 @@ function renderMaterialCenterTimeline(items, imageItems, imageIndexById) {
       dates.forEach((dateItems, timelineDate) => {
         const row = document.createElement("div");
         row.className = "material-timeline-date-row";
+        row.dataset.timelineDate = String(timelineDate);
         const rail = document.createElement("div");
         rail.className = "material-timeline-date-rail";
         const dateButton = document.createElement("button");
@@ -2537,6 +3529,55 @@ async function loadMoreMaterialCenterResults() {
   } finally {
     materialCenterLoadingMore = false;
   }
+}
+
+function materialCenterImportedCategory(attachment) {
+  return materialFileCategory({
+    type: String(attachment?.media_type || ""),
+    name: String(attachment?.filename || ""),
+  });
+}
+
+function materialCenterCurrentFiltersInclude(attachment) {
+  if (!attachment) return false;
+  const category = attachment.category || materialCenterImportedCategory(attachment);
+  if (!selectedMaterialCenterCategories().includes(category)) return false;
+  const timelineDate = String(attachment.timeline_date || "");
+  if (materialCenterDateFrom?.value && (!timelineDate || timelineDate < materialCenterDateFrom.value)) return false;
+  if (materialCenterDateTo?.value && (!timelineDate || timelineDate > materialCenterDateTo.value)) return false;
+  const needle = String(materialCenterQuery?.value || "").trim().toLocaleLowerCase();
+  if (needle) {
+    const haystack = `${attachment.filename || ""}\n${attachment.media_type || ""}`.toLocaleLowerCase();
+    if (!haystack.includes(needle)) return false;
+  }
+  return true;
+}
+
+function focusMaterialCenterImportedAttachment(attachment) {
+  if (!isMaterialCenterOpen() || !attachment?.id) return;
+  const normalized = {
+    ...attachment,
+    category: attachment.category || materialCenterImportedCategory(attachment),
+    source_content: attachment.source_content || null,
+  };
+  const currentItems = Array.isArray(materialCenterLastData?.items) ? materialCenterLastData.items : [];
+  if (!currentItems.some((item) => item.id === normalized.id) && materialCenterCurrentFiltersInclude(normalized)) {
+    renderMaterialCenterResults({ ...materialCenterLastData, items: [...currentItems, normalized] });
+  }
+  window.requestAnimationFrame(() => {
+    const timelineDate = String(normalized.timeline_date || "");
+    let target = null;
+    if (materialCenterViewMode === "timeline" && timelineDate) {
+      target = materialCenterResults?.querySelector(`[data-timeline-date="${timelineDate}"]`);
+    }
+    if (!target) {
+      target = materialCenterResults?.querySelector(`[data-attachment-id="${String(normalized.id)}"]`);
+    }
+    if (!(target instanceof HTMLElement)) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("is-upload-focus");
+    window.setTimeout(() => target.classList.remove("is-upload-focus"), 1800);
+  });
 }
 
 async function runMaterialCenterBrowse() {
@@ -3015,6 +4056,18 @@ const cancelResetPinButton = document.getElementById("cancelResetPin");
 const checkBackupButton = document.getElementById("checkBackupButton");
 const exportBackupButton = document.getElementById("exportBackupButton");
 const backupStatusText = document.getElementById("backupStatusText");
+const mediaBackupStatusCard = document.getElementById("mediaBackupStatusCard");
+const mediaBackupStatusBadge = document.getElementById("mediaBackupStatusBadge");
+const mediaBackupStatusTitle = document.getElementById("mediaBackupStatusTitle");
+const mediaBackupStatusMessage = document.getElementById("mediaBackupStatusMessage");
+const mediaBackupStatusMeta = document.getElementById("mediaBackupStatusMeta");
+const refreshMediaBackupStatusButton = document.getElementById("refreshMediaBackupStatusButton");
+const mediaBackupTargetPath = document.getElementById("mediaBackupTargetPath");
+const startMediaBackupButton = document.getElementById("startMediaBackupButton");
+const verifyMediaLibraryButton = document.getElementById("verifyMediaLibraryButton");
+const verifyMediaBackupButton = document.getElementById("verifyMediaBackupButton");
+const cancelMediaBackupButton = document.getElementById("cancelMediaBackupButton");
+const mediaBackupJobStatusText = document.getElementById("mediaBackupJobStatusText");
 const autoBackupForm = document.getElementById("autoBackupForm");
 const saveAutoBackupButton = document.getElementById("saveAutoBackupButton");
 const runAutoBackupButton = document.getElementById("runAutoBackupButton");
@@ -3042,6 +4095,7 @@ let profileSettingsEditing = false;
 let autoBackupSettingsSnapshot = "";
 let recoveryModalContext = "initialize";
 let backupReminderShownCode = "";
+let mediaBackupPollTimer = 0;
 
 function profileSettingsState() {
   if (!profileSettingsForm) return {};
@@ -3374,6 +4428,17 @@ function fillProfileSettingsForm() {
     autoBackupHealthMeta.textContent = "";
     verifyLatestAutoBackupButton.disabled = true;
   }
+  if (mediaBackupStatusCard) {
+    mediaBackupStatusCard.dataset.level = "neutral";
+    mediaBackupStatusBadge.textContent = "检查中";
+    mediaBackupStatusTitle.textContent = "正在检查大型媒体库";
+    mediaBackupStatusMessage.textContent = "请稍候…";
+    mediaBackupStatusMeta.textContent = "";
+  }
+  if (mediaBackupJobStatusText) {
+    mediaBackupJobStatusText.textContent = "尚未执行大型媒体独立备份。";
+    delete mediaBackupJobStatusText.dataset.tone;
+  }
   if (autoBackupHistorySummary) autoBackupHistorySummary.textContent = "尚未读取";
   if (autoBackupHistoryList) autoBackupHistoryList.replaceChildren();
   if (restoreImportBackupButton) restoreImportBackupButton.disabled = true;
@@ -3395,7 +4460,7 @@ async function openSettingsModal() {
   settingsModal.classList.remove("hidden");
   settingsModal.setAttribute("aria-hidden", "false");
   document.body.classList.add("settings-open");
-  await Promise.all([loadAutoBackupPanel(), loadSecuritySummary(), loadTagManagement()]);
+  await Promise.all([loadAutoBackupPanel(), loadMediaBackupStatus(), loadSecuritySummary(), loadTagManagement()]);
   requestAnimationFrame(() => {
     const target = profileSettingsEditing
       ? profileSettingsForm?.elements.display_name
@@ -3408,6 +4473,7 @@ function closeSettingsModalNow() {
   if (!settingsModal || settingsModal.classList.contains("hidden")) return;
   settingsModal.classList.add("hidden");
   settingsModal.setAttribute("aria-hidden", "true");
+  stopMediaBackupPolling();
   document.body.classList.remove("settings-open");
   profileSettingsEditing = false;
   profileSettingsSummary?.classList.remove("hidden");
@@ -3504,14 +4570,220 @@ async function confirmBackupUsesSavedState() {
   });
 }
 
+function renderMediaBackupStatus(status = {}) {
+  if (!mediaBackupStatusCard) return;
+  const total = Number(status.original_records || 0);
+  const online = Number(status.online || 0);
+  const offline = Number(status.offline || 0);
+  const incomplete = Number(status.incomplete || 0);
+  const invalid = Number(status.invalid || 0);
+  const chunks = Number(status.original_chunks || 0);
+  const derived = Number(status.audio_compat_records || 0);
+  const problemCount = offline + incomplete + invalid;
+  const external = status.external_backup || {};
+  const backedUp = Boolean(total && external.current);
+  const level = problemCount ? "warning" : (total && !backedUp ? "warning" : "success");
+  mediaBackupStatusCard.dataset.level = level;
+  mediaBackupStatusBadge.textContent = problemCount ? "需处理" : (backedUp ? "已备份" : (total ? "待备份" : "在线"));
+  mediaBackupStatusTitle.textContent = total
+    ? `大型媒体 ${online}/${total} 在线${backedUp ? " · 独立备份已同步" : ""}`
+    : "当前没有大型媒体";
+  if (!total) {
+    mediaBackupStatusMessage.textContent = "核心 .lifevault v3 可以独立完成当前仓库恢复。";
+  } else if (problemCount) {
+    const issues = [];
+    if (offline) issues.push(`${offline} 个离线`);
+    if (incomplete) issues.push(`${incomplete} 个分块不完整`);
+    if (invalid) issues.push(`${invalid} 个索引异常`);
+    mediaBackupStatusMessage.textContent = `${issues.join("、")}；.lifevault 仍可保存核心索引，但完整媒体备份尚未就绪。`;
+  } else if (backedUp) {
+    mediaBackupStatusMessage.textContent = `核心 .lifevault 与大型媒体独立备份均已就绪。${external.last_verified_at ? "媒体备份已完成完整校验。" : "可按需执行一次完整校验。"}`;
+  } else if (external.configured && external.state === "stale") {
+    mediaBackupStatusMessage.textContent = "独立备份目录已配置，但媒体库已有变化，请再次执行增量备份。";
+  } else {
+    mediaBackupStatusMessage.textContent = "核心备份已就绪；完整恢复还需要为 data/media 建立独立增量备份。";
+  }
+  const meta = [`原始媒体 ${formatAttachmentSize(status.original_bytes || 0)}`];
+  if (chunks) meta.push(`媒体分块 ${chunks} 个`);
+  if (derived) meta.push(`兼容音轨 ${derived} 个（可重建，不备份）`);
+  if (external.last_synced_at) meta.push(`最近媒体备份 ${formatBackupDateTime(external.last_synced_at)}`);
+  mediaBackupStatusMeta.textContent = meta.join(" · ");
+  if (mediaBackupTargetPath && external.target_path && document.activeElement !== mediaBackupTargetPath) {
+    mediaBackupTargetPath.value = external.target_path;
+  }
+  renderMediaBackupJob(status.backup_job || { state: "idle" });
+}
+
+function renderMediaBackupJob(job = {}) {
+  if (!mediaBackupJobStatusText) return;
+  const state = String(job.state || "idle");
+  const active = state === "running" || state === "cancelling";
+  startMediaBackupButton && (startMediaBackupButton.disabled = active);
+  verifyMediaLibraryButton && (verifyMediaLibraryButton.disabled = active);
+  verifyMediaBackupButton && (verifyMediaBackupButton.disabled = active);
+  cancelMediaBackupButton?.classList.toggle("hidden", !active);
+  if (state === "idle") return;
+  const totalBytes = Number(job.total_bytes || 0);
+  const completedBytes = Number(job.completed_bytes || 0);
+  const totalFiles = Number(job.total_files || 0);
+  const completedFiles = Number(job.completed_files || 0);
+  const percent = totalBytes > 0 ? Math.min(100, completedBytes / totalBytes * 100) : (totalFiles > 0 ? completedFiles / totalFiles * 100 : 0);
+  const modeLabel = job.mode === "source-verify" ? "原始媒体校验" : (job.mode === "verify" ? "备份校验" : "增量备份");
+  if (state === "running" || state === "cancelling") {
+    const parts = [`${modeLabel} ${percent.toFixed(percent >= 10 ? 0 : 1)}%`];
+    if (totalBytes) parts.push(`${formatAttachmentSize(completedBytes)} / ${formatAttachmentSize(totalBytes)}`);
+    if (totalFiles) parts.push(`${completedFiles}/${totalFiles} 个文件`);
+    if (job.mode === "sync") {
+      if (Number(job.copied_files || 0)) parts.push(`复制 ${job.copied_files} 个`);
+      if (Number(job.skipped_files || 0)) parts.push(`跳过 ${job.skipped_files} 个未变化文件`);
+    }
+    if (state === "cancelling") parts.push("正在取消…");
+    mediaBackupJobStatusText.textContent = parts.join(" · ");
+    mediaBackupJobStatusText.dataset.tone = "info";
+  } else if (state === "completed") {
+    if (job.mode === "source-verify") {
+      mediaBackupJobStatusText.textContent = `原始媒体完整校验完成：${job.verified_media || 0} 个媒体、${job.verified_files || job.completed_files || 0} 个分块通过。`;
+    } else if (job.mode === "verify") {
+      mediaBackupJobStatusText.textContent = `媒体备份校验完成：${job.verified_files || job.completed_files || 0} 个文件通过。`;
+    } else {
+      mediaBackupJobStatusText.textContent = `媒体增量备份完成：复制 ${job.copied_files || 0} 个文件，跳过 ${job.skipped_files || 0} 个未变化文件。`;
+    }
+    mediaBackupJobStatusText.dataset.tone = "success";
+  } else if (state === "cancelled") {
+    mediaBackupJobStatusText.textContent = "大型媒体备份任务已取消；已完成的分块会保留，下次继续增量补齐。";
+    mediaBackupJobStatusText.dataset.tone = "warning";
+  } else if (state === "failed") {
+    mediaBackupJobStatusText.textContent = job.error || "大型媒体备份失败";
+    mediaBackupJobStatusText.dataset.tone = "error";
+  }
+}
+
+function stopMediaBackupPolling() {
+  if (mediaBackupPollTimer) window.clearTimeout(mediaBackupPollTimer);
+  mediaBackupPollTimer = 0;
+}
+
+async function pollMediaBackupJob() {
+  stopMediaBackupPolling();
+  if (settingsModal?.classList.contains("hidden")) return;
+  try {
+    const job = await api("/api/v1/backup/media/job", {}, true);
+    renderMediaBackupJob(job);
+    if (job.state === "running" || job.state === "cancelling") {
+      mediaBackupPollTimer = window.setTimeout(pollMediaBackupJob, 700);
+    } else {
+      await loadMediaBackupStatus();
+    }
+  } catch (error) {
+    if (mediaBackupJobStatusText) {
+      mediaBackupJobStatusText.textContent = friendlyErrorMessage(error);
+      mediaBackupJobStatusText.dataset.tone = "error";
+    }
+  }
+}
+
+async function loadMediaBackupStatus() {
+  if (!mediaBackupStatusCard) return null;
+  try {
+    const status = await api("/api/v1/backup/media/status", {}, true);
+    renderMediaBackupStatus(status);
+    if (status?.backup_job?.state === "running" || status?.backup_job?.state === "cancelling") {
+      stopMediaBackupPolling();
+      mediaBackupPollTimer = window.setTimeout(pollMediaBackupJob, 700);
+    }
+    return status;
+  } catch (error) {
+    mediaBackupStatusCard.dataset.level = "error";
+    mediaBackupStatusBadge.textContent = "异常";
+    mediaBackupStatusTitle.textContent = "大型媒体库状态读取失败";
+    mediaBackupStatusMessage.textContent = friendlyErrorMessage(error);
+    mediaBackupStatusMeta.textContent = "";
+    return null;
+  }
+}
+
+refreshMediaBackupStatusButton?.addEventListener("click", async () => {
+  setButtonBusy(refreshMediaBackupStatusButton, true, "检查中…");
+  try {
+    await loadMediaBackupStatus();
+  } finally {
+    setButtonBusy(refreshMediaBackupStatusButton, false);
+  }
+});
+
+
+async function startMediaBackup(mode) {
+  const targetPath = String(mediaBackupTargetPath?.value || "").trim();
+  if (mode === "sync" && !targetPath) {
+    showToast("请先填写大型媒体独立备份目录", "info");
+    mediaBackupTargetPath?.focus();
+    return;
+  }
+  const button = mode === "source-verify" ? verifyMediaLibraryButton : (mode === "verify" ? verifyMediaBackupButton : startMediaBackupButton);
+  setButtonBusy(button, true, mode === "source-verify" ? "校验中…" : (mode === "verify" ? "启动中…" : "准备中…"));
+  try {
+    const route = mode === "source-verify" ? "/api/v1/backup/media/verify-library" : `/api/v1/backup/media/${mode}`;
+    const options = mode === "source-verify"
+      ? { method: "POST" }
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_path: targetPath || null }),
+        };
+    const job = await api(route, options, true);
+    renderMediaBackupJob(job);
+    mediaBackupPollTimer = window.setTimeout(pollMediaBackupJob, 300);
+  } catch (error) {
+    if (mediaBackupJobStatusText) {
+      mediaBackupJobStatusText.textContent = friendlyErrorMessage(error);
+      mediaBackupJobStatusText.dataset.tone = "error";
+    }
+    showOperationError(error);
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+startMediaBackupButton?.addEventListener("click", () => startMediaBackup("sync"));
+verifyMediaLibraryButton?.addEventListener("click", () => startMediaBackup("source-verify"));
+verifyMediaBackupButton?.addEventListener("click", () => startMediaBackup("verify"));
+cancelMediaBackupButton?.addEventListener("click", async () => {
+  setButtonBusy(cancelMediaBackupButton, true, "取消中…");
+  try {
+    const job = await api("/api/v1/backup/media/cancel", { method: "POST" }, true);
+    renderMediaBackupJob(job);
+    mediaBackupPollTimer = window.setTimeout(pollMediaBackupJob, 300);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(cancelMediaBackupButton, false);
+  }
+});
+
 async function checkBackupIntegrity() {
   if (!(await confirmBackupUsesSavedState())) return;
   setButtonBusy(checkBackupButton, true, "检查中…");
   try {
     const report = await api("/api/v1/backup/check", {}, true);
-    backupStatusText.textContent = `检查通过：schema v${report.schema_version}，已验证 ${report.encrypted_records_verified} 条加密记录。`;
-    backupStatusText.dataset.tone = "success";
-    showToast("加密仓库完整性检查通过", "success");
+    const mediaCount = Number(report.external_media_records || 0);
+    const mediaProblems = Number(report.external_media_offline || 0)
+      + Number(report.external_media_incomplete || 0)
+      + Number(report.external_media_invalid || 0);
+    const mediaText = mediaCount
+      ? `；大型媒体 ${mediaCount - mediaProblems}/${mediaCount} 在线${mediaProblems ? "，完整媒体备份需处理离线/异常项" : ""}`
+      : "";
+    backupStatusText.textContent = `核心检查通过：schema v${report.schema_version}，已验证 ${report.encrypted_records_verified} 条加密记录${mediaText}。`;
+    backupStatusText.dataset.tone = mediaProblems ? "warning" : "success";
+    renderMediaBackupStatus({
+      original_records: report.external_media_records,
+      original_bytes: report.external_media_bytes,
+      online: report.external_media_online,
+      offline: report.external_media_offline,
+      incomplete: report.external_media_incomplete,
+      invalid: report.external_media_invalid,
+      audio_compat_records: report.audio_compat_records,
+    });
+    showToast(mediaProblems ? "核心备份检查通过；大型媒体库需处理" : "核心仓库与媒体索引检查通过", mediaProblems ? "info" : "success");
   } catch (error) {
     backupStatusText.textContent = friendlyErrorMessage(error);
     backupStatusText.dataset.tone = "error";
@@ -3552,7 +4824,7 @@ async function exportLifevaultBackup() {
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    backupStatusText.textContent = `已导出 ${filename}，请将它保存到独立磁盘或可信云盘。`;
+    backupStatusText.textContent = `已导出核心备份 ${filename}。如有大型媒体，请同时镜像 data/media 才构成完整备份。`;
     backupStatusText.dataset.tone = "success";
     showToast(".lifevault 加密备份已导出", "success");
   } catch (error) {
@@ -3691,7 +4963,8 @@ function applyBackupHealthIndicator(status, { notify = false } = {}) {
 
 async function refreshBackupHealthReminder() {
   try {
-    const status = await api("/api/v1/backup/auto", {}, true);
+    // 首页只读取轻量提醒状态，避免为一个角标重新哈希所有 .lifevault。
+    const status = await api("/api/v1/backup/auto/reminder", {}, true);
     applyBackupHealthIndicator(status, { notify: true });
   } catch (_) {
     // 首页主体已加载时，备份提醒读取失败不应打断用户。
@@ -4004,7 +5277,11 @@ function formatImportReport(report) {
   const counts = report.record_counts || {};
   const totalContent = (counts.event || 0) + (counts.memory || 0) + (counts.plan || 0);
   const createdAt = report.created_at ? new Date(report.created_at).toLocaleString() : "未知时间";
-  return `演练通过：备份创建于 ${createdAt}，schema v${report.schema_version}，包含 ${totalContent} 条内容，已验证 ${report.encrypted_records_verified} 条加密记录。`;
+  const externalCount = Number(report.external_media_records || 0);
+  const mediaText = externalCount
+    ? `；另含 ${externalCount} 个大型媒体索引（${formatAttachmentSize(report.external_media_bytes || 0)}），恢复核心后需提供对应 data/media 媒体库`
+    : "";
+  return `演练通过：备份创建于 ${createdAt}，schema v${report.schema_version}，包含 ${totalContent} 条内容，已验证 ${report.encrypted_records_verified} 条加密记录${mediaText}。`;
 }
 
 async function checkLifevaultImport() {
@@ -4293,6 +5570,7 @@ async function loadHome({ enterFullPage = false } = {}) {
     );
 
     currentProfile = profile;
+    restoreLargeMaterialUploadTasksForCurrentProfile();
     currentProgress = progress;
     contentStatus = statusResult.dates || {};
     monthContentStatus = statusResult.months || {};
@@ -4430,6 +5708,7 @@ if (unlockForm) {
 
 lockButton.addEventListener("click", async () => {
   if (!(await confirmDiscardChanges())) return;
+  pauseLargeMaterialUploadsForLock();
   try {
     await api("/api/v1/auth/lock", { method: "POST" });
   } catch (_) {
@@ -6575,7 +7854,9 @@ function formatAttachmentSize(sizeBytes) {
   const size = Number(sizeBytes) || 0;
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (size < 1024 * 1024 * 1024 * 1024) return `${(size / (1024 * 1024 * 1024)).toFixed(size < 10 * 1024 * 1024 * 1024 ? 2 : 1)} GB`;
+  return `${(size / (1024 * 1024 * 1024 * 1024)).toFixed(2)} TB`;
 }
 
 function formatAttachmentTimelineTime(value) {
@@ -6618,6 +7899,596 @@ function isImageFile(file) {
   return String(file?.type || "").toLowerCase().startsWith("image/");
 }
 
+function videoExtension(value) {
+  const name = String(value?.name || value?.filename || value || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot) : "";
+}
+
+function isVideoAttachment(attachment) {
+  const mediaType = String(attachment?.media_type || "").toLowerCase();
+  return mediaType.startsWith("video/") || [".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv", ".ts", ".mts", ".m2ts"].includes(videoExtension(attachment));
+}
+
+function isVideoFile(file) {
+  const mediaType = String(file?.type || "").toLowerCase();
+  return mediaType.startsWith("video/") || [".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv", ".ts", ".mts", ".m2ts"].includes(videoExtension(file));
+}
+
+function formatVideoDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (!total && Number(seconds) !== 0) return "";
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function videoTechnicalMetaParts(attachment) {
+  if (!isVideoAttachment(attachment)) return [];
+  const parts = [];
+  const duration = formatVideoDuration(attachment?.duration_seconds);
+  if (duration) parts.push(duration);
+  const width = Number(attachment?.video_width || 0);
+  const height = Number(attachment?.video_height || 0);
+  if (width > 0 && height > 0) parts.push(`${width}×${height}`);
+  if (attachment?.video_codec) parts.push(String(attachment.video_codec));
+  if (attachment?.audio_codec) parts.push(`音频 ${String(attachment.audio_codec)}`);
+  return parts;
+}
+
+function readEbmlVint(bytes, offset, { keepMarker = false } = {}) {
+  if (offset >= bytes.length) return null;
+  const first = bytes[offset];
+  let length = 1;
+  let mask = 0x80;
+  while (length <= 8 && !(first & mask)) {
+    length += 1;
+    mask >>= 1;
+  }
+  if (length > 8 || offset + length > bytes.length) return null;
+  let value = keepMarker ? first : (first & (mask - 1));
+  for (let index = 1; index < length; index += 1) value = value * 256 + bytes[offset + index];
+  if (!keepMarker) {
+    let unknown = (first & (mask - 1)) === (mask - 1);
+    for (let index = 1; index < length && unknown; index += 1) unknown = bytes[offset + index] === 0xff;
+    if (unknown) value = null;
+  }
+  return { length, value };
+}
+
+function readEbmlUnsigned(bytes, start, size) {
+  if (size <= 0 || size > 8 || start + size > bytes.length) return null;
+  let value = 0;
+  for (let index = 0; index < size; index += 1) value = value * 256 + bytes[start + index];
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function readEbmlFloat(bytes, start, size) {
+  if (![4, 8].includes(size) || start + size > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset + start, size);
+  return size === 4 ? view.getFloat32(0, false) : view.getFloat64(0, false);
+}
+
+function readEbmlString(bytes, start, size) {
+  if (size <= 0 || start + size > bytes.length) return "";
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(start, start + size)).replace(/\0+$/g, "").trim();
+}
+
+function friendlyAudioCodec(codecId) {
+  const codec = String(codecId || "");
+  const labels = {
+    "A_DTS": "DTS",
+    "A_AC3": "AC-3",
+    "A_EAC3": "E-AC-3",
+    "A_TRUEHD": "Dolby TrueHD",
+    "A_MLP": "MLP / TrueHD",
+    "A_AAC": "AAC",
+    "A_OPUS": "Opus",
+    "A_VORBIS": "Vorbis",
+    "A_FLAC": "FLAC",
+    "A_MPEG/L3": "MP3",
+  };
+  return labels[codec] || codec.replace(/^A_/, "").replaceAll("_", " ");
+}
+
+function friendlyVideoCodec(codecId) {
+  const codec = String(codecId || "");
+  const labels = {
+    "V_MPEGH/ISO/HEVC": "H.265 / HEVC",
+    "V_MPEG4/ISO/AVC": "H.264 / AVC",
+    "V_AV1": "AV1",
+    "V_VP9": "VP9",
+    "V_VP8": "VP8",
+    "V_MPEG2": "MPEG-2",
+  };
+  return labels[codec] || codec.replace(/^V_/, "").replaceAll("_", " ");
+}
+
+async function extractMatroskaVideoMetadata(file) {
+  if (![".mkv", ".webm"].includes(videoExtension(file))) return null;
+  const probeSize = Math.min(file.size, 16 * 1024 * 1024);
+  const bytes = new Uint8Array(await file.slice(0, probeSize).arrayBuffer());
+  const result = {
+    timecodeScale: 1000000, rawDuration: null, width: null, height: null, codec: "",
+    audioCodec: "", audioCodecId: "", audioChannels: null, audioSampleRate: null,
+  };
+  const containerIds = new Set([0x18538067, 0x1549a966, 0x1654ae6b, 0xae, 0xe0, 0xe1]);
+  const parseRange = (start, end, context = {}) => {
+    let offset = start;
+    while (offset < end && offset < bytes.length) {
+      const idInfo = readEbmlVint(bytes, offset, { keepMarker: true });
+      if (!idInfo) break;
+      const sizeInfo = readEbmlVint(bytes, offset + idInfo.length);
+      if (!sizeInfo) break;
+      const id = idInfo.value;
+      const payloadStart = offset + idInfo.length + sizeInfo.length;
+      if (payloadStart > bytes.length) break;
+      const declaredSize = sizeInfo.value;
+      const payloadEnd = declaredSize == null ? Math.min(end, bytes.length) : Math.min(payloadStart + declaredSize, end, bytes.length);
+      if (id === 0x1f43b675) return; // Cluster: metadata normally ends before media frames.
+      if (id === 0x2ad7b1) result.timecodeScale = readEbmlUnsigned(bytes, payloadStart, payloadEnd - payloadStart) || result.timecodeScale;
+      else if (id === 0x4489) result.rawDuration = readEbmlFloat(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0x83) context.track.type = readEbmlUnsigned(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0x86) context.track.codec = readEbmlString(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0xb0) context.track.width = readEbmlUnsigned(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0xba) context.track.height = readEbmlUnsigned(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0x9f) context.track.audioChannels = readEbmlUnsigned(bytes, payloadStart, payloadEnd - payloadStart);
+      else if (context.track && id === 0xb5) context.track.audioSampleRate = readEbmlFloat(bytes, payloadStart, payloadEnd - payloadStart);
+
+      if (containerIds.has(id) && payloadEnd > payloadStart) {
+        if (id === 0xae) {
+          const track = {};
+          parseRange(payloadStart, payloadEnd, { track });
+          if (track.type === 1 && (!result.width || !result.height)) {
+            result.width = track.width || result.width;
+            result.height = track.height || result.height;
+            result.codec = friendlyVideoCodec(track.codec) || result.codec;
+          } else if (track.type === 2 && !result.audioCodecId) {
+            result.audioCodecId = String(track.codec || "");
+            result.audioCodec = friendlyAudioCodec(track.codec);
+            result.audioChannels = track.audioChannels || null;
+            result.audioSampleRate = track.audioSampleRate || null;
+          }
+        } else {
+          parseRange(payloadStart, payloadEnd, context);
+        }
+      }
+      if (declaredSize == null || payloadEnd <= offset) break;
+      offset = payloadStart + declaredSize;
+      if (offset > end || offset > bytes.length) break;
+    }
+  };
+  parseRange(0, bytes.length, {});
+  const metadata = {};
+  if (Number.isFinite(result.rawDuration) && result.rawDuration >= 0) {
+    metadata.duration_seconds = result.rawDuration * result.timecodeScale / 1_000_000_000;
+  }
+  if (result.width) metadata.video_width = result.width;
+  if (result.height) metadata.video_height = result.height;
+  if (result.codec) metadata.video_codec = result.codec;
+  if (result.audioCodec) metadata.audio_codec = result.audioCodec;
+  if (result.audioCodecId) metadata.audio_codec_id = result.audioCodecId;
+  if (result.audioChannels) metadata.audio_channels = result.audioChannels;
+  if (result.audioSampleRate) metadata.audio_sample_rate = Math.round(result.audioSampleRate);
+  return Object.keys(metadata).length ? metadata : null;
+}
+
+function canvasBlob(canvas, type = "image/jpeg", quality = 0.76) {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+async function generateVideoInfoPoster(file, metadata) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 480;
+  canvas.height = 270;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, "#303b35");
+  gradient.addColorStop(1, "#171c19");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "rgba(255,255,255,.12)";
+  ctx.beginPath();
+  ctx.arc(72, 82, 38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.beginPath();
+  ctx.moveTo(64, 62);
+  ctx.lineTo(64, 102);
+  ctx.lineTo(96, 82);
+  ctx.closePath();
+  ctx.fill();
+  ctx.font = "600 22px sans-serif";
+  ctx.fillText("视频资料", 28, 164);
+  ctx.font = "15px sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,.72)";
+  const details = [formatVideoDuration(metadata?.duration_seconds)];
+  if (metadata?.video_width && metadata?.video_height) details.push(`${metadata.video_width}×${metadata.video_height}`);
+  if (metadata?.video_codec) details.push(metadata.video_codec);
+  ctx.fillText(details.filter(Boolean).join(" · ") || "媒体信息待识别", 28, 193);
+  ctx.font = "13px sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,.5)";
+  const filename = String(file?.name || "视频");
+  ctx.fillText(filename.length > 52 ? `${filename.slice(0, 49)}…` : filename, 28, 226);
+  return canvasBlob(canvas);
+}
+
+async function extractNativeVideoAssets(file) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "metadata";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = url;
+  const waitFor = (successEvent, errorEvent = "error", timeoutMs = 6500) => new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("VIDEO_METADATA_TIMEOUT")), timeoutMs);
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      video.removeEventListener(successEvent, onSuccess);
+      video.removeEventListener(errorEvent, onError);
+    };
+    const onSuccess = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error("VIDEO_METADATA_UNSUPPORTED")); };
+    video.addEventListener(successEvent, onSuccess, { once: true });
+    video.addEventListener(errorEvent, onError, { once: true });
+  });
+  try {
+    await waitFor("loadedmetadata");
+    const metadata = {};
+    if (Number.isFinite(video.duration) && video.duration >= 0) metadata.duration_seconds = video.duration;
+    if (video.videoWidth > 0) metadata.video_width = video.videoWidth;
+    if (video.videoHeight > 0) metadata.video_height = video.videoHeight;
+    let posterBlob = null;
+    if (video.videoWidth > 0 && video.videoHeight > 0 && Number.isFinite(video.duration) && video.duration > 0.05) {
+      const seekTo = Math.min(Math.max(video.duration * 0.1, 0.05), Math.max(0.05, Math.min(30, video.duration - 0.03)));
+      if (Math.abs(video.currentTime - seekTo) > 0.02) {
+        video.currentTime = seekTo;
+        await waitFor("seeked", "error", 5000).catch(() => {});
+      }
+      const maxWidth = 480;
+      const scale = Math.min(1, maxWidth / video.videoWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          posterBlob = await canvasBlob(canvas);
+        } catch (_) {}
+      }
+    }
+    return { metadata, posterBlob };
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(url);
+  }
+}
+
+const videoMediaAssetCache = new WeakMap();
+
+async function extractVideoMediaAssets(file) {
+  if (!isVideoFile(file)) return { metadata: {}, previewBlob: null };
+  if (videoMediaAssetCache.has(file)) return videoMediaAssetCache.get(file);
+  const promise = (async () => {
+    let nativeAssets = null;
+    try {
+      nativeAssets = await extractNativeVideoAssets(file);
+    } catch (_) {}
+    let ebmlMetadata = null;
+    const nativeMetadata = nativeAssets?.metadata || {};
+    if ([".mkv", ".webm"].includes(videoExtension(file)) && (!nativeMetadata.duration_seconds || !nativeMetadata.video_width || !nativeMetadata.video_height)) {
+      try {
+        ebmlMetadata = await extractMatroskaVideoMetadata(file);
+      } catch (_) {}
+    }
+    const metadata = {
+      ...(ebmlMetadata || {}),
+      ...nativeMetadata,
+    };
+    metadata.metadata_source = nativeAssets ? "browser:html-video" : (ebmlMetadata ? "browser:matroska-ebml" : "browser:video-file");
+    let previewBlob = nativeAssets?.posterBlob || null;
+    metadata.poster_source = previewBlob ? "browser:video-frame" : "generated:video-info";
+    if (!previewBlob) previewBlob = await generateVideoInfoPoster(file, metadata);
+    return { metadata, previewBlob };
+  })();
+  videoMediaAssetCache.set(file, promise);
+  return promise;
+}
+
+async function requestAttachmentStreamTicket(attachment) {
+  if (!attachment?.id) throw new Error("资料标识无效");
+  return api(
+    `/api/v1/attachments/${encodeURIComponent(attachment.id)}/playback-ticket`,
+    { method: "POST" },
+    true,
+  );
+}
+
+function attachmentStreamUrlWithTicket(attachment, ticket, { download = false } = {}) {
+  const params = new URLSearchParams({ ticket: ticket.ticket });
+  if (download) params.set("download", "true");
+  return `/api/v1/attachments/${encodeURIComponent(attachment.id)}/stream?${params.toString()}`;
+}
+
+async function attachmentStreamUrl(attachment, { download = false } = {}) {
+  const ticket = await requestAttachmentStreamTicket(attachment);
+  return attachmentStreamUrlWithTicket(attachment, ticket, { download });
+}
+
+function attachmentCompatAudioUrlWithTicket(attachment, ticket) {
+  const params = new URLSearchParams({ ticket: ticket.ticket });
+  return `/api/v1/attachments/${encodeURIComponent(attachment.id)}/audio-compat/stream?${params.toString()}`;
+}
+
+async function attachmentAudioCompatStatus(attachment) {
+  return api(
+    `/api/v1/attachments/${encodeURIComponent(attachment.id)}/audio-compat`,
+    { method: "GET" },
+    true,
+  );
+}
+
+async function startAttachmentAudioCompat(attachment) {
+  return api(
+    `/api/v1/attachments/${encodeURIComponent(attachment.id)}/audio-compat`,
+    { method: "POST" },
+    true,
+  );
+}
+
+function isVideoPlayerOpen() {
+  return Boolean(videoPlayerModal && !videoPlayerModal.classList.contains("hidden"));
+}
+
+function videoPlayerMetadataText(attachment) {
+  return [
+    formatAttachmentSize(attachment?.size_bytes),
+    attachment?.media_type || "视频",
+    ...videoTechnicalMetaParts(attachment || {}),
+    attachmentTimelineLabel(attachment || {}),
+  ].filter(Boolean).join(" · ");
+}
+
+function showVideoPlayerStatus(message, { error = false } = {}) {
+  if (!videoPlayerStatus) return;
+  videoPlayerStatus.textContent = message || "";
+  videoPlayerStatus.classList.toggle("hidden", !message);
+  videoPlayerStatus.classList.toggle("is-error", Boolean(error));
+}
+
+function clearVideoAudioCompatPoll() {
+  if (videoAudioCompatPollTimer) window.clearTimeout(videoAudioCompatPollTimer);
+  videoAudioCompatPollTimer = null;
+}
+
+function showVideoAudioCompatStatus(message, { error = false, action = "" } = {}) {
+  if (videoAudioCompatStatus) {
+    videoAudioCompatStatus.textContent = message || "";
+    videoAudioCompatStatus.classList.toggle("hidden", !message);
+    videoAudioCompatStatus.classList.toggle("is-error", Boolean(error));
+  }
+  if (videoAudioCompatAction) {
+    videoAudioCompatAction.textContent = action || "生成兼容音轨";
+    videoAudioCompatAction.classList.toggle("hidden", !action);
+  }
+}
+
+function resetVideoCompatAudio() {
+  clearVideoAudioCompatPoll();
+  videoAudioCompatState = null;
+  videoAudioCompatRateSample = null;
+  videoPlayerTicket = null;
+  if (videoCompatAudio) {
+    videoCompatAudio.pause();
+    videoCompatAudio.removeAttribute("src");
+    videoCompatAudio.load();
+  }
+  showVideoAudioCompatStatus("");
+}
+
+function syncCompatAudioFromVideo({ force = false } = {}) {
+  if (!videoCompatAudio?.src || !videoPlayer) return;
+  videoCompatAudio.muted = Boolean(videoPlayer.muted);
+  videoCompatAudio.volume = Math.min(1, Math.max(0, Number(videoPlayer.volume) || 0));
+  videoCompatAudio.playbackRate = Math.min(4, Math.max(0.25, Number(videoPlayer.playbackRate) || 1));
+  const target = Number(videoPlayer.currentTime || 0);
+  const current = Number(videoCompatAudio.currentTime || 0);
+  if (force || Math.abs(current - target) > 0.35) {
+    try { videoCompatAudio.currentTime = target; } catch (_) {}
+  }
+}
+
+function audioCompatTargetCodec(state = videoAudioCompatState) {
+  return String(state?.compat_codec || state?.target_codec || "AAC").trim() || "AAC";
+}
+
+function playCompatAudioWithVideo() {
+  if (!videoCompatAudio?.src || !videoPlayer || videoPlayer.paused) return;
+  syncCompatAudioFromVideo({ force: true });
+  videoCompatAudio.play().catch(() => {
+    showVideoAudioCompatStatus("兼容音轨已准备，请暂停后再次点击播放以启用声音。", { action: "重新启用声音" });
+  });
+}
+
+function attachCompatAudio(attachment, ticket, { generatedNow = false } = {}) {
+  if (!videoCompatAudio || !attachment || !ticket) return;
+  const expected = attachmentCompatAudioUrlWithTicket(attachment, ticket);
+  if (!videoCompatAudio.src || !videoCompatAudio.src.includes("/audio-compat/stream?")) {
+    videoCompatAudio.src = expected;
+    videoCompatAudio.load();
+  }
+  syncCompatAudioFromVideo({ force: true });
+  const sourceCodec = videoAudioCompatState?.audio_codec || "原音轨";
+  const targetCodec = audioCompatTargetCodec();
+  showVideoAudioCompatStatus(`兼容音轨：${sourceCodec} → ${targetCodec} · 已启用`);
+  if (generatedNow && videoPlayer && !videoPlayer.paused) {
+    videoPlayer.pause();
+    showVideoAudioCompatStatus(`兼容音轨：${sourceCodec} → ${targetCodec} · 已生成，请点击播放继续`);
+  }
+}
+
+function audioCompatProgressText(state) {
+  const codec = state?.audio_codec || "当前音轨";
+  const percent = Number(state?.progress_percent || 0);
+  const processed = Number(state?.processed_bytes || 0);
+  const total = Number(state?.source_size_bytes || 0);
+  const attachmentId = String(state?.attachment_id || videoPlayerAttachment?.id || "");
+  const now = globalThis.performance?.now?.() ?? Date.now();
+  let speedBps = 0;
+  if (
+    videoAudioCompatRateSample
+    && videoAudioCompatRateSample.attachmentId === attachmentId
+    && processed >= videoAudioCompatRateSample.processed
+  ) {
+    const elapsed = Math.max(0, (now - videoAudioCompatRateSample.at) / 1000);
+    const delta = Math.max(0, processed - videoAudioCompatRateSample.processed);
+    if (elapsed >= 0.45 && delta > 0) {
+      const current = delta / elapsed;
+      const previous = Number(videoAudioCompatRateSample.speedBps || 0);
+      speedBps = previous > 0 ? previous * 0.6 + current * 0.4 : current;
+    } else {
+      speedBps = Number(videoAudioCompatRateSample.speedBps || 0);
+    }
+  }
+  videoAudioCompatRateSample = { attachmentId, at: now, processed, speedBps };
+
+  let detail = total > 0
+    ? `${percent.toFixed(1)}% · ${formatAttachmentSize(processed)} / ${formatAttachmentSize(total)}`
+    : `${percent.toFixed(1)}%`;
+  const rate = formatLargeUploadRate(speedBps);
+  if (rate) detail += ` · ${rate}`;
+  if (rate && total > processed) {
+    const eta = formatLargeUploadEta((total - processed) / speedBps);
+    if (eta) detail += ` · 预计剩余 ${eta}`;
+  }
+  return `检测到 ${codec}，正在生成浏览器兼容 ${audioCompatTargetCodec(state)} 音轨 · ${detail}`;
+}
+
+async function renderVideoAudioCompatState(state, attachment, ticket, requestId, { generatedNow = false } = {}) {
+  if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+  videoAudioCompatState = state || null;
+  const statusValue = String(state?.state || "unknown");
+  if (statusValue === "ready" || state?.has_compat_audio) {
+    clearVideoAudioCompatPoll();
+    attachCompatAudio(attachment, ticket, { generatedNow });
+    return;
+  }
+  if (statusValue === "building") {
+    showVideoAudioCompatStatus(audioCompatProgressText(state));
+    clearVideoAudioCompatPoll();
+    videoAudioCompatPollTimer = window.setTimeout(async () => {
+      if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+      try {
+        const next = await attachmentAudioCompatStatus(attachment);
+        const becameReady = String(next?.state || "") === "ready";
+        await renderVideoAudioCompatState(next, attachment, ticket, requestId, { generatedNow: becameReady });
+      } catch (error) {
+        showVideoAudioCompatStatus(friendlyErrorMessage(error), { error: true, action: "重试" });
+      }
+    }, 1200);
+    return;
+  }
+  if (statusValue === "unavailable") {
+    const codec = state?.audio_codec || "不兼容音轨";
+    showVideoAudioCompatStatus(`检测到 ${codec}，但未找到 FFmpeg。已自动检查 C:\\ffmpeg 和系统 PATH。`, { error: true });
+    return;
+  }
+  if (statusValue === "error" || statusValue === "cancelled") {
+    showVideoAudioCompatStatus(state?.error || "兼容音轨生成失败", { error: true, action: "重试" });
+    return;
+  }
+  if (statusValue === "not_needed") {
+    showVideoAudioCompatStatus(state?.audio_codec ? `音轨 ${state.audio_codec} 可直接由浏览器处理` : "");
+    return;
+  }
+  if (state?.needs_compat) {
+    showVideoAudioCompatStatus(`检测到 ${state.audio_codec || "不兼容音轨"}`, { action: "生成兼容音轨" });
+    return;
+  }
+  showVideoAudioCompatStatus("");
+}
+
+async function prepareVideoAudioCompatibility(attachment, ticket, requestId) {
+  try {
+    let state = await attachmentAudioCompatStatus(attachment);
+    if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+    if (state?.needs_compat && !state?.has_compat_audio && state?.state === "idle" && state?.ffmpeg_available) {
+      showVideoAudioCompatStatus(`检测到 ${state.audio_codec || "不兼容音轨"}，正在启动兼容音轨生成…`);
+      state = await startAttachmentAudioCompat(attachment);
+    }
+    await renderVideoAudioCompatState(state, attachment, ticket, requestId);
+  } catch (error) {
+    if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+    showVideoAudioCompatStatus(friendlyErrorMessage(error), { error: true, action: "重试" });
+  }
+}
+
+async function openVideoPlayer(attachment, returnFocus = null) {
+  if (!videoPlayerModal || !videoPlayer || !attachment) return;
+  closeAttachmentPreview({ restoreFocus: false });
+  const requestId = ++videoPlayerRequestSequence;
+  videoPlayerAttachment = attachment;
+  videoPlayerReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+  videoPlayerTitle.textContent = attachment.filename || "视频播放";
+  videoPlayerMeta.textContent = videoPlayerMetadataText(attachment) || "视频资料";
+  videoPlayerModal.classList.remove("hidden");
+  videoPlayerModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("video-player-open");
+  videoPlayer.pause();
+  videoPlayer.removeAttribute("src");
+  videoPlayer.removeAttribute("poster");
+  videoPlayer.load();
+  resetVideoCompatAudio();
+  showVideoPlayerStatus("正在建立安全播放通道…");
+  if (attachment.has_preview) {
+    mediaPreviewObjectUrl(attachment).then((url) => {
+      if (requestId === videoPlayerRequestSequence && isVideoPlayerOpen()) videoPlayer.poster = url;
+    }).catch(() => {});
+  }
+  try {
+    const ticket = await requestAttachmentStreamTicket(attachment);
+    if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+    videoPlayerTicket = ticket;
+    videoPlayer.src = attachmentStreamUrlWithTicket(attachment, ticket);
+    videoPlayer.load();
+    showVideoPlayerStatus("正在按需解密视频…");
+    // Probe and, when required, start the one-time audio derivative in parallel.
+    // If a compatible track already exists it is attached before the first play.
+    await prepareVideoAudioCompatibility(attachment, ticket, requestId);
+    if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+    videoPlayer.play().catch(() => {});
+  } catch (error) {
+    if (requestId !== videoPlayerRequestSequence || !isVideoPlayerOpen()) return;
+    showVideoPlayerStatus(friendlyErrorMessage(error), { error: true });
+  }
+  window.requestAnimationFrame(() => closeVideoPlayerButton?.focus({ preventScroll: true }));
+}
+
+function closeVideoPlayer({ restoreFocus = true } = {}) {
+  if (!videoPlayerModal || videoPlayerModal.classList.contains("hidden")) return;
+  videoPlayerRequestSequence += 1;
+  videoPlayer?.pause();
+  videoPlayer?.removeAttribute("src");
+  videoPlayer?.removeAttribute("poster");
+  videoPlayer?.load();
+  resetVideoCompatAudio();
+  videoPlayerModal.classList.add("hidden");
+  videoPlayerModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("video-player-open");
+  showVideoPlayerStatus("");
+  const returnFocus = videoPlayerReturnFocus;
+  videoPlayerAttachment = null;
+  videoPlayerReturnFocus = null;
+  if (restoreFocus && returnFocus instanceof HTMLElement && document.contains(returnFocus)) {
+    returnFocus.focus({ preventScroll: true });
+  }
+}
+
 async function fetchAttachmentBlob(attachment) {
   const headers = {};
   if (token()) headers.Authorization = `Bearer ${token()}`;
@@ -6658,6 +8529,37 @@ async function attachmentObjectUrl(attachment) {
   return promise;
 }
 
+async function fetchMediaPreviewBlob(attachment) {
+  const headers = {};
+  if (token()) headers.Authorization = `Bearer ${token()}`;
+  const response = await fetch(
+    `/api/v1/attachments/${encodeURIComponent(attachment.id)}/preview`,
+    { headers },
+  );
+  if (!response.ok) throw new Error(`读取视频封面失败：${response.status}`);
+  return response.blob();
+}
+
+async function mediaPreviewObjectUrl(attachment) {
+  const cached = mediaPreviewObjectUrls.get(attachment.id);
+  if (cached) return cached;
+  const pending = mediaPreviewObjectUrlPromises.get(attachment.id);
+  if (pending) return pending;
+  const promise = fetchMediaPreviewBlob(attachment)
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      mediaPreviewObjectUrls.set(attachment.id, url);
+      mediaPreviewObjectUrlPromises.delete(attachment.id);
+      return url;
+    })
+    .catch((error) => {
+      mediaPreviewObjectUrlPromises.delete(attachment.id);
+      throw error;
+    });
+  mediaPreviewObjectUrlPromises.set(attachment.id, promise);
+  return promise;
+}
+
 function releaseAttachmentObjectUrl(attachmentId) {
   const url = attachmentObjectUrls.get(attachmentId);
   if (url) URL.revokeObjectURL(url);
@@ -6669,6 +8571,9 @@ function releaseAllAttachmentObjectUrls() {
   attachmentObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   attachmentObjectUrls.clear();
   attachmentObjectUrlPromises.clear();
+  mediaPreviewObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  mediaPreviewObjectUrls.clear();
+  mediaPreviewObjectUrlPromises.clear();
 }
 
 function isAttachmentPreviewOpen() {
@@ -6820,6 +8725,57 @@ function createAttachmentThumbnail(attachment, images, imageIndex, { lazy = fals
   return button;
 }
 
+function createVideoThumbnail(attachment, { lazy = false } = {}) {
+  const preview = document.createElement("button");
+  preview.type = "button";
+  preview.className = "video-thumbnail";
+  preview.setAttribute("aria-label", `播放视频：${attachment.filename || "未命名视频"}`);
+  preview.title = isLargeMediaOffline(attachment) ? "媒体离线：恢复 data/media 后可播放" : "在线播放";
+  preview.classList.toggle("is-media-offline", isLargeMediaOffline(attachment));
+  const image = document.createElement("img");
+  image.className = "video-thumbnail-image";
+  image.alt = "";
+  const placeholder = document.createElement("span");
+  placeholder.className = "video-thumbnail-placeholder";
+  placeholder.textContent = "视频";
+  const play = document.createElement("span");
+  play.className = "video-thumbnail-play";
+  play.textContent = "▶";
+  play.setAttribute("aria-hidden", "true");
+  const duration = document.createElement("span");
+  duration.className = "video-thumbnail-duration";
+  duration.textContent = formatVideoDuration(attachment.duration_seconds);
+  duration.classList.toggle("hidden", !duration.textContent);
+  preview.append(image, placeholder, play, duration);
+  const loadPreview = () => {
+    if (!attachment.has_preview || preview.dataset.previewStarted === "1") return;
+    preview.dataset.previewStarted = "1";
+    mediaPreviewObjectUrl(attachment)
+      .then((url) => {
+        if (!document.contains(preview)) return;
+        image.src = url;
+        preview.classList.add("is-loaded");
+      })
+      .catch(() => {
+        if (!document.contains(preview)) return;
+        preview.classList.add("is-error");
+      });
+  };
+  if (attachment.has_preview) {
+    if (lazy) observeMaterialThumbnail(preview, loadPreview);
+    else loadPreview();
+  }
+  preview.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (isLargeMediaOffline(attachment)) {
+      showToast("大型媒体当前离线，请恢复 data/media 媒体库后再播放", "info");
+      return;
+    }
+    openVideoPlayer(attachment, preview);
+  });
+  return preview;
+}
+
 const pendingAttachmentElements = {
   event: {
     input: document.getElementById("eventPendingAttachments"),
@@ -6945,6 +8901,19 @@ async function uploadAttachmentFile(kind, contentId, file) {
   }
   const formData = new FormData();
   formData.append("attachment_file", file, file.name);
+  if (isVideoFile(file)) {
+    try {
+      const assets = await extractVideoMediaAssets(file);
+      if (assets?.metadata && Object.keys(assets.metadata).length) {
+        formData.append("video_metadata_json", JSON.stringify(assets.metadata));
+      }
+      if (assets?.previewBlob) {
+        formData.append("video_preview", assets.previewBlob, "video-preview.jpg");
+      }
+    } catch (error) {
+      console.warn("LifeGraph attachment video metadata extraction skipped:", error);
+    }
+  }
   if (Number.isFinite(file.lastModified) && file.lastModified > 0) {
     formData.append("file_last_modified_ms", String(Math.trunc(file.lastModified)));
   }
@@ -6970,6 +8939,16 @@ async function uploadAttachmentFile(kind, contentId, file) {
 }
 
 async function downloadAttachmentFile(attachment) {
+  if (attachment?.is_large) {
+    const url = await attachmentStreamUrl(attachment, { download: true });
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = attachment.filename || "attachment";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    return;
+  }
   const blob = await fetchAttachmentBlob(attachment);
   const url = URL.createObjectURL(blob);
   try {
@@ -7034,7 +9013,11 @@ async function refreshAttachmentPanel(panel, kind, item, button) {
       name.textContent = attachment.filename || "未命名附件";
       const meta = document.createElement("span");
       meta.className = "attachment-meta";
-      meta.textContent = `${formatAttachmentSize(attachment.size_bytes)} · ${attachment.media_type || "文件"}`;
+      meta.textContent = [
+        formatAttachmentSize(attachment.size_bytes),
+        attachment.media_type || "文件",
+        mediaAvailabilityLabel(attachment),
+      ].filter(Boolean).join(" · ");
       main.append(name, meta);
       const timelineLabel = attachmentTimelineLabel(attachment);
       if (timelineLabel) {
@@ -7070,10 +9053,20 @@ async function refreshAttachmentPanel(panel, kind, item, button) {
         });
         actions.appendChild(fallbackButton);
       }
+      if (isVideoAttachment(attachment)) {
+        const playButton = document.createElement("button");
+        playButton.type = "button";
+        playButton.className = "attachment-link-button";
+        playButton.textContent = "播放";
+        applyMediaAvailabilityToButton(playButton, attachment, "播放");
+        playButton.addEventListener("click", () => openVideoPlayer(attachment, playButton));
+        actions.appendChild(playButton);
+      }
       const downloadButton = document.createElement("button");
       downloadButton.type = "button";
       downloadButton.className = "attachment-link-button";
       downloadButton.textContent = "下载";
+      applyMediaAvailabilityToButton(downloadButton, attachment, "下载");
       downloadButton.addEventListener("click", async () => {
         setButtonBusy(downloadButton, true, "下载中…");
         try {
@@ -7109,6 +9102,7 @@ async function refreshAttachmentPanel(panel, kind, item, button) {
           if (attachmentPreviewItems.some((item) => item.id === attachment.id)) {
             closeAttachmentPreview({ restoreFocus: false });
           }
+          if (videoPlayerAttachment?.id === attachment.id) closeVideoPlayer({ restoreFocus: false });
           showToast("附件已删除", "success");
           await refreshAttachmentPanel(panel, kind, item, button);
         } catch (error) {
@@ -7177,6 +9171,103 @@ function createAttachmentPanel(kind, item, button) {
   });
   return panel;
 }
+
+closeVideoPlayerButton?.addEventListener("click", () => closeVideoPlayer());
+videoPlayerModal?.addEventListener("click", (event) => {
+  if (event.target === videoPlayerModal) closeVideoPlayer();
+});
+videoPlayer?.addEventListener("loadedmetadata", () => {
+  if (isVideoPlayerOpen()) showVideoPlayerStatus("");
+});
+videoPlayer?.addEventListener("canplay", () => {
+  if (isVideoPlayerOpen()) showVideoPlayerStatus("");
+});
+videoPlayer?.addEventListener("play", () => {
+  if (!isVideoPlayerOpen()) return;
+  playCompatAudioWithVideo();
+});
+videoPlayer?.addEventListener("playing", () => {
+  if (isVideoPlayerOpen()) {
+    showVideoPlayerStatus("");
+    playCompatAudioWithVideo();
+  }
+});
+videoPlayer?.addEventListener("pause", () => {
+  if (isVideoPlayerOpen()) videoCompatAudio?.pause();
+});
+videoPlayer?.addEventListener("volumechange", () => {
+  if (isVideoPlayerOpen()) syncCompatAudioFromVideo();
+});
+videoPlayer?.addEventListener("ratechange", () => {
+  if (isVideoPlayerOpen()) syncCompatAudioFromVideo();
+});
+videoPlayer?.addEventListener("timeupdate", () => {
+  if (isVideoPlayerOpen() && videoCompatAudio?.src) syncCompatAudioFromVideo();
+});
+videoPlayer?.addEventListener("waiting", () => {
+  if (isVideoPlayerOpen()) showVideoPlayerStatus("正在按需解密并缓冲…");
+});
+videoPlayer?.addEventListener("seeking", () => {
+  if (isVideoPlayerOpen()) {
+    showVideoPlayerStatus("正在定位并解密目标分块…");
+    videoCompatAudio?.pause();
+  }
+});
+videoPlayer?.addEventListener("seeked", () => {
+  if (!isVideoPlayerOpen()) return;
+  if (videoPlayer.readyState >= 2) showVideoPlayerStatus("");
+  syncCompatAudioFromVideo({ force: true });
+  if (!videoPlayer.paused) playCompatAudioWithVideo();
+});
+videoPlayer?.addEventListener("error", () => {
+  if (!isVideoPlayerOpen()) return;
+  const codec = String(videoPlayerAttachment?.video_codec || "").toUpperCase();
+  const container = String(videoPlayerAttachment?.media_type || "");
+  const technical = [container, codec].filter(Boolean).join(" · ");
+  showVideoPlayerStatus(
+    `Range 播放通道已建立，但当前浏览器无法解码这个视频${technical ? `（${technical}）` : ""}。MKV / H.265 等格式可能依赖系统解码器，可下载原视频用本地播放器打开。`,
+    { error: true },
+  );
+});
+videoCompatAudio?.addEventListener("error", () => {
+  if (!isVideoPlayerOpen() || !videoCompatAudio?.src) return;
+  showVideoAudioCompatStatus("兼容音轨读取失败，可关闭播放器后重新打开再试。", { error: true, action: "重试" });
+});
+videoAudioCompatAction?.addEventListener("click", async () => {
+  if (!videoPlayerAttachment || !videoPlayerTicket) return;
+  if (videoCompatAudio?.src && videoAudioCompatState?.state === "ready") {
+    syncCompatAudioFromVideo({ force: true });
+    if (videoPlayer?.paused) {
+      videoPlayer.play().catch(() => {});
+    } else {
+      videoCompatAudio.play().catch(() => {});
+    }
+    showVideoAudioCompatStatus(`兼容音轨：${videoAudioCompatState?.audio_codec || "原音轨"} → ${audioCompatTargetCodec()} · 已启用`);
+    return;
+  }
+  const requestId = videoPlayerRequestSequence;
+  setButtonBusy(videoAudioCompatAction, true, "启动中…");
+  try {
+    const state = await startAttachmentAudioCompat(videoPlayerAttachment);
+    await renderVideoAudioCompatState(state, videoPlayerAttachment, videoPlayerTicket, requestId);
+  } catch (error) {
+    showVideoAudioCompatStatus(friendlyErrorMessage(error), { error: true, action: "重试" });
+  } finally {
+    setButtonBusy(videoAudioCompatAction, false);
+  }
+});
+
+downloadVideoPlayerButton?.addEventListener("click", async () => {
+  if (!videoPlayerAttachment) return;
+  setButtonBusy(downloadVideoPlayerButton, true, "准备中…");
+  try {
+    await downloadAttachmentFile(videoPlayerAttachment);
+  } catch (error) {
+    showOperationError(error);
+  } finally {
+    setButtonBusy(downloadVideoPlayerButton, false);
+  }
+});
 
 closeAttachmentPreviewButton?.addEventListener("click", () => closeAttachmentPreview());
 attachmentPreviewModal?.addEventListener("click", (event) => {
@@ -7445,6 +9536,7 @@ function renderMaterialList(materials = []) {
   items.forEach((attachment) => {
     const card = document.createElement("article");
     card.className = "material-item";
+    card.classList.toggle("is-media-offline", isLargeMediaOffline(attachment));
     if (isImageAttachment(attachment)) {
       card.classList.add("has-thumbnail");
       card.appendChild(
@@ -7454,6 +9546,9 @@ function renderMaterialList(materials = []) {
           imageIndexById.get(attachment.id) || 0,
         ),
       );
+    } else if (isVideoAttachment(attachment) && attachment.has_preview) {
+      card.classList.add("has-thumbnail");
+      card.appendChild(createVideoThumbnail(attachment));
     }
 
     const main = document.createElement("div");
@@ -7467,6 +9562,8 @@ function renderMaterialList(materials = []) {
     meta.textContent = [
       formatAttachmentSize(attachment.size_bytes),
       attachment.media_type || "文件",
+      ...videoTechnicalMetaParts(attachment),
+      mediaAvailabilityLabel(attachment),
       timelineLabel,
     ].filter(Boolean).join(" · ");
     main.append(name, meta);
@@ -7489,10 +9586,20 @@ function renderMaterialList(materials = []) {
 
     const actions = document.createElement("div");
     actions.className = "material-item-actions";
+    if (isVideoAttachment(attachment)) {
+      const playButton = document.createElement("button");
+      playButton.type = "button";
+      playButton.className = "attachment-link-button";
+      playButton.textContent = "播放";
+      applyMediaAvailabilityToButton(playButton, attachment, "播放");
+      playButton.addEventListener("click", () => openVideoPlayer(attachment, playButton));
+      actions.appendChild(playButton);
+    }
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.className = "attachment-link-button";
     downloadButton.textContent = "下载";
+    applyMediaAvailabilityToButton(downloadButton, attachment, "下载");
     downloadButton.addEventListener("click", async () => {
       setButtonBusy(downloadButton, true, "下载中…");
       try {
@@ -7789,6 +9896,11 @@ document.addEventListener("keydown", async (event) => {
   if (event.key === "Escape" && homeMonthCalendarIsPickerOpen()) {
     event.preventDefault();
     closeHomeMonthCalendarPicker({ restoreFocus: true });
+    return;
+  }
+  if (isVideoPlayerOpen() && event.key === "Escape") {
+    event.preventDefault();
+    closeVideoPlayer();
     return;
   }
   if (isAttachmentPreviewOpen() && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {

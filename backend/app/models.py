@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -133,6 +134,22 @@ class AutoBackupPolicyUpdateRequest(BaseModel):
 
 class AutoBackupHistoryClearRequest(BaseModel):
     confirm: Literal["CLEAR_AUTO_BACKUPS"]
+
+
+class MediaBackupJobRequest(BaseModel):
+    target_path: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("target_path")
+    @classmethod
+    def clean_target_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class LargeUploadCleanupRequest(BaseModel):
+    stale_days: int = Field(default=30, ge=7, le=365)
 
 
 class ScopedContentRequest(BaseModel):
@@ -366,3 +383,62 @@ class MaterialDuplicateCheckRequest(BaseModel):
         if not cleaned:
             raise ValueError("请提供有效的 SHA-256")
         return cleaned
+
+
+class LargeMaterialUploadInitRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=240)
+    media_type: str | None = Field(default=None, max_length=200)
+    size_bytes: int = Field(gt=0, le=2 * 1024 * 1024 * 1024 * 1024)
+    chunk_size: int | None = Field(default=None, ge=1024 * 1024, le=32 * 1024 * 1024)
+    file_last_modified_ms: int | None = Field(default=None, ge=0)
+    source_relative_path: str | None = Field(default=None, max_length=1000)
+    source_directory_name: str | None = Field(default=None, max_length=120)
+    quick_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    reject_duplicate: bool = False
+
+    @field_validator("filename")
+    @classmethod
+    def clean_filename(cls, value: str) -> str:
+        cleaned = Path(value).name.strip()
+        if not cleaned:
+            raise ValueError("资料文件名不能为空")
+        return cleaned
+
+    @field_validator("media_type")
+    @classmethod
+    def clean_media_type(cls, value: str | None) -> str | None:
+        cleaned = str(value or "").strip()
+        return cleaned or None
+
+    @field_validator("quick_fingerprint")
+    @classmethod
+    def clean_quick_fingerprint(cls, value: str | None) -> str | None:
+        cleaned = str(value or "").strip().lower()
+        if not cleaned:
+            return None
+        if not re.fullmatch(r"[0-9a-f]{64}", cleaned):
+            raise ValueError("快速指纹格式无效")
+        return cleaned
+
+
+class LargeMaterialVideoMetadataRequest(BaseModel):
+    duration_seconds: float | None = Field(default=None, ge=0, le=366 * 24 * 3600)
+    video_width: int | None = Field(default=None, ge=1, le=32768)
+    video_height: int | None = Field(default=None, ge=1, le=32768)
+    video_codec: str | None = Field(default=None, max_length=80)
+    audio_codec: str | None = Field(default=None, max_length=80)
+    audio_codec_id: str | None = Field(default=None, max_length=80)
+    audio_channels: int | None = Field(default=None, ge=1, le=64)
+    audio_channel_layout: str | None = Field(default=None, max_length=80)
+    audio_sample_rate: int | None = Field(default=None, ge=1000, le=768000)
+    metadata_source: str | None = Field(default=None, max_length=80)
+    poster_source: str | None = Field(default=None, max_length=80)
+
+    @field_validator(
+        "video_codec", "audio_codec", "audio_codec_id", "audio_channel_layout",
+        "metadata_source", "poster_source"
+    )
+    @classmethod
+    def clean_optional_text(cls, value: str | None) -> str | None:
+        cleaned = str(value or "").strip()
+        return cleaned or None

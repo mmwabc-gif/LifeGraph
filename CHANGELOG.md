@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.0.9 - 2026-08-09
+
+### Stable
+
+- 完成 GB / 数十 GB 大型资料的 `chunked-v1` 分块 AES-GCM 存储、暂停/继续、断点恢复、重复检测与磁盘容量保护；
+- schema 从 v7 升级到 v8，引入 `storage_kind` 与 `media_id`，普通 `blob-v1` 与大型 `chunked-v1` 两条存储通道并存；
+- 视频资料支持时长、分辨率、编码、加密封面与资料卡片；
+- 支持 HTTP Range / 206 随机解密在线播放、拖动定位和流式下载；
+- 对 DTS / AC-3 / E-AC-3 / TrueHD 等浏览器不兼容音轨提供可重建 MP3/AAC 兼容层，原始音轨保持不变；
+- `.lifevault` 升级到 format v3，核心备份与 `data/media` 大型媒体库正式分层，并继续兼容 v1/v2 导入；
+- 新增大型媒体本地/外置盘独立增量备份、备份校验和原始媒体逐块深度完整性校验；
+- 增加服务端分块并发上限、过期上传任务清理、Range 64 MB LRU 解密块缓存与登录/资料中心热路径性能修复；
+- Windows 6.56 GB MKV 实机验证：8 MB 分块上传约 82 MB/s，浏览器兼容 MP3 派生约 71 MB/s，Range 播放与拖动正常；
+- 正式稳定版统一前端、FastAPI、Python 包和 `.lifevault` producer 版本为 `0.0.9`；
+- 正式收口回归基线：234 项测试通过，JavaScript 语法检查与 Python 编译检查通过。
+
 ## v0.0.8 - 2026-08-09
 
 ### Stable

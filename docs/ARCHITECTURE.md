@@ -1,4 +1,4 @@
-# LifeGraph 当前架构说明（v0.0.8）
+# LifeGraph 当前架构说明（v0.0.9）
 
 ```text
 浏览器页面
@@ -135,3 +135,26 @@ PIN 与恢复密钥分别拥有独立盐、AAD 和 Argon2id 包装槽。修改�
 附件密文物理保存于 `data/attachments/<UUID前2位>/<UUID>.lgatt`；旧平铺路径保持兼容迁移。`.lifevault` format v2 的包内逻辑路径不随本地物理分片变化。
 
 资料中心采用分页/懒加载：后端分批迭代加密元数据并使用有界内存选择分页结果，前端 48 份/批追加，图片缩略图按可视区域加载。由于私人元数据保持加密，复杂筛选不会建立等价的明文明细索引。
+
+
+## v0.0.9 大型媒体层
+
+当前资料存储按大小分成两条通道：
+
+```text
+Material / attachment index (SQLite schema v8)
+    ├─ storage_kind = blob-v1
+    │      └─ data/attachments/<shard>/<id>.lgatt
+    └─ storage_kind = chunked-v1
+           └─ data/media/<shard>/<media-id>/
+                 ├─ manifest.lgmedia
+                 └─ 00000000.lgchunk ...
+```
+
+大型媒体每块独立 AES-GCM 认证，finalize 后用整文件 SHA-256 固定身份。HTTP Range 根据明文字节范围定位块，只解密命中分块。
+
+派生媒体独立保存：`data/previews` 保存小型加密视频封面；`data/audio_compat` 保存浏览器兼容 MP3/AAC，可由原始媒体重建。
+
+`.lifevault v3` 定位为核心备份，仅包含数据库、普通附件、可用封面和加密媒体 inventory；原始 `data/media` 通过独立增量备份镜像。
+
+登录与日常资料浏览只做轻量媒体/备份状态查询，逐块完整性校验仅在用户主动执行维护操作时运行。

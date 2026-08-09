@@ -84,7 +84,7 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
     assert response.headers["content-type"].startswith(
         "application/vnd.lifegraph.lifevault+zip"
     )
-    assert response.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v2"
+    assert response.headers["x-lifegraph-backup-format"] == "lifegraph-lifevault-v3"
     assert ".lifevault" in response.headers["content-disposition"]
     assert event_title.encode("utf-8") not in response.content
     assert event_body.encode("utf-8") not in response.content
@@ -95,12 +95,16 @@ def test_backup_check_and_lifevault_export_can_be_restored(tmp_path: Path) -> No
             "manifest.json",
             "repository/vault.json",
             "repository/lifegraph.db",
+            "repository/media-inventory.lgindex",
         }
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["format"] == "lifegraph-lifevault"
-        assert manifest["format_version"] == 2
-        assert manifest["producer"]["version"] == "0.0.8"
-        assert manifest["repository"]["schema_version"] == 7
+        assert manifest["format_version"] == 3
+        assert manifest["repository"]["backup_scope"] == "core"
+        assert manifest["repository"]["preview_policy"] == "embedded-core"
+        assert manifest["repository"]["derived_media_policy"] == "regenerable-excluded"
+        assert manifest["producer"]["version"] == "0.0.9"
+        assert manifest["repository"]["schema_version"] == 8
         assert manifest["integrity"]["encrypted_records_verified"] == 3
         for entry in manifest["files"]:
             value = archive.read(entry["path"])
@@ -133,6 +137,7 @@ def test_backup_endpoints_require_session(tmp_path: Path) -> None:
     initialize(client)
     assert client.get("/api/v1/backup/check").status_code == 401
     assert client.get("/api/v1/backup/export").status_code == 401
+    assert client.get("/api/v1/backup/media/status").status_code == 401
 
 
 def test_backup_controls_are_present_in_settings() -> None:
@@ -142,6 +147,8 @@ def test_backup_controls_are_present_in_settings() -> None:
     assert 'id="checkBackupButton"' in html
     assert 'id="exportBackupButton"' in html
     assert 'id="backupStatusText"' in html
+    assert 'id="mediaBackupStatusCard"' in html
+    assert 'id="refreshMediaBackupStatusButton"' in html
     assert 'id="importBackupFile"' in html
     assert 'id="importCredentialMethod"' in html
     assert 'id="importCredentialSecret"' in html
@@ -150,6 +157,7 @@ def test_backup_controls_are_present_in_settings() -> None:
     assert 'id="importBackupStatusText"' in html
     assert '"/api/v1/backup/check"' in javascript
     assert '"/api/v1/backup/export"' in javascript
+    assert '"/api/v1/backup/media/status"' in javascript
     assert '"/api/v1/backup/import/check"' in javascript
     assert '"/api/v1/backup/import"' in javascript
     assert 'REPLACE_REPOSITORY' in javascript

@@ -108,10 +108,10 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     assert checked.status_code == 200
     report = checked.json()["data"]
     assert report["valid"] is True
-    assert report["schema_version"] == 7
+    assert report["schema_version"] == 8
     assert report["encrypted_records_verified"] == 2
     assert report["record_counts"]["event"] == 1
-    assert report["producer_version"] == "0.0.8"
+    assert report["producer_version"] == "0.0.9"
 
     recovery_check = target_client.post(
         "/api/v1/backup/import/check",
@@ -153,7 +153,7 @@ def test_lifevault_import_check_restore_and_rescue_backup(tmp_path: Path) -> Non
     restored_report = restored.json()["data"]
     assert restored_report["restored"] is True
     assert restored_report["locked"] is True
-    assert restored_report["restored_schema_version"] == 7
+    assert restored_report["restored_schema_version"] == 8
 
     # The old session is revoked after repository replacement.
     assert target_client.get("/api/v1/profile", headers=target_headers).status_code == 401
@@ -328,11 +328,12 @@ def test_lifevault_v1_package_without_attachments_remains_importable(tmp_path: P
     with zipfile.ZipFile(io.BytesIO(current_backup)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
         manifest["format_version"] = 1
-        files = {
-            name: archive.read(name)
-            for name in archive.namelist()
-            if name != "manifest.json"
-        }
+        legacy_paths = {"repository/vault.json", "repository/lifegraph.db"}
+        manifest["files"] = [
+            entry for entry in manifest.get("files", [])
+            if entry.get("path") in legacy_paths
+        ]
+        files = {name: archive.read(name) for name in legacy_paths}
 
     legacy_buffer = io.BytesIO()
     with zipfile.ZipFile(legacy_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
